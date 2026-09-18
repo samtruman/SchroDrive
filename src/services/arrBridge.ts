@@ -146,7 +146,7 @@ function extractMagnetName(magnet: string): string {
 
 /** Returns the base download path for symlinks. */
 function getDownloadsPath(): string {
-  return path.join(config.mountBase, 'downloads');
+  return process.env.ARR_DOWNLOADS_PATH || path.join(config.mountBase, 'downloads');
 }
 
 /** Ensures the downloads staging directory exists. */
@@ -318,11 +318,11 @@ async function scanMountsForCompleted(): Promise<void> {
         for (const file of foundFiles) {
           const symlinkPath = path.join(torrentDir, file.name);
           try {
-            // Create relative symlink
-            const relativePath = path.relative(path.dirname(symlinkPath), file.path);
+            // Keep the target stable when Arr moves the link and removes staging.
+            await fsp.mkdir(path.dirname(symlinkPath), { recursive: true });
             // Remove existing symlink if it exists
             try { await fsp.unlink(symlinkPath); } catch { /* doesn't exist */ }
-            await fsp.symlink(relativePath, symlinkPath);
+            await fsp.symlink(file.path, symlinkPath);
           } catch (err: any) {
             console.error(`${LOG_PREFIX} Failed to create symlink for ${file.name}: ${err?.message}`);
           }
