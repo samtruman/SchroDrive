@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog (https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.html).
 
+### Version [0.11.5] - 2026-09-23
+*Status: landing on schrodrive.org, Cloudflare Workers, contributors live page*
+
+### Added ✨
+- **Landing site for schrodrive.org** (`landing/`): Next.js 16 + Three.js + Framer Motion marketing site, now hosted on Cloudflare Workers via `opennextjs/cloudflare` and auto-deployed on push to `main` (see `landing-deploy.yml`)
+- **Live contributors page** (`landing/app/contributors`): renders `CONTRIBUTORS.md`/`CONTRIBUTING.md` live and shows GitHub API contributor avatars, commit counts, and hourly cache — linked in navbar
+- **Cloudflare Workers deploy** (`.github/workflows/landing-deploy.yml`, `landing/wrangler.jsonc`, `open-next.config.ts`): secure `CLOUDFLARE_API_TOKEN`/`ACCOUNT_ID` secrets, `contents: read` only, `if: push to main` so forks cannot access secrets, `.open-next`/`wrangler` ignored
+
+### Fixed 🐛
+- **Landing factual correctness** (`landing/lib/constants.ts`, `components/docs/DockerGenerator.tsx`): corrected 11-provider matrix, `ENV_VARS` now mirrors `src/core/config.ts` exactly (e.g. `PORT 8978` not `3000`, `PROVIDERS torbox,realdebrid`, `ADD_STRATEGY all|failover|single`, `MOUNT_BASE` not `MOUNT_BASE_DIR`, `WEBDAV_BRIDGE_ENABLED true`, `TOKEN_RESET_TIMEZONE`, correct service-toggle defaults). Media Manager marked *Coming Soon* and no longer emits a fake `schrodrive-media` service in generated compose
+- **Landing secrets / gitignore** (`landing/.gitignore`): confirmed `.env*` ignored, added `.open-next/`, `.wrangler/`, `worker-configuration.d.ts`; verified no hardcoded API keys — only `your_*_key` placeholders
+- **Release tag idempotency** (`.github/workflows/release.yml`): `git rev-parse v$CURRENT` check prevents `fatal: tag already exists` on docs-only pushes
+
+### Version [0.11.4] - 2026-09-22
+*Status: arr-bridge persistence, mount defaults, organizer review*
+
+### Fixed 🐛
+- **qBittorrent categories lost on restart** (`src/services/arrBridge.ts`, `src/core/db.ts`): `arr_categories` now persisted in SQLite and restored on `handleCategories` (#78)
+- **Tracked torrents lost on restart** (`src/services/arrBridge.ts`, `src/core/db.ts`): `arr_tracked_torrents` persisted as `state_json` and restored on `startArrBridge`, survives restarts and `handleSetCategory` updates (#79)
+- **Nested multi-file staging collisions** (`src/services/arrBridge.ts`): `scanDirRecursive` now returns `path.relative(rootDir, full)` and `scanMountsForCompleted` creates parent dirs for nested symlinks (#80)
+- **Mount cache defaults masked** (`src/core/config.ts`, `src/core/configApi.ts`): `MOUNT_OPTIONS` default changed from hardcoded `--vfs...` to `""` so individual `MOUNT_*` settings are effective (#81)
+
+### Added ✨
+- **Organizer identity review workflow** (`src/services/mediaParser.ts`, `organizerReview.ts`, `server.ts`, `web/`): structured `parseMediaFilename` + `organizer_reviews`/`organizer_review_audit` tables, `/api/organizer/review` endpoints and dashboard review pages (#82)
+
+### Version [0.11.3] - 2026-09-21 🔒
+*Status: DB scrub, shared base32, CI guards*
+
+### Fixed 🐛
+- **Runtime databases tracked in git** (`.gitignore`, `data/`): `data/tokens.db` (+ `-shm`/`-wal`) was committed and `data/schrodrive.db` was unignored — scrubbed from history via `filter-branch`, added `data/*.db` + `*.db-shm|wal|journal` to `.gitignore`, kept `data/.gitkeep`, added `guard.yml` to fail PRs that add `*.db`/`*.env`
+- **History rewrite divergence** (`develop` → `main`): `filter-branch` caused `57/57` diverge on merge to protected `main` — synced `main` via `temp-sync-main` PRs so tip is clean without force-pushing `main`
+- **Base32 infohash handling** (`src/core/utils.ts`, `src/providers/registry.ts`, `src/services/arrBridge.ts`): duplicated `base32ToHex` used `Buffer.from(..., 'base64')` (wrong, 48-hex) — extracted single `base32ToHex` to `core/utils` and fixed both call sites to correctly decode 32-char base32 → 40-char hex
+- **IPv6 SSRF bypass** (`src/providers/registry.ts`): `assertPublicHttpUrl()` checked `host.startsWith('[')` on `hostname` (Bun keeps brackets, Node strips) — now handles both and covers `::1`, `fe80`, `fc`/`fd`, `::ffff:`
+- **`*arr` bridge flakiness** (`src/services/arrBridge.ts`, `tests/`): shared `tracked`/`server`/`db` singletons + `Bun.sqlite` `busy_timeout` caused `urlencoded magnet adds` to timeout under `bun test --parallel` — added `servers: Map<number,Server>`, per-suite `tmpDir` `dbPath` isolation, hardened `Busboy` limits and `done()` guard
+- **Polynomial ReDoS** (`src/core/utils.ts`): `replace(/=+$/, '')` flagged by CodeQL `js/polynomial-redos` — replaced with manual `while (endsWith('='))` loop
+- **Empty changed-set crash** (`scripts/impact.ts`): `bun run impact:changed` exited `1` with `Usage` when no files changed (docs-only PR) — now exits `0` with `No changed files`
+- **Guard false-positive on deletions** (`.github/workflows/guard.yml`): `git log --all --name-only` flagged the deletion commit for `data/tokens.db` as a leak and broke on `origin/main` protected history — now scopes to `BASE..HEAD --diff-filter=A` and only flags *added* DBs
+- **Release tag already exists** (`package.json`): `0.11.2` tag exists, `release.yml` runs `git tag -a v$CURRENT` on every `push` to `main` — bumped to `0.11.3`
+
+### Added ✨
+- `CONTRIBUTING.md` — Bun setup, branch/commit style, test isolation, provider checklist, shared-utils rule, one-time `bun run fix:history` for stale history
+- `CONTRIBUTORS.md` — credits for Joseph Shenton (@moderniselife) and Sam Truman (@samtruman)
+- `scripts/fix-stale-history.sh` + `bun run fix:history` — auto-resets diverged `develop` and rebases stale feature branches
+
 ### Version [0.11.2] - 2026-08-15 🔒
 *Status: multi-arch release images, CodeQL security review*
 

@@ -32,6 +32,8 @@ import { getBridgeStatuses, refreshBridges, getExternalWebdavStatus } from "./se
 import { getPreWarmStatus } from "./services/cloudLinks/bridge";
 import { getBlacklistEntries, getBlacklistCount, addToBlacklist, removeFromBlacklist, isBlacklisted } from "./core/blacklist";
 import { tokenRotator } from "./core/tokenRotator";
+import { decideOrganizerReview, filterOrganizerReviewsByParserStatus, listOrganizerReviewAudit, listOrganizerReviews, retryOrganizerReview, validateReviewOverride } from "./services/organizerReview";
+import { browseMountedFilesystem, FilesystemBrowserError } from "./core/filesystemBrowser";
 
 // ===========================================================================
 // Server Initialisation
@@ -177,6 +179,54 @@ export function startServer() {
       createdAt: e.blacklistedAt,
     }));
     res.json({ ok: true, entries });
+  });
+
+  // ===========================================================================
+  // Organizer Review API
+  // ===========================================================================
+
+  /** GET /api/organizer/review — Lists pending identity decisions. */
+  app.get('/api/organizer/review', (req, res) => {
+    const includeResolved = String(req.query.includeResolved || '') === 'true';
+    const status = req.query.status === 'pending' || req.query.status === 'accepted' || req.query.status === 'dismissed'
+      ? req.query.status : undefined;
+    const parserStatus = req.query.parserStatus === 'matched' || req.query.parserStatus === 'ambiguous' || req.query.parserStatus === 'unmatched'
+      ? req.query.parserStatus : undefined;
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+    const offset = Math.max(0, Number(req.query.offset) || 0);
+    const all = filterOrganizerReviewsByParserStatus(listOrganizerReviews(includeResolved, status), parserStatus);
+    res.json({ ok: true, entries: all.slice(offset, offset + limit), total: all.length, limit, offset });
+  });
+
+  /** GET /api/organizer/review/:id — Returns one review entry. */
+  app.get('/api/organizer/review/:id', (req, res) => {
+    const entry = listOrganizerReviews(true).find((item) => item.id === String(req.params.id));
+    if (!entry) return res.status(404).json({ ok: false, error: 'Review entry not found' });
+    res.json({ ok: true, entry });
+  });
+
+  /** POST /api/organizer/review/:id — Records a manual review decision or safe retry. */
+  app.post('/api/organizer/review/:id', (req, res) => {
+    if (req.body?.action === 'retry') {
+      const entry = retryOrganizerReview(String(req.params.id));
+      if (!entry) return res.status(404).json({ ok: false, error: 'Review entry not found' });
+      return res.json({ ok: true, entry });
+    }
+    const decision = req.body?.decision;
+    if (decision !== 'accepted' && decision !== 'dismissed') {
+      return res.status(400).json({ ok: false, error: 'decision must be accepted or dismissed' });
+    }
+    let override;
+    try { override = validateReviewOverride(req.body?.override); }
+    catch (err: any) { return res.status(400).json({ ok: false, error: err?.message || 'Invalid override' }); }
+    const entry = decideOrganizerReview(String(req.params.id), decision, override);
+    if (!entry) return res.status(404).json({ ok: false, error: 'Review entry not found' });
+    res.json({ ok: true, entry });
+  });
+
+  /** GET /api/organizer/review/:id/audit — Returns the decision history. */
+  app.get('/api/organizer/review/:id/audit', (req, res) => {
+    res.json({ ok: true, audit: listOrganizerReviewAudit(String(req.params.id)) });
   });
 
   /** GET /api/infringement-list/check — Checks if a name matches the blacklist. */
@@ -1048,73 +1098,12 @@ export function startServer() {
     try {
       const requestedPath = String(req.query.path || "/");
       const mountBase = config.mountBase || "/mnt/schrodrive";
-      
-      // Sanitise path to prevent directory traversal attacks
-      const safePath = path.normalize(requestedPath).replace(/^(\.\.[\/\\])+/, "");
-      const fullPath = path.join(mountBase, safePath);
-      
-      // Ensure the resolved path hasn't escaped the mount base
-      if (!fullPath.startsWith(mountBase)) {
-        return res.status(403).json({ ok: false, error: "Access denied" });
-      }
-      
-      // Check if path exists
-      if (!fs.existsSync(fullPath)) {
-        return res.status(404).json({ ok: false, error: "Path not found", path: safePath });
-      }
-      
-      const stat = fs.statSync(fullPath);
-      
-      if (stat.isFile()) {
-        // Return file metadata (not the file contents)
-        return res.json({
-          ok: true,
-          type: "file",
-          path: safePath,
-          name: path.basename(fullPath),
-          size: stat.size,
-          modified: stat.mtime,
-        });
-      }
-      
-      // List directory contents
-      const entries = fs.readdirSync(fullPath, { withFileTypes: true });
-      const items = entries.map((entry) => {
-        const itemPath = path.join(fullPath, entry.name);
-        try {
-          const itemStat = fs.statSync(itemPath);
-          return {
-            name: entry.name,
-            path: path.join(safePath, entry.name),
-            type: entry.isDirectory() ? "directory" : "file",
-            size: entry.isFile() ? itemStat.size : undefined,
-            modified: itemStat.mtime,
-          };
-        } catch {
-          return {
-            name: entry.name,
-            path: path.join(safePath, entry.name),
-            type: entry.isDirectory() ? "directory" : "file",
-          };
-        }
-      });
-      
-      // Sort: directories first, then alphabetically by name
-      items.sort((a, b) => {
-        if (a.type !== b.type) return a.type === "directory" ? -1 : 1;
-        return a.name.localeCompare(b.name);
-      });
-      
-      res.json({
-        ok: true,
-        type: "directory",
-        path: safePath,
-        items,
-        mountBase,
-      });
+      const listing = await browseMountedFilesystem(mountBase, requestedPath);
+      res.json({ ok: true, ...listing, mountBase });
     } catch (err: any) {
       console.error("[api/files] Error:", err.message);
-      res.status(500).json({ ok: false, error: err.message });
+      const status = err instanceof FilesystemBrowserError ? err.status : 500;
+      res.status(status).json({ ok: false, error: err.message });
     }
   });
 
