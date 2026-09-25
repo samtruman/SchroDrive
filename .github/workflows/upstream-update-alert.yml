@@ -1,0 +1,91 @@
+name: Upstream update alert
+
+on:
+  schedule:
+    - cron: '17 8 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout develop
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+
+      - name: Fetch official develop
+        run: git fetch --no-tags https://github.com/moderniselife/SchroDrive.git develop:refs/remotes/upstream/develop
+
+      - name: Collect upstream changes
+        id: changes
+        shell: bash
+        run: |
+          count=$(git rev-list --count HEAD..upstream/develop)
+          upstream_sha=$(git rev-parse upstream/develop)
+          echo "count=$count" >> "$GITHUB_OUTPUT"
+          echo "upstream_sha=$upstream_sha" >> "$GITHUB_OUTPUT"
+          {
+            echo 'summary<<EOF'
+            if [ "$count" -gt 0 ]; then
+              git log --no-merges --format='- `%h` %s (%an)' HEAD..upstream/develop
+            else
+              echo 'Nessun nuovo commit upstream.'
+            fi
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create or update alert issue
+        if: steps.changes.outputs.count != '0'
+        uses: actions/github-script@v7
+        env:
+          UPSTREAM_SHA: ${{ steps.changes.outputs.upstream_sha }}
+          CHANGE_SUMMARY: ${{ steps.changes.outputs.summary }}
+        with:
+          script: |
+            const marker = '<!-- upstream-develop-update-alert -->';
+            const title = 'Aggiornamenti disponibili da upstream/develop';
+            const body = `${marker}
+            Sono disponibili **${{ steps.changes.outputs.count }}** commit di
+            `moderniselife/SchroDrive:develop` non ancora presenti nel nostro `develop`.
+
+            SHA upstream rilevato: `${process.env.UPSTREAM_SHA}`
+
+            Commit rilevati:
+            ${process.env.CHANGE_SUMMARY}
+
+            Questa segnalazione non esegue merge, build o deploy automatici.
+            Dopo la revisione, sincronizzare il branch e rieseguire test e validazione runtime.`;
+
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100,
+            });
+            const existing = issues.find(issue => issue.body?.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title,
+                body,
+              });
+            }
+
+      - name: No upstream changes
+        if: steps.changes.outputs.count == '0'
+        run: echo 'Upstream develop is already contained in our develop.'
