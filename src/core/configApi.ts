@@ -104,6 +104,16 @@ interface ConfigValue {
 
 export type ConfigData = Record<ConfigKey, ConfigValue>;
 
+/**
+ * Resolve a setting using the runtime environment first and the persisted
+ * .env value as a fallback. An explicitly empty runtime value is treated as
+ * unset so Docker compose entries such as TMDB_API_KEY=${TMDB_API_KEY:-}
+ * do not mask a value saved through the Settings UI.
+ */
+export function resolveRuntimeOrPersistedValue(runtimeValue: string | undefined, persistedValue: string | undefined): string {
+  return runtimeValue !== undefined && runtimeValue !== "" ? runtimeValue : persistedValue || "";
+}
+
 // Find the .env file path
 function findEnvPath(): string {
   // Check multiple possible locations
@@ -154,6 +164,11 @@ function parseEnvFile(filePath: string): Map<string, string> {
   }
 
   return result;
+}
+
+/** Read one persisted setting without exposing or logging its value. */
+export function getPersistedEnvValue(key: ConfigKey): string {
+  return parseEnvFile(findEnvPath()).get(key) || "";
 }
 
 // Get all config values with their sources

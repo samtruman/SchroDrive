@@ -1,5 +1,8 @@
 import path from 'path';
 import { asBool, asNumber, splitCsv } from './utils';
+import { getPersistedEnvValue, resolveRuntimeOrPersistedValue } from './configApi';
+
+const persistedTmdbApiKey = getPersistedEnvValue("TMDB_API_KEY");
 
 const defaultMountBase = (process.env.MOUNT_BASE || (process.platform === 'darwin' ? "/Volumes/SchroDrive" : "/mnt/schrodrive"));
 
@@ -174,7 +177,10 @@ export const config = {
   runDeadScanner: asBool(process.env.RUN_DEAD_SCANNER),
   runDeadScannerWatch: asBool(process.env.RUN_DEAD_SCANNER_WATCH),
   // Organiser (symlinked view)
-  tmdbApiKey: process.env.TMDB_API_KEY || "",
+  // The Settings UI persists this value in .env. Docker may still provide an
+  // empty TMDB_API_KEY placeholder, so use the persisted value only when the
+  // runtime environment does not contain a non-empty value.
+  tmdbApiKey: resolveRuntimeOrPersistedValue(process.env.TMDB_API_KEY, persistedTmdbApiKey),
   organizedBase: process.env.ORGANIZED_BASE || `${defaultMountBase}/organized`,
   organizerMode: (process.env.ORGANIZER_MODE || "symlink") as "symlink" | "copy" | "move",
   runOrganizerWatch: asBool(process.env.RUN_ORGANIZER_WATCH),

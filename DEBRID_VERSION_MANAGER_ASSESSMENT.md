@@ -980,3 +980,72 @@ Silo), three-way movie versions (Mayday), and multi-version episodes in season
 packs (The Westies and Lucky). These are assessment examples only: no deletion
 preference is asserted. The engine verifies grouping, explainable profile
 eligibility and the hard rule that no 2160p version enters REMOTE.
+
+## 36. TMDb configuration wiring diagnosis and real validation
+
+The Settings UI persists `TMDB_API_KEY` through `POST /api/config` into the
+`.env` selected by the running process. In the active container this is
+`/app/.env`; `/api/config` reported the key as present with `source=file`.
+Docker Compose also declares `TMDB_API_KEY`, but the active container received
+an empty placeholder. `src/core/config.ts` previously read only
+`process.env.TMDB_API_KEY`, so the persisted file value was ignored at module
+initialisation. The isolated validation process consequently reported
+`configuration_unavailable`, even though the UI and config API could see the
+saved value.
+
+The fix is limited to configuration loading: a non-empty runtime environment
+value wins, otherwise the existing persisted `.env` value is used. There is no
+`VERSION_MANAGER_TMDB_API_KEY`, no second credential store and no restart or
+production change in this step. The active container's persisted value was
+used only in memory for read-only validation; it was not printed, copied or
+committed.
+
+Smoke test: TMDb configured yes; request performed yes; response valid yes
+(HTTP 200). The comparable validation used AllDebrid inventory plus its
+read-only completed file trees, Plex GET requests and TMDb GET requests. All
+Organizer/watch, repair, delete, reconciliation, mount and acquisition
+workers were disabled; SQLite cache data was written only to a temporary
+directory.
+
+| Metric | Previous baseline | TMDb-enabled validation |
+|---|---:|---:|
+| Provider items / completed | 417 / 404 | 417 / 404 |
+| Fingerprints | 731 | 735 |
+| Version Groups / multiversion | 616 / 80 | 609 / 89 |
+| Identity resolved / fallback | 181 / 550 | 602 / 88 |
+| Identity uncertain / conflicts | not separated / 0 | 45 / 0 |
+| Plex catalog / pipeline matches | 211 / 181 | 211 / 182 |
+| TMDb matched | 0 | 420 |
+| TMDb resolution attempts | 0 | 553 |
+| TMDb HTTP requests / cache hits | 0 / 0 | 175 / 377 |
+| TMDb not matched / ambiguous | 0 | 87 / 45 |
+| TMDb unavailable / configuration unavailable | 0 / 0 | 0 / 1 |
+| TMDb ID / IMDb ID / TVDb ID | not measured | 584 / 584 / 574 |
+| Original language known / unknown | 0 / 731 | 420 / 315 |
+| REMOTE 1080p / REMOTE_MISSING | 334 / 288 | 333 / 280 |
+| REMOTE 2160p | 0 | 0 |
+| FULL manifest / unique magnets | 417 / 417 | 417 / 417 |
+
+The one `configuration_unavailable` counter is a legacy status for a record
+without a usable title; it was not a failed credential or network lookup.
+TMDb HTTP failures were zero. The 735-vs-731 fingerprint delta reflects the
+current live file-tree response and inventory state, not an identity algorithm
+change. Probe remained unavailable for all 735 records because the isolated
+runner had no local media path; no media was downloaded or mounted.
+
+Metadata resolution is Plex-first. The run therefore produced 182 Plex
+matches and 420 TMDb fallback matches; it does not perform a second TMDb
+lookup for a strong Plex match, so a direct Plex+TMDb concordance matrix is not
+claimed. No cross-provider disagreement was observed. `original_language` is
+now populated from TMDb independently of audio tracks: the dataset contained
+416 English (`en`), 3 Hebrew (`he`) and 1 Korean (`ko`) originals. No
+Italian-original title was present, so no Italian example is invented. Real
+examples were `Lanterns` (`en`) and `Tehran` (`he`). Existing rule tests verify
+that `ORIGINAL` uses this metadata value and is not implicitly treated as
+English.
+
+With the current remote simulation, 333 1080p versions satisfied REMOTE, 280
+groups were `REMOTE_MISSING`, and no 2160p version entered REMOTE. Acquisition
+remained disabled by policy, so no Seerr request was generated. FULL export
+remained inventory-driven: 417 manifest records and 417 deduplicated magnet
+lines, including identity-independent provider items.

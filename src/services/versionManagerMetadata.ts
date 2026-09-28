@@ -38,6 +38,12 @@ export interface MetadataStats {
   originalLanguageResolved: number;
   cacheHits: number;
   cacheMisses: number;
+  tmdbResolutionAttempts: number;
+  tmdbRequests: number;
+  tmdbNotMatched: number;
+  tmdbAmbiguous: number;
+  tmdbUnavailable: number;
+  tmdbConfigurationUnavailable: number;
   plexStatus: MetadataSourceStatus;
   jellyfinStatus: MetadataSourceStatus;
   tmdbStatus: MetadataSourceStatus;
@@ -214,13 +220,22 @@ export function invalidateVersionManagerMetadataCache(provider?: string): void {
 
 async function tmdbLookup(version: VersionRecord, stats: MetadataStats): Promise<ResolutionResult> {
   const identity = version.fingerprint.identity;
-  if (!config.tmdbApiKey || !identity.title) return { status: "configuration_unavailable", identityStatus: "uncertain", conflicts: [], confidence: identity.confidence, reason: "TMDb API key or title unavailable" };
+  stats.tmdbResolutionAttempts++;
+  if (!config.tmdbApiKey || !identity.title) {
+    stats.tmdbConfigurationUnavailable++;
+    return { status: "configuration_unavailable", identityStatus: "uncertain", conflicts: [], confidence: identity.confidence, reason: "TMDb API key or title unavailable" };
+  }
   const type = identity.kind === "episode" ? "tv" : "movie";
   const cacheKey = `tmdb:${type}:${normalizeMediaTitle(identity.title)}:${identity.year || ""}`;
   const cached = getCachedVersionManagerMetadata(cacheKey);
   if (cached) { stats.cacheHits++; return { status: "matched", identityStatus: "resolved", item: cached, conflicts: [], confidence: 0.9, reason: "TMDb metadata cache hit" }; }
   stats.cacheMisses++;
+  stats.tmdbRequests++;
   const lookup = await searchTmdb(identity.title, type, identity.year);
+  if (lookup.status === "not_matched") stats.tmdbNotMatched++;
+  else if (lookup.status === "ambiguous") stats.tmdbAmbiguous++;
+  else if (lookup.status === "unavailable") stats.tmdbUnavailable++;
+  else if (lookup.status === "configuration_unavailable") stats.tmdbConfigurationUnavailable++;
   if (lookup.status !== "matched" || !lookup.metadata) {
     return { status: lookup.status, identityStatus: lookup.status === "ambiguous" || lookup.status === "configuration_unavailable" ? "uncertain" : "fallback", conflicts: [], confidence: lookup.status === "ambiguous" ? Math.min(identity.confidence, 0.55) : identity.confidence, reason: lookup.reason };
   }
@@ -246,7 +261,7 @@ export function resolveVersionIdentity(version: VersionRecord, catalogs: Metadat
 
 export async function enrichVersionMetadata(versions: VersionRecord[]): Promise<MetadataStats> {
   const [plex, jellyfin] = await Promise.all([plexCatalog(), jellyfinCatalog()]);
-  const stats: MetadataStats = { plex: plex.items.length, jellyfin: jellyfin.items.length, tmdb: 0, matched: 0, unresolved: 0, conflicts: 0, filenameFallback: 0, originalLanguageResolved: 0, cacheHits: 0, cacheMisses: 0, plexStatus: plex.status, jellyfinStatus: jellyfin.status, tmdbStatus: config.tmdbApiKey ? "not_matched" : "configuration_unavailable" };
+  const stats: MetadataStats = { plex: plex.items.length, jellyfin: jellyfin.items.length, tmdb: 0, matched: 0, unresolved: 0, conflicts: 0, filenameFallback: 0, originalLanguageResolved: 0, cacheHits: 0, cacheMisses: 0, tmdbResolutionAttempts: 0, tmdbRequests: 0, tmdbNotMatched: 0, tmdbAmbiguous: 0, tmdbUnavailable: 0, tmdbConfigurationUnavailable: 0, plexStatus: plex.status, jellyfinStatus: jellyfin.status, tmdbStatus: config.tmdbApiKey ? "not_matched" : "configuration_unavailable" };
   for (const version of versions) {
     const catalogResult = resolveVersionIdentity(version, [plex, jellyfin]);
     let result = catalogResult;
