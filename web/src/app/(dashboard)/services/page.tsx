@@ -59,15 +59,15 @@ export default function ServicesPage() {
     {
       id: "webhook",
       name: "Webhook Server",
-      description: "Receives webhooks from Overseerr",
+      description: "Receives webhooks from Seerr",
       icon: Globe,
       enabled: services.webhook,
       port: 8978,
     },
     {
       id: "poller",
-      name: "Overseerr Poller",
-      description: "Polls Overseerr for approved requests",
+      name: "Seerr Poller",
+      description: "Polls Seerr for approved requests",
       icon: RefreshCw,
       enabled: services.poller,
     },

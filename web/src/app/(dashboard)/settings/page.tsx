@@ -335,7 +335,7 @@ export default function SettingsPage() {
           <TabsTrigger value="realdebrid" className="gap-2"><Database className="h-4 w-4 hidden sm:block" />Real-Debrid</TabsTrigger>
           <TabsTrigger value="alldebrid" className="gap-2"><Database className="h-4 w-4 hidden sm:block" />AllDebrid</TabsTrigger>
           <TabsTrigger value="premiumize" className="gap-2"><Database className="h-4 w-4 hidden sm:block" />Premiumize</TabsTrigger>
-          <TabsTrigger value="overseerr" className="gap-2"><Tv className="h-4 w-4 hidden sm:block" />Overseerr</TabsTrigger>
+          <TabsTrigger value="overseerr" className="gap-2"><Tv className="h-4 w-4 hidden sm:block" />Seerr</TabsTrigger>
           <TabsTrigger value="media_servers" className="gap-2"><Tv className="h-4 w-4 hidden sm:block" />Media Servers</TabsTrigger>
           <TabsTrigger value="mounts" className="gap-2"><HardDrive className="h-4 w-4 hidden sm:block" />Mounts</TabsTrigger>
           <TabsTrigger value="services" className="gap-2"><Server className="h-4 w-4 hidden sm:block" />Services</TabsTrigger>
@@ -523,16 +523,16 @@ export default function SettingsPage() {
           </div>
         </TabsContent>
 
-        {/* Overseerr Tab */}
+        {/* Seerr Tab */}
         <TabsContent value="overseerr" className="space-y-6">
           <Card>
             <CardHeader>
-              <CardTitle>Overseerr Configuration</CardTitle>
-              <CardDescription>Connect to your Overseerr instance for media requests</CardDescription>
+              <CardTitle>Seerr Configuration</CardTitle>
+              <CardDescription>Connect to your Seerr instance for media requests</CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="grid gap-6 md:grid-cols-2">
-                <ConfigField label="Overseerr URL" envVar="SEERR_URL" description="Must include /api/v1" value={getValue("SEERR_URL")} source={getSource("SEERR_URL")} onChange={(v) => updateValue("SEERR_URL", v)} />
+                <ConfigField label="Seerr URL" envVar="SEERR_URL" description="Must include /api/v1" value={getValue("SEERR_URL")} source={getSource("SEERR_URL")} onChange={(v) => updateValue("SEERR_URL", v)} />
                 <ConfigField label="API Key" envVar="SEERR_API_KEY" type="password" value={getValue("SEERR_API_KEY")} source={getSource("SEERR_API_KEY")} onChange={(v) => updateValue("SEERR_API_KEY", v)} />
               </div>
               <Separator />
@@ -540,7 +540,7 @@ export default function SettingsPage() {
                 <ConfigField label="Webhook Auth Header" envVar="SEERR_AUTH" description="Authorization header value to require" type="password" value={getValue("SEERR_AUTH")} source={getSource("SEERR_AUTH")} onChange={(v) => updateValue("SEERR_AUTH", v)} />
               </ConfigSection>
               <Separator />
-              <ConfigSection title="Poller Settings" description="Poll Overseerr for approved requests">
+              <ConfigSection title="Poller Settings" description="Poll Seerr for approved requests">
                 <ConfigField label="Poll Interval (seconds)" envVar="POLL_INTERVAL_S" type="number" value={getValue("POLL_INTERVAL_S")} source={getSource("POLL_INTERVAL_S")} onChange={(v) => updateValue("POLL_INTERVAL_S", v)} />
               </ConfigSection>
             </CardContent>
@@ -619,9 +619,9 @@ export default function SettingsPage() {
               <CardDescription>Enable or disable background services (requires restart)</CardDescription>
             </CardHeader>
             <CardContent className="space-y-2">
-              <SwitchField label="Webhook Server" envVar="RUN_WEBHOOK" description="Listen for Overseerr webhook notifications" value={getBoolValue("RUN_WEBHOOK")} source={getSource("RUN_WEBHOOK")} onChange={(v) => updateBoolValue("RUN_WEBHOOK", v)} />
+              <SwitchField label="Webhook Server" envVar="RUN_WEBHOOK" description="Listen for Seerr webhook notifications" value={getBoolValue("RUN_WEBHOOK")} source={getSource("RUN_WEBHOOK")} onChange={(v) => updateBoolValue("RUN_WEBHOOK", v)} />
               <Separator />
-              <SwitchField label="Overseerr Poller" envVar="RUN_POLLER" description="Poll Overseerr API for approved requests" value={getBoolValue("RUN_POLLER")} source={getSource("RUN_POLLER")} onChange={(v) => updateBoolValue("RUN_POLLER", v)} />
+              <SwitchField label="Seerr Poller" envVar="RUN_POLLER" description="Poll Seerr API for approved requests" value={getBoolValue("RUN_POLLER")} source={getSource("RUN_POLLER")} onChange={(v) => updateBoolValue("RUN_POLLER", v)} />
               <Separator />
               <SwitchField label="Auto-Mount WebDAV" envVar="RUN_MOUNT" description="Automatically mount WebDAV drives on startup" value={getBoolValue("RUN_MOUNT")} source={getSource("RUN_MOUNT")} onChange={(v) => updateBoolValue("RUN_MOUNT", v)} />
               <Separator />

@@ -289,7 +289,7 @@ export default function DashboardPage() {
 
   const servicesList = services ? [
     { name: "Webhook Server", status: services.webhook ? "running" : "stopped", port: 8978 },
-    { name: "Overseerr Poller", status: services.poller ? "running" : "stopped", port: null },
+    { name: "Seerr Poller", status: services.poller ? "running" : "stopped", port: null },
     { name: "WebDAV Mount", status: services.mount ? "running" : "stopped", port: null },
     { name: "Dead Scanner", status: services.deadScanner || services.deadScannerWatch ? "running" : "stopped", port: null },
     { name: "Organizer", status: services.organizerWatch ? "running" : "stopped", port: null },
