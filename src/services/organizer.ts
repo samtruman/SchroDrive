@@ -886,6 +886,19 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
   let totalRemovedLinks = 0;
   let totalRemovedDirs = 0;
 
+  // The organized root is required for every mode. Category directories are
+  // deliberately optional: they are created lazily by makeSymlink only when
+  // a discovered item actually needs that destination.
+  try {
+    const rootStat = await fsp.stat(orgBase);
+    if (!rootStat.isDirectory()) {
+      throw new Error(`organized root is not a directory: ${orgBase}`);
+    }
+    await fsp.access(orgBase, dryRun ? fs.constants.R_OK | fs.constants.X_OK : fs.constants.R_OK | fs.constants.W_OK | fs.constants.X_OK);
+  } catch (err) {
+    throw new Error(`organized root unavailable: ${orgBase}: ${(err as Error)?.message || String(err)}`);
+  }
+
   // --- Scan mounted providers for video files ---
   const providerBases = config.providers.map((p) => path.join(config.mountBase, p));
   const roots: string[] = [];
@@ -942,12 +955,12 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
     for (const dir of [movieDir, tvDir, animeDir]) {
       try {
         const st = await fsp.stat(dir);
-        if (st.isDirectory()) {
-          const { removedLinks, removedDirs } = await pruneStaleSymlinks(dir);
-          totalRemovedLinks += removedLinks;
-          totalRemovedDirs += removedDirs;
-        }
+        if (!st.isDirectory()) throw new Error(`organized category is not a directory: ${dir}`);
+        const { removedLinks, removedDirs } = await pruneStaleSymlinks(dir);
+        totalRemovedLinks += removedLinks;
+        totalRemovedDirs += removedDirs;
       } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code === "ENOENT") continue;
         throw new Error(`organized library unavailable: ${dir}: ${(err as Error)?.message || String(err)}`);
       }
     }
@@ -1050,6 +1063,9 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
     if (!dst) continue;
 
     const safeDst = dryRun ? dst : await resolveCollisionTarget(src, dst);
+    if (dryRun && !(await fsp.stat(path.dirname(safeDst)).catch(() => null))) {
+      console.log(`[${new Date().toISOString()}][organize] would create directory`, { path: path.dirname(safeDst) });
+    }
     await makeSymlink(src, safeDst, dryRun, true);
     processed++;
   }

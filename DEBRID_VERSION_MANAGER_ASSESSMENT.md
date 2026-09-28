@@ -1407,3 +1407,21 @@ for collisions, idempotence, real-file/directory protection, movie and TV
 multiversion cases, multifile inputs, filename modes, broken-link safety, and
 zero-mutation dry-run behavior. The runtime container remains on
 `RUN_ORGANIZER_WATCH=false`; this code has not been rebuilt or deployed here.
+
+### Organized root versus optional categories
+
+The first deployment validation exposed a false failure: the safety pass
+treated the absent `organized/Anime` directory as an unavailable organized
+library. The Organizer now validates only the organized root as mandatory.
+The root must exist, be a directory, and be accessible; in normal mode it
+must also be writable. Missing category directories (`Movies`, `TV`, `Anime`,
+or a future category) are not global failures. Existing categories are
+pruned only when present, while a needed category is created lazily by the
+normal symlink operation. Dry-run never creates it and reports the planned
+directory creation.
+
+This preserves fail-closed behavior for a missing/unusable root, source
+roots, and traversal errors without requiring unused category directories to
+be pre-created. An empty discovery still performs no pruning. The regression
+tests cover missing/non-directory roots, an unused missing category, a
+category created only when needed, and dry-run zero mutation.

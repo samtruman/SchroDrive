@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, readFile, readlink, lstat, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, mkdir, readFile, readlink, lstat, rm, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { config } from "../../../src/core/config";
@@ -111,6 +111,133 @@ describe("Organizer safety", () => {
       config.providers = previous.providers;
       config.webdavMountsEnabled = previous.webdavMountsEnabled;
     }
+  });
+
+  test("fails closed when the organized root is missing", async () => {
+    const root = await fixture();
+    const sourceRoot = path.join(root, "provider");
+    const organized = path.join(root, "missing-organized");
+    await mkdir(sourceRoot, { recursive: true });
+
+    const previous = { mountBase: config.mountBase, organizedBase: config.organizedBase, providers: config.providers, webdavMountsEnabled: config.webdavMountsEnabled };
+    config.mountBase = root;
+    config.organizedBase = organized;
+    config.providers = ["provider"];
+    config.webdavMountsEnabled = false;
+    try {
+      await expect(organizeOnce({ dryRun: false })).rejects.toThrow("organized root unavailable");
+      expect(await lstat(organized).catch(() => null)).toBeNull();
+    } finally {
+      config.mountBase = previous.mountBase;
+      config.organizedBase = previous.organizedBase;
+      config.providers = previous.providers;
+      config.webdavMountsEnabled = previous.webdavMountsEnabled;
+    }
+  });
+
+  test("fails closed when the organized root is not a directory", async () => {
+    const root = await fixture();
+    const sourceRoot = path.join(root, "provider");
+    const rootFile = path.join(root, "organized-file");
+    await mkdir(sourceRoot, { recursive: true });
+    await writeFile(rootFile, "not a directory");
+
+    const previous = { mountBase: config.mountBase, organizedBase: config.organizedBase, providers: config.providers, webdavMountsEnabled: config.webdavMountsEnabled };
+    config.mountBase = root;
+    config.organizedBase = rootFile;
+    config.providers = ["provider"];
+    config.webdavMountsEnabled = false;
+    try {
+      await expect(organizeOnce({ dryRun: false })).rejects.toThrow("organized root unavailable");
+      expect((await lstat(rootFile)).isFile()).toBe(true);
+    } finally {
+      config.mountBase = previous.mountBase;
+      config.organizedBase = previous.organizedBase;
+      config.providers = previous.providers;
+      config.webdavMountsEnabled = previous.webdavMountsEnabled;
+    }
+  });
+
+  test("fails closed when the organized root is inaccessible", async () => {
+    const root = await fixture();
+    const sourceRoot = path.join(root, "provider");
+    const organized = path.join(root, "organized");
+    await mkdir(sourceRoot, { recursive: true });
+    await mkdir(organized);
+    await chmod(organized, 0o000);
+
+    const previous = { mountBase: config.mountBase, organizedBase: config.organizedBase, providers: config.providers, webdavMountsEnabled: config.webdavMountsEnabled };
+    config.mountBase = root;
+    config.organizedBase = organized;
+    config.providers = ["provider"];
+    config.webdavMountsEnabled = false;
+    try {
+      await expect(organizeOnce({ dryRun: false })).rejects.toThrow("organized root unavailable");
+    } finally {
+      await chmod(organized, 0o700);
+      config.mountBase = previous.mountBase;
+      config.organizedBase = previous.organizedBase;
+      config.providers = previous.providers;
+      config.webdavMountsEnabled = previous.webdavMountsEnabled;
+    }
+  });
+
+  test("allows an unused optional category to be absent", async () => {
+    const root = await fixture();
+    const sourceRoot = path.join(root, "provider");
+    const organized = path.join(root, "organized");
+    await mkdir(sourceRoot, { recursive: true });
+    await mkdir(path.join(organized, "Movies"), { recursive: true });
+    await mkdir(path.join(organized, "TV"), { recursive: true });
+
+    const previous = { mountBase: config.mountBase, organizedBase: config.organizedBase, providers: config.providers, webdavMountsEnabled: config.webdavMountsEnabled };
+    config.mountBase = root;
+    config.organizedBase = organized;
+    config.providers = ["provider"];
+    config.webdavMountsEnabled = false;
+    try {
+      await expect(organizeOnce({ dryRun: false })).resolves.toBeUndefined();
+      expect(await lstat(path.join(organized, "Anime")).catch(() => null)).toBeNull();
+    } finally {
+      config.mountBase = previous.mountBase;
+      config.organizedBase = previous.organizedBase;
+      config.providers = previous.providers;
+      config.webdavMountsEnabled = previous.webdavMountsEnabled;
+    }
+  });
+
+  test("creates an absent category only when an item needs it", async () => {
+    const root = await fixture();
+    const source = path.join(root, "provider", "__all__", "[SubsPlease] One Piece S01E01 [AB12CD34].mkv");
+    const organized = path.join(root, "organized");
+    await mkdir(path.dirname(source), { recursive: true });
+    await writeFile(source, "anime");
+
+    const previousBase = config.organizedBase;
+    config.organizedBase = organized;
+    try {
+      const target = computeTarget(
+        { type: "tv", show: "One Piece", season: 1, episode: 1, ext: ".mkv" },
+        path.basename(source),
+        source,
+      )!;
+      expect(target).toContain(`${path.sep}Anime${path.sep}`);
+      expect(await lstat(path.join(organized, "Anime")).catch(() => null)).toBeNull();
+      await makeSymlink(source, target, false, true);
+      expect((await lstat(path.dirname(target))).isDirectory()).toBe(true);
+      expect((await lstat(target)).isSymbolicLink()).toBe(true);
+    } finally {
+      config.organizedBase = previousBase;
+    }
+  });
+
+  test("dry-run plans an absent category without creating it", async () => {
+    const root = await fixture();
+    const source = path.join(root, "source.mkv");
+    const target = path.join(root, "organized", "Future", "source.mkv");
+    await writeFile(source, "source");
+    await makeSymlink(source, target, true, true);
+    expect(await lstat(path.join(root, "organized")).catch(() => null)).toBeNull();
   });
 
   test("honors canonical and original filename modes", async () => {
