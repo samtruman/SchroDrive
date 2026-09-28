@@ -551,6 +551,79 @@ URL/key fixes.
 Configuration provenance correction plus focused regression tests; preserve the
 existing Settings API fields and do not change provider integrations.
 
+## 10. Jellyfin adapter — use compatible MediaBrowser authentication
+
+### Classification
+
+`GENERIC_UPSTREAM_FIX`
+
+### PR dependency
+
+`STANDALONE`
+
+### Component
+
+MediaServerProvider / Jellyfin adapter
+
+### Problem
+
+The Jellyfin adapter sends the configured API key exclusively as
+`X-Emby-Token`. Against the configured Jellyfin instance this returns `401`,
+while the same key succeeds with Jellyfin's `Authorization: MediaBrowser
+Token=...` form.
+
+### Root cause
+
+The adapter assumes one header spelling instead of using the authentication
+format accepted by the target Jellyfin API/runtime.
+
+### Previous behavior
+
+Jellyfin was reachable and configured, but Version Manager classified it as
+`authentication_failed` and could not use its identity or media metadata.
+
+### Expected behavior
+
+The adapter should use the supported MediaBrowser authentication form, or a
+small capability-safe fallback strategy, without exposing credentials or
+changing provider state.
+
+### Fix
+
+Not implemented yet. The read-only diagnostic reproduced the difference:
+`X-Emby-Token` and query-string `api_key` returned `401`; the MediaBrowser
+Authorization form returned `200`.
+
+### Files changed
+
+None yet; candidate recorded before implementation.
+
+### Commit
+
+Pending.
+
+### Tests
+
+Pending: Jellyfin adapter authentication-header regression test, plus
+configuration-unavailable/network/authentication-failure coverage.
+
+### Upstream applicability
+
+Generic provider integration issue, independent of CineCircle and Version
+Manager policy. The fetched `upstream/develop` does not currently contain the
+new MediaServerProvider adapter, so upstream applicability of this exact code
+path requires verification when proposing the PR.
+
+### Isolation
+
+Standalone adapter change; no dependency on configuration provenance,
+Acquisition or Version Manager scoring.
+
+### Proposed PR scope
+
+Jellyfin authentication compatibility and focused read-only adapter tests;
+no provider mutation and no metadata-policy changes.
+
 ## Candidate summary
 
 | Candidate | Classification | Commit | Standalone | Tests | Upstream status | Priority |
@@ -564,6 +637,7 @@ existing Settings API fields and do not change provider integrations.
 | Seerr canonical Settings keys | GENERIC_UPSTREAM_FIX | `2e6e4c9` | yes | config persistence | absent from fetched upstream develop | HIGH |
 | Seerr URL/API-root normalization | GENERIC_UPSTREAM_FIX | pending | yes | URL normalization unit test | needs upstream verification | HIGH |
 | Settings dotenv provenance | GENERIC_UPSTREAM_FIX | pending | yes | config provenance/persistence tests | present in fetched upstream develop | HIGH |
+| Jellyfin MediaBrowser authentication | GENERIC_UPSTREAM_FIX | pending | yes | adapter auth regression pending | adapter absent upstream; verify extraction | HIGH |
 
 No PR, upstream branch, existing PR, or commit history was modified by this
 tracking update.
