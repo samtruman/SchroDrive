@@ -822,6 +822,87 @@ symlink, Organizer, repair, or delete operation.
 Tests cover certain IDs, title/year fallback, homonyms, Plex GUIDs, Jellyfin
 ProviderIds, conflicting IDs, series episodes and alternate versions,
 unresolved identities, original-language policy, and metadata cache
-hit/invalidation behavior. Live library validation was intentionally not run:
-the previously assessed Organizer incident still requires a human remediation
-decision, and no temporary runtime was started.
+hit/invalidation behavior. Live validation is read-only and uses an isolated
+process with all mutating workers disabled.
+
+## 30. Provider item/file-tree correction and conflict analysis
+
+`fingerprintTorrent` now treats the provider item as a container rather than
+as a media file:
+
+```text
+ProviderItem -> MediaFiles -> MediaFingerprint[]
+```
+
+The provider file tree is preferred. A provider item name is used as a
+fallback only when it is itself a media filename. Sample media, artwork,
+subtitles and unsupported files are excluded. A season/series pack therefore
+produces one fingerprint per episode while remaining one provider item for
+export and migration purposes.
+
+On the real AllDebrid snapshot, the 105 previously excluded completed items
+were fetched read-only from the AllDebrid file-tree endpoint:
+
+| Metric | Result |
+|---|---:|
+| Provider items | 404 completed |
+| File-tree items | 105 |
+| All files in those trees | 581 |
+| Media files discovered | 433 |
+| Ignored sample files | 1 |
+| Fingerprints | 731 |
+| Provider items with fingerprints | 404 |
+| Provider items without fingerprints | 0 |
+
+The 105 recovered items classified as 34 movie folders/releases, 51 season
+packs, 17 episode items, 2 other multi-media items and 1 single media file.
+
+The pre-correction run produced 106 conflicts after the extra file-tree
+records were included: 102 `TITLE_MISMATCH` and 6 `YEAR_MISMATCH`. Inspection
+showed these were filename-versus-Plex disagreements on strong path/provider-ID
+matches, including localized Plex titles and release suffixes. No
+`PROVIDER_ID_MISMATCH`, `CROSS_PROVIDER_DISAGREEMENT`,
+`MULTIPLE_PLEX_CANDIDATES` or real season/episode disagreement remained after
+inspection. The resolver now ignores filename identity fields when an exact
+provider-ID or path/basename match establishes the same media item, while it
+continues to report disagreements between provider metadata candidates with
+explicit reason codes. The corrected run produced 0 conflicts: 181 resolved
+and 550 filename fallbacks.
+
+The parser also accepts a parenthesized movie year followed by release tokens,
+which removed a deterministic false parse in the real data. Different episodes
+remain in distinct groups; same-episode alternate files converge into one
+group.
+
+## 31. Read-only Migration / Magnet Export
+
+`src/services/migrationExporter.ts` implements a provider-neutral,
+read-only `MigrationExporter` function. FULL_LIBRARY is inventory-driven and
+does not require a fingerprint, identity, group or decision. Manifest records
+retain the provider item as the export unit, with associated media files and
+optional fingerprint/group enrichment. Multifile and season-pack items are
+therefore exported once, not once per episode.
+
+The versioned `manifest.json` model records provider item ID, safe original
+name, status, completion, dates, media files, identity/provenance when
+available, group/slot/decision enrichment, magnet/infohash and exportability
+reason. `magnets.txt` contains one deduplicated magnet per infohash/magnet.
+No raw provider object, credential, token or secret is copied to the export.
+
+Supported modes are `FULL_LIBRARY`, `KEEP_ONLY`, `PRIMARY_ONLY`,
+`REMOTE_ONLY`, `PRIMARY_REMOTE` and `SELECTED`. No importer or provider
+mutation is implemented. The Web UI panel remains a follow-up; the backend
+export function and tests are complete for this milestone.
+
+The real AllDebrid status inventory exposed an infohash for all 404 completed
+items. The read-only FULL export generated 404 manifest records and 404
+deduplicated magnet lines. No import or mutation was attempted.
+
+The corrected real scan produced 616 Version Groups and 80 multiversion groups.
+With REMOTE disabled, the simulated decisions were 614 KEEP, 115
+DELETE_CANDIDATE and 2 REVIEW. With REMOTE enabled, 658 PRIMARY assignments,
+334 eligible 1080p REMOTE assignments and 288 `REMOTE_MISSING` groups were
+reported; 102 acquisition intents were theoretical only. No 2160p version was
+assigned to REMOTE. Plex supplied 211 catalog items and matched 181 records;
+Jellyfin and TMDb were unavailable/configuration-unavailable in the isolated
+process, so original-language coverage remained zero.

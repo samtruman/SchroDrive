@@ -100,7 +100,7 @@ export function parseMediaFilename(filename: string, relativePath = filename): P
   const normalized = base.replace(/[._]+/g, " ").replace(/\s+/g, " ").trim();
   const parentTitle = titleFromParent(relativePath);
 
-  const parenthesizedMovie = base.match(/^(.*?)\s*\(((?:19|20|21)\d{2})\)\s*$/);
+  const parenthesizedMovie = base.match(/^(.*?)\s*\(((?:19|20|21)\d{2})\)(?:\s+.*)?$/);
   if (parenthesizedMovie) {
     const title = cleanTitle(parenthesizedMovie[1]);
     if (title) {

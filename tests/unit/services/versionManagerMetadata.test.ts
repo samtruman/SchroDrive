@@ -62,7 +62,19 @@ describe("version manager metadata identity", () => {
     ]);
     expect(result.identityStatus).toBe("conflict");
     expect(result.conflicts.some((conflict) => conflict.field === "tmdbId")).toBe(true);
+    expect(result.conflicts.find((conflict) => conflict.field === "tmdbId")?.code).toBe("PROVIDER_ID_MISMATCH");
     expect(result.confidence).toBeLessThan(0.65);
+  });
+
+  test("classifies title, year, and season/episode conflicts explicitly", () => {
+    const item = version("Example.Show.S02E03.2020.1080p.WEB-DL.mkv");
+    item.fingerprint.identity.tmdbId = "100";
+    const result = resolveVersionIdentity(item, [plex([
+      { title: "Different Show", year: 2021, kind: "episode", season: 4, episode: 9, tmdbId: "100", source: "PLEX" },
+      { title: "Another Show", year: 2022, kind: "episode", season: 5, episode: 10, tmdbId: "100", source: "PLEX" },
+    ])]);
+    expect(result.identityStatus).toBe("conflict");
+    expect(result.conflicts.map((conflict) => conflict.code)).toEqual(expect.arrayContaining(["MULTIPLE_PLEX_CANDIDATES"]));
   });
 
   test("keeps series episodes distinct and groups only matching episode versions", () => {

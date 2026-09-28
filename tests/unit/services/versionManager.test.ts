@@ -25,6 +25,33 @@ describe("version manager", () => {
     expect(version.fingerprint.probe.status).toBe("not_requested");
   });
 
+  test("uses a single media file inside an extensionless provider item", () => {
+    const item = torrent("Movie.Release", 10_000);
+    item.files = [{ id: "movie", name: "Movie.Release.2025.2160p.WEB-DL.mkv", path: "Movie.Release/Movie.Release.2025.2160p.WEB-DL.mkv", size: 10_000, selected: true }];
+    const versions = fingerprintTorrent(item, "alldebrid");
+    expect(versions).toHaveLength(1);
+    expect(versions[0].fingerprint.storage.torrentId).toBe(item.id);
+    expect(versions[0].fingerprint.storage.path).toContain("Movie.Release.2025");
+  });
+
+  test("ignores folders, samples, artwork and subtitles while fingerprinting packs", () => {
+    const item = torrent("Season.Pack", 20_000);
+    item.files = [
+      { id: "e1", name: "Show.S01E01.1080p.mkv", path: "Season/Show.S01E01.1080p.mkv", size: 10_000, selected: true },
+      { id: "e2", name: "Show.S01E02.1080p.mp4", path: "Season/Show.S01E02.1080p.mp4", size: 9_000, selected: true },
+      { id: "sample", name: "sample.mkv", path: "Season/sample/sample.mkv", size: 1, selected: true },
+      { id: "poster", name: "poster.jpg", path: "Season/poster.jpg", size: 1, selected: true },
+      { id: "sub", name: "Show.S01E01.eng.srt", path: "Season/Show.S01E01.eng.srt", size: 1, selected: true },
+    ];
+    const versions = fingerprintTorrent(item, "alldebrid");
+    expect(versions).toHaveLength(2);
+    expect(versions.map((version) => version.fingerprint.storage.fileId)).toEqual(["e1", "e2"]);
+  });
+
+  test("does not fabricate a fingerprint for an extensionless item without a file tree", () => {
+    expect(fingerprintTorrent(torrent("Movie.Release", 10_000), "alldebrid")).toHaveLength(0);
+  });
+
   test("keeps separate profile winners for quality and remote objectives", () => {
     const quality = profile();
     const remote = profile({ id: "remote", name: "REMOTE", target: "DIRECT_PLAY", preferredResolution: "1080p", sourceOrder: ["WEB-DL", "REMUX"], codecOrder: ["H264", "HEVC"] });

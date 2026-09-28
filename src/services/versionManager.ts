@@ -154,6 +154,7 @@ export type Provenance = "ALLDEBRID" | "FILENAME" | "FFPROBE" | "PLEX" | "JELLYF
 export type IdentityResolutionStatus = "resolved" | "fallback" | "uncertain" | "conflict";
 
 export interface IdentityConflict {
+  code: string;
   field: string;
   values: Array<{ value: string; source: Provenance }>;
 }
@@ -196,6 +197,15 @@ const LANGUAGE_ALIASES: Record<string, string> = {
   jpn: "ja", japanese: "ja", ja: "ja", zho: "zh", chi: "zh", kor: "ko", rus: "ru",
 };
 
+export const MEDIA_FILE_EXTENSIONS = new Set(["mkv", "mp4", "m4v", "avi", "ts", "m2ts", "webm"]);
+
+export function isMediaFileName(name: string): boolean {
+  const basename = name.trim().split(/[\\/]/).pop() || "";
+  const extension = basename.toLowerCase().split(".").pop();
+  if (!extension || !MEDIA_FILE_EXTENSIONS.has(extension)) return false;
+  return !/(^|[._ -])sample([._ -]|$)/i.test(basename);
+}
+
 function languagesFromName(name: string): string[] {
   const upper = name.toUpperCase();
   return Object.entries(LANGUAGE_ALIASES)
@@ -235,10 +245,21 @@ function inferAudio(name: string): { codec?: string; channels?: number; atmos?: 
 }
 
 export function fingerprintTorrent(torrent: TorrentInfo, provider = "unknown"): VersionRecord[] {
-  const files = torrent.files.length > 0 ? torrent.files : [{ id: "torrent", name: torrent.name, path: torrent.name, size: torrent.bytes, selected: true }];
-  return files.filter((file) => /\.(mkv|mp4|m4v|avi|ts)$/i.test(file.name)).map((file) => {
-    const parsed = parseMediaFilename(file.name, file.path);
-    const name = file.name || torrent.name;
+  // Provider items are not necessarily media files themselves. Prefer the
+  // provider's file tree and only use the item name as a fallback when it is
+  // itself an actual media filename. This keeps folders/season packs useful
+  // while preventing artwork, samples, subtitles, and extensionless release
+  // names from becoming fake fingerprints.
+  const providerFiles = Array.isArray(torrent.files) ? torrent.files : [];
+  const files = providerFiles.length > 0
+    ? providerFiles
+    : isMediaFileName(torrent.filename || torrent.name)
+      ? [{ id: "torrent", name: torrent.filename || torrent.name, path: torrent.filename || torrent.name, size: torrent.bytes, selected: true }]
+      : [];
+  return files.filter((file) => isMediaFileName(file.name || file.path)).map((file) => {
+    const path = (file.path || file.name || torrent.name).trim();
+    const parsed = parseMediaFilename(file.name || path, path);
+    const name = (file.name || path).trim();
     const languages = languagesFromName(name);
     const audio = inferAudio(name);
     return {
@@ -264,7 +285,7 @@ export function fingerprintTorrent(torrent: TorrentInfo, provider = "unknown"): 
         },
         audio: (languages.length > 0 ? languages : ["eng"]).map((language) => ({ language, ...audio, provenance: { language: "FILENAME", codec: "FILENAME", channels: "FILENAME", atmos: "FILENAME" } })),
         subtitles: [], release: { source: inferSource(name), group: name.match(/-([A-Za-z0-9]+)(?:\.[^.]+)?$/)?.[1], provenance: { source: "FILENAME", group: "FILENAME" } },
-        storage: { provider, torrentId: torrent.id, fileId: file.id, path: file.path, size: file.size || torrent.bytes, addedAt: torrent.addedAt?.toISOString(), provenance: { provider: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", torrentId: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", path: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", size: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN" } },
+        storage: { provider, torrentId: torrent.id, fileId: file.id, path, size: file.size || torrent.bytes, addedAt: torrent.addedAt?.toISOString(), provenance: { provider: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", torrentId: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", path: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", size: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN" } },
         probe: { status: "not_requested", tool: "filename" },
       },
     };

@@ -32,6 +32,10 @@ export interface TorrentInfo {
   addedAt?: Date;
   /** Raw provider-specific data for pass-through to API consumers. */
   raw?: any;
+  /** Optional original magnet URI when the provider exposes it. */
+  magnetUri?: string;
+  /** Optional infohash when the provider exposes it. */
+  infoHash?: string;
 }
 
 /** A single file within a torrent. */
@@ -221,4 +225,3 @@ import './putio';
 import './megadebrid';
 import './seedr';
 import './pikpak';
-

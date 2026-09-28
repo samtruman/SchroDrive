@@ -49,6 +49,7 @@ export interface ResolutionResult {
   conflicts: IdentityConflict[];
   confidence: number;
   reason: string;
+  strongMatch?: boolean;
 }
 
 function key(title?: string, year?: number, kind?: string, season?: number, episode?: number): string {
@@ -62,7 +63,7 @@ function itemIds(item: MetadataItem): Record<string, string> {
   return { ...(item.tmdbId ? { tmdbId: String(item.tmdbId) } : {}), ...(item.imdbId ? { imdbId: item.imdbId } : {}), ...(item.tvdbId ? { tvdbId: String(item.tvdbId) } : {}) };
 }
 
-function conflictsFor(items: MetadataItem[], version: VersionRecord): IdentityConflict[] {
+function conflictsFor(items: MetadataItem[], version: VersionRecord, ignoreFilenameValues = false): IdentityConflict[] {
   const conflicts: IdentityConflict[] = [];
   const fields: Array<[string, (item: MetadataItem) => string | undefined, (identity: VersionRecord["fingerprint"]["identity"]) => string | undefined]> = [
     ["tmdbId", (item) => item.tmdbId, (identity) => identity.tmdbId],
@@ -70,13 +71,34 @@ function conflictsFor(items: MetadataItem[], version: VersionRecord): IdentityCo
     ["tvdbId", (item) => item.tvdbId, (identity) => identity.tvdbId],
     ["title", (item) => item.title ? normalizeMediaTitle(item.title) : undefined, (identity) => identity.normalizedTitle],
     ["year", (item) => item.year ? String(item.year) : undefined, (identity) => identity.year ? String(identity.year) : undefined],
+    ["season", (item) => item.season ? String(item.season) : undefined, (identity) => identity.season ? String(identity.season) : undefined],
+    ["episode", (item) => item.episode ? String(item.episode) : undefined, (identity) => identity.episode ? String(identity.episode) : undefined],
   ];
   for (const [field, readItem, readIdentity] of fields) {
     const values = items.map((item) => ({ value: readItem(item), source: item.source })).filter((entry): entry is { value: string; source: Provenance } => Boolean(entry.value));
     const identityValue = readIdentity(version.fingerprint.identity);
-    if (identityValue) values.push({ value: identityValue, source: version.fingerprint.identity.provenance?.[field] || "FILENAME" });
+    const identitySource = version.fingerprint.identity.provenance?.[field] || "FILENAME";
+    if (identityValue && !(ignoreFilenameValues && identitySource === "FILENAME")) values.push({ value: identityValue, source: identitySource });
     const unique = [...new Map(values.map((entry) => [entry.value, entry.source])).entries()];
-    if (unique.length > 1) conflicts.push({ field, values: unique.map(([value, source]) => ({ value, source })) });
+    if (unique.length > 1) {
+      const sources = new Set(unique.map(([, source]) => source));
+      const code = ["tmdbId", "imdbId", "tvdbId"].includes(field)
+        ? "PROVIDER_ID_MISMATCH"
+        : sources.has("FILENAME") && sources.size > 1
+          ? "FILENAME_PROVIDER_DISAGREEMENT"
+          : items.length > 1 && sources.size === 1 && sources.has("PLEX")
+            ? "MULTIPLE_PLEX_CANDIDATES"
+            : sources.size > 1
+              ? "CROSS_PROVIDER_DISAGREEMENT"
+              : field === "title"
+                ? "TITLE_MISMATCH"
+                : field === "year"
+                  ? "YEAR_MISMATCH"
+                  : ["season", "episode"].includes(field)
+                    ? "SEASON_EPISODE_MISMATCH"
+                    : "IDENTITY_FIELD_MISMATCH";
+      conflicts.push({ code, field, values: unique.map(([value, source]) => ({ value, source })) });
+    }
   }
   return conflicts;
 }
@@ -104,8 +126,8 @@ function matchCatalog(version: VersionRecord, catalog: MetadataCatalog): Resolut
   if (candidates.length > 1 && !byId.length && !byPath.length) return { status: "ambiguous", identityStatus: "uncertain", conflicts: [], confidence: Math.min(identity.confidence, 0.55), reason: `${catalog.source} returned multiple title/episode candidates` };
   if (!candidates.length) return { status: "not_matched", identityStatus: "fallback", conflicts: [], confidence: identity.confidence, reason: `${catalog.source} had no matching item` };
   const merged = mergeItems(candidates);
-  const conflicts = merged ? conflictsFor(candidates, version) : [];
-  return { status: "matched", identityStatus: conflicts.length ? "conflict" : "resolved", item: merged, conflicts, confidence: conflicts.length ? Math.min(identity.confidence, 0.5) : 0.98, reason: conflicts.length ? `${catalog.source} match contains conflicting identifiers` : `${catalog.source} matched by provider ID, path or structured identity` };
+  const conflicts = merged ? conflictsFor(candidates, version, Boolean(byId.length || byPath.length)) : [];
+  return { status: "matched", identityStatus: conflicts.length ? "conflict" : "resolved", item: merged, conflicts, confidence: conflicts.length ? Math.min(identity.confidence, 0.5) : 0.98, reason: conflicts.length ? `${catalog.source} match contains conflicting identifiers` : `${catalog.source} matched by provider ID, path or structured identity`, strongMatch: Boolean(byId.length || byPath.length) };
 }
 
 function applyItem(version: VersionRecord, result: ResolutionResult): void {
@@ -220,8 +242,9 @@ export function resolveVersionIdentity(version: VersionRecord, catalogs: Metadat
     return { status: ambiguous ? "ambiguous" : "not_matched", identityStatus: ambiguous ? "uncertain" : "fallback", conflicts: [], confidence: version.fingerprint.identity.confidence, reason: "No metadata source matched" };
   }
   const items = matched.map((result) => result.item!);
-  const conflicts = conflictsFor(items, version);
-  return { status: "matched", identityStatus: conflicts.length ? "conflict" : "resolved", item: mergeItems(items), conflicts, confidence: conflicts.length ? 0.5 : Math.max(...matched.map((result) => result.confidence)), reason: conflicts.length ? "Metadata providers disagree" : "Metadata providers agree" };
+  const strongMatch = matched.some((result) => result.strongMatch);
+  const conflicts = [...matched.flatMap((result) => result.conflicts), ...conflictsFor(items, version, strongMatch)];
+  return { status: "matched", identityStatus: conflicts.length ? "conflict" : "resolved", item: mergeItems(items), conflicts, confidence: conflicts.length ? 0.5 : Math.max(...matched.map((result) => result.confidence)), reason: conflicts.length ? "Metadata providers disagree" : "Metadata providers agree", strongMatch };
 }
 
 export async function enrichVersionMetadata(versions: VersionRecord[]): Promise<MetadataStats> {
