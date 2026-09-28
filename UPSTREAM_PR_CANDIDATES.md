@@ -609,10 +609,10 @@ configuration-unavailable/network/authentication-failure coverage.
 
 ### Upstream applicability
 
-Generic provider integration issue, independent of CineCircle and Version
-Manager policy. The fetched `upstream/develop` does not currently contain the
-new MediaServerProvider adapter, so upstream applicability of this exact code
-path requires verification when proposing the PR.
+The defect is currently in this fork's new MediaServerProvider adapter, not in
+the fetched upstream `develop`, which does not contain this adapter yet. The
+behavior is generic and may become an upstream PR when the adapter is proposed,
+but upstream applicability of the exact fix is not proven yet.
 
 ### Isolation
 
@@ -637,7 +637,7 @@ no provider mutation and no metadata-policy changes.
 | Seerr canonical Settings keys | GENERIC_UPSTREAM_FIX | `2e6e4c9` | yes | config persistence | absent from fetched upstream develop | HIGH |
 | Seerr URL/API-root normalization | GENERIC_UPSTREAM_FIX | pending | yes | URL normalization unit test | needs upstream verification | HIGH |
 | Settings dotenv provenance | GENERIC_UPSTREAM_FIX | pending | yes | config provenance/persistence tests | present in fetched upstream develop | HIGH |
-| Jellyfin MediaBrowser authentication | GENERIC_UPSTREAM_FIX | pending | yes | adapter auth regression pending | adapter absent upstream; verify extraction | HIGH |
+| Jellyfin MediaBrowser authentication | NEEDS_UPSTREAM_VERIFICATION | pending | yes | adapter auth regression pending | fork-only today; verify when upstreaming | HIGH |
 
 No PR, upstream branch, existing PR, or commit history was modified by this
 tracking update.
