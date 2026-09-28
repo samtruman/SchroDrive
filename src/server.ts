@@ -35,7 +35,7 @@ import { tokenRotator } from "./core/tokenRotator";
 import { decideOrganizerReview, filterOrganizerReviewsByParserStatus, listOrganizerReviewAudit, listOrganizerReviews, retryOrganizerReview, validateReviewOverride } from "./services/organizerReview";
 import { browseMountedFilesystem, FilesystemBrowserError } from "./core/filesystemBrowser";
 import { evaluateVersionGroups, fingerprintTorrent, validateRule } from "./services/versionManager";
-import { getLatestVersionManagerScan, getVersionProfiles, saveVersionManagerScan, saveVersionProfiles } from "./services/versionManagerStore";
+import { getLatestVersionManagerScan, getVersionManagerPolicy, getVersionProfiles, saveVersionManagerPolicy, saveVersionManagerScan, saveVersionProfiles } from "./services/versionManagerStore";
 import { probeVersionRecords } from "./services/versionManagerProbe";
 import { enrichVersionMetadata } from "./services/versionManagerMetadata";
 
@@ -183,6 +183,7 @@ export function startServer() {
       enabled: false,
       mode: "dry-run",
       deleteExecutor: "not_implemented",
+      policy: getVersionManagerPolicy(),
       profiles: getVersionProfiles(),
       latestScan: getLatestVersionManagerScan() || null,
     });
@@ -201,7 +202,8 @@ export function startServer() {
       const probe = await probeVersionRecords(versions);
       const metadata = await enrichVersionMetadata(versions);
       const profiles = getVersionProfiles();
-      const groups = evaluateVersionGroups(versions, profiles);
+      const policy = getVersionManagerPolicy();
+      const groups = evaluateVersionGroups(versions, profiles, policy);
       const scanId = saveVersionManagerScan(groups, profiles);
       res.json({ ok: true, mode: "dry-run", scanId, inventoryCount: versions.length, groupCount: groups.length, probe, metadata, groups });
     } catch (err: any) {
@@ -213,8 +215,10 @@ export function startServer() {
     try {
       if (!Array.isArray(req.body?.profiles) || req.body.profiles.length === 0) return res.status(400).json({ ok: false, error: "profiles must be a non-empty array" });
       const profiles = req.body.profiles.map((profile: any) => ({ ...profile, hardRequirements: profile.hardRequirements ? validateRule(profile.hardRequirements) : undefined }));
+      const policy = { enableRemote: req.body.policy?.enableRemote === true, acquireMissingRemote: req.body.policy?.acquireMissingRemote === true };
       saveVersionProfiles(profiles);
-      res.json({ ok: true, profiles: getVersionProfiles() });
+      saveVersionManagerPolicy(policy);
+      res.json({ ok: true, profiles: getVersionProfiles(), policy });
     } catch (err: any) {
       res.status(400).json({ ok: false, error: err?.message || "Invalid profiles" });
     }

@@ -5,6 +5,26 @@ export type VersionDecision = "KEEP" | "DELETE_CANDIDATE" | "REVIEW";
 export type VersionTarget = "QUALITY" | "DIRECT_PLAY" | string;
 export type LanguageMode = "ANY" | "ALL";
 
+export interface VersionManagerPolicy {
+  enableRemote: boolean;
+  acquireMissingRemote: boolean;
+}
+
+export interface AcquisitionIntent {
+  status: "ACQUISITION_NEEDED";
+  contentIdentity: MediaFingerprint["identity"];
+  profileId: string;
+  requirement: "1080p";
+  reasonCode: "NO_ELIGIBLE_REMOTE_VERSION";
+  confidence: number;
+}
+
+export interface RemoteStatus {
+  status: "SATISFIED" | "REMOTE_MISSING";
+  reasonCode?: "NO_ELIGIBLE_REMOTE_VERSION";
+  acquisition?: AcquisitionIntent;
+}
+
 export interface LanguagePolicy {
   required: { values: string[]; mode: LanguageMode };
   preferred: string[];
@@ -158,6 +178,7 @@ export interface VersionGroup {
   id: string;
   identity: MediaFingerprint["identity"];
   versions: VersionEvaluation[];
+  remote?: RemoteStatus;
 }
 
 const LANGUAGE_ALIASES: Record<string, string> = {
@@ -255,6 +276,11 @@ export const defaultVersionProfiles: VersionProfile[] = [
   },
 ];
 
+export const defaultVersionManagerPolicy: VersionManagerPolicy = {
+  enableRemote: false,
+  acquireMissingRemote: false,
+};
+
 function hasRequiredLanguages(version: VersionRecord, policy: LanguagePolicy): boolean {
   const available = new Set(version.fingerprint.audio.map((stream) => stream.language));
   const required = policy.required.values.map((value) => LANGUAGE_ALIASES[value.toLowerCase()] || value.toLowerCase());
@@ -276,6 +302,9 @@ function evaluateProfile(version: VersionRecord, profile: VersionProfile): Profi
   if (!evaluateRule(profile.hardRequirements, version)) {
     reasons.push({ code: "hard_rule_failed", message: "Configured hard requirement rule is not satisfied", facts: { rule: profile.hardRequirements } });
   }
+  if (profile.target === "DIRECT_PLAY" && version.fingerprint.video.resolution !== "1080p") {
+    reasons.push({ code: "remote_requires_1080p", message: "REMOTE / DIRECT PLAY requires a verified 1080p version", facts: { actualResolution: version.fingerprint.video.resolution, requiredResolution: "1080p" } });
+  }
   const resolutionRank = rank(version.fingerprint.video.resolution, [profile.preferredResolution, "1080p", "720p"]);
   breakdown.resolution = Math.max(0, 40 - resolutionRank * 12);
   breakdown.source = Math.max(0, 20 - rank(version.fingerprint.release.source, profile.sourceOrder) * 4);
@@ -296,12 +325,13 @@ function groupKey(version: VersionRecord): string {
   return [identity.kind, identity.normalizedTitle, identity.year || "", identity.season ?? "", identity.episode ?? ""].join(":");
 }
 
-export function evaluateVersionGroups(versions: VersionRecord[], profiles = defaultVersionProfiles): VersionGroup[] {
+export function evaluateVersionGroups(versions: VersionRecord[], profiles = defaultVersionProfiles, policy: VersionManagerPolicy = defaultVersionManagerPolicy): VersionGroup[] {
   const groups = new Map<string, VersionRecord[]>();
   for (const version of versions) groups.set(groupKey(version), [...(groups.get(groupKey(version)) || []), version]);
   return [...groups.entries()].map(([id, members]) => {
-    const evaluations = members.map((version): VersionEvaluation => ({ ...version, decision: "REVIEW", evaluations: profiles.filter((profile) => profile.enabled).map((profile) => evaluateProfile(version, profile)), reasons: [] }));
-    for (const profile of profiles.filter((item) => item.enabled)) {
+    const activeProfiles = profiles.filter((profile) => profile.enabled && (profile.target !== "DIRECT_PLAY" || policy.enableRemote));
+    const evaluations = members.map((version): VersionEvaluation => ({ ...version, decision: "REVIEW", evaluations: activeProfiles.map((profile) => evaluateProfile(version, profile)), reasons: [] }));
+    for (const profile of activeProfiles) {
       const eligible = evaluations.filter((version) => version.fingerprint.identity.confidence >= 0.65 && version.evaluations.find((evaluation) => evaluation.profileId === profile.id)?.eligible);
       const winner = [...eligible].sort((a, b) => (b.evaluations.find((e) => e.profileId === profile.id)?.score || 0) - (a.evaluations.find((e) => e.profileId === profile.id)?.score || 0))[0];
       if (winner) {
@@ -322,6 +352,21 @@ export function evaluateVersionGroups(versions: VersionRecord[], profiles = defa
         });
       }
     }
-    return { id, identity: members[0].fingerprint.identity, versions: evaluations };
+    const primaryProfiles = activeProfiles.filter((profile) => profile.target === "QUALITY");
+    const primaryWinner = primaryProfiles.some((profile) => evaluations.some((version) => version.evaluations.some((evaluation) => evaluation.profileId === profile.id && evaluation.eligible && version.decision === "KEEP")));
+    const remoteProfile = activeProfiles.find((profile) => profile.target === "DIRECT_PLAY");
+    const remoteWinner = remoteProfile && evaluations.some((version) => version.evaluations.some((evaluation) => evaluation.profileId === remoteProfile.id && evaluation.eligible && version.decision === "KEEP"));
+    let remote: RemoteStatus | undefined;
+    if (policy.enableRemote && remoteProfile && primaryWinner) {
+      if (remoteWinner) remote = { status: "SATISFIED" };
+      else {
+        const identity = members[0].fingerprint.identity;
+        remote = { status: "REMOTE_MISSING", reasonCode: "NO_ELIGIBLE_REMOTE_VERSION" };
+        if (policy.acquireMissingRemote && identity.confidence >= 0.65 && !!(identity.tmdbId || identity.imdbId || identity.tvdbId)) {
+          remote.acquisition = { status: "ACQUISITION_NEEDED", contentIdentity: identity, profileId: remoteProfile.id, requirement: "1080p", reasonCode: "NO_ELIGIBLE_REMOTE_VERSION", confidence: identity.confidence };
+        }
+      }
+    }
+    return { id, identity: members[0].fingerprint.identity, versions: evaluations, remote };
   });
 }

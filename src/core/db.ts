@@ -214,6 +214,11 @@ function runMigrations(database: Database): void {
       profile_json TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )`,
+    `CREATE TABLE IF NOT EXISTS version_manager_policy (
+      id TEXT PRIMARY KEY,
+      policy_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
     `CREATE TABLE IF NOT EXISTS version_manager_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       scan_id TEXT NOT NULL,

@@ -760,3 +760,33 @@ Remaining work before any upstream proposal is stronger identity matching,
 metadata-backed original-language validation, richer direct-play compatibility,
 review/history UI and broader provider-backed tests. Deletion remains outside
 scope.
+
+## 28. Optional REMOTE policy and acquisition intent
+
+The Version Manager now persists two independent policy switches:
+
+```ts
+{
+  enableRemote: false,
+  acquireMissingRemote: false
+}
+```
+
+The default is deliberately single-slot PRIMARY behavior. When
+`enableRemote=false`, the engine activates only quality profiles, does not
+produce `REMOTE_MISSING`, and never retains a version merely as a possible
+remote copy. When it is true, a `DIRECT_PLAY` profile is a separate slot and
+has a hard verified `1080p` requirement. A 2160p version can never satisfy that
+slot.
+
+When PRIMARY exists but no eligible 1080p exists, the group reports
+`REMOTE_MISSING` with `NO_ELIGIBLE_REMOTE_VERSION`. If and only if
+`acquireMissingRemote=true`, identity confidence is sufficient and a TMDb,
+IMDb or TVDb ID is available, the group also exposes an
+`ACQUISITION_NEEDED` intent. This is an intent for future manual approval, not
+an automatic request and not a delete decision.
+
+The policy is persisted in `version_manager_policy`, exposed by the status API,
+and configurable in `/version-manager`. The profile engine remains target-based
+and can support additional slots in future; PRIMARY/REMOTE are not used as the
+core data model.

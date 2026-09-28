@@ -1,5 +1,18 @@
 import { getDb } from "../core/db";
-import { defaultVersionProfiles, validateRule, type VersionGroup, type VersionProfile } from "./versionManager";
+import { defaultVersionManagerPolicy, defaultVersionProfiles, validateRule, type VersionGroup, type VersionManagerPolicy, type VersionProfile } from "./versionManager";
+
+export function getVersionManagerPolicy(): VersionManagerPolicy {
+  const row = getDb().prepare("SELECT policy_json FROM version_manager_policy WHERE id = 'default'").get() as { policy_json: string } | undefined;
+  if (!row) return { ...defaultVersionManagerPolicy };
+  try {
+    const policy = JSON.parse(row.policy_json) as Partial<VersionManagerPolicy>;
+    return { enableRemote: policy.enableRemote === true, acquireMissingRemote: policy.acquireMissingRemote === true };
+  } catch { return { ...defaultVersionManagerPolicy }; }
+}
+
+export function saveVersionManagerPolicy(policy: VersionManagerPolicy): void {
+  getDb().prepare("INSERT OR REPLACE INTO version_manager_policy (id, policy_json, updated_at) VALUES ('default', ?, ?)").run(JSON.stringify({ enableRemote: policy.enableRemote === true, acquireMissingRemote: policy.acquireMissingRemote === true }), new Date().toISOString());
+}
 
 export function getVersionProfiles(): VersionProfile[] {
   const rows = getDb().prepare("SELECT profile_json FROM version_manager_profiles ORDER BY profile_id").all() as Array<{ profile_json: string }>;

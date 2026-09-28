@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import type { TorrentInfo } from "../../../src/providers";
-import { evaluateRule, evaluateVersionGroups, fingerprintTorrent, validateRule, type VersionProfile } from "../../../src/services/versionManager";
+import { evaluateRule, evaluateVersionGroups, fingerprintTorrent, validateRule, type VersionManagerPolicy, type VersionProfile } from "../../../src/services/versionManager";
 
 const profile = (overrides: Partial<VersionProfile> = {}): VersionProfile => ({
   id: "primary", name: "PRIMARY", enabled: true, target: "QUALITY", preferredResolution: "2160p",
   languagePolicy: { required: { values: ["ita"], mode: "ALL" }, preferred: [], original: false },
   sourceOrder: ["REMUX", "WEB-DL"], codecOrder: ["HEVC", "H264"], audioOrder: ["TRUEHD", "DDP"], ...overrides,
 });
+const remotePolicy: VersionManagerPolicy = { enableRemote: true, acquireMissingRemote: false };
 
 function torrent(name: string, size: number): TorrentInfo {
   return { id: name, name, status: "finished", progress: 100, bytes: size, files: [{ id: "0", name, path: name, size, selected: true }] };
@@ -31,7 +32,7 @@ describe("version manager", () => {
       ...fingerprintTorrent(torrent("Example.Movie.2025.2160p.REMUX.ITA.ENG.TRUEHD.mkv", 75_000_000_000), "alldebrid"),
       ...fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.ITA.DDP.mkv", 9_000_000_000), "alldebrid"),
     ];
-    const [group] = evaluateVersionGroups(versions, [quality, remote]);
+    const [group] = evaluateVersionGroups(versions, [quality, remote], remotePolicy);
     expect(group.versions.filter((version) => version.decision === "KEEP")).toHaveLength(2);
     expect(group.versions.some((version) => version.evaluations.some((evaluation) => evaluation.profileId === "remote" && evaluation.eligible))).toBe(true);
   });
@@ -59,5 +60,47 @@ describe("version manager", () => {
     ] });
     expect(evaluateRule(rule, version)).toBe(true);
     expect(() => validateRule({ op: "COMPARE", field: "unknown", operator: "eq", value: 1 })).toThrow();
+  });
+
+  test("does not create a REMOTE slot when the optional policy is disabled", () => {
+    const quality = profile();
+    const remote = profile({ id: "remote", name: "REMOTE", target: "DIRECT_PLAY", preferredResolution: "1080p" });
+    const versions = [
+      ...fingerprintTorrent(torrent("Example.Movie.2025.2160p.REMUX.ITA.mkv", 75_000_000_000), "alldebrid"),
+      ...fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.ITA.mkv", 9_000_000_000), "alldebrid"),
+    ];
+    const [group] = evaluateVersionGroups(versions, [quality, remote]);
+    expect(group.remote).toBeUndefined();
+    expect(group.versions.filter((version) => version.decision === "KEEP")).toHaveLength(1);
+  });
+
+  test("requires verified 1080p for REMOTE and reports missing remote without acquisition", () => {
+    const quality = profile();
+    const remote = profile({ id: "remote", name: "REMOTE", target: "DIRECT_PLAY", preferredResolution: "1080p" });
+    const versions = fingerprintTorrent(torrent("Example.Movie.2025.2160p.REMUX.ITA.mkv", 75_000_000_000), "alldebrid");
+    const [group] = evaluateVersionGroups(versions, [quality, remote], remotePolicy);
+    expect(group.remote?.status).toBe("REMOTE_MISSING");
+    expect(group.remote?.acquisition).toBeUndefined();
+    expect(group.versions[0].evaluations.find((evaluation) => evaluation.profileId === "remote")?.eligible).toBe(false);
+    expect(group.versions[0].evaluations.find((evaluation) => evaluation.profileId === "remote")?.reasons.some((reason) => reason.code === "remote_requires_1080p")).toBe(true);
+  });
+
+  test("can create acquisition intent only for a certain identity with an ID", () => {
+    const quality = profile();
+    const remote = profile({ id: "remote", name: "REMOTE", target: "DIRECT_PLAY", preferredResolution: "1080p" });
+    const [version] = fingerprintTorrent(torrent("Example.Movie.2025.2160p.REMUX.ITA.mkv", 75_000_000_000), "alldebrid");
+    version.fingerprint.identity.tmdbId = "123";
+    const [group] = evaluateVersionGroups([version], [quality, remote], { enableRemote: true, acquireMissingRemote: true });
+    expect(group.remote?.acquisition?.status).toBe("ACQUISITION_NEEDED");
+    expect(group.remote?.acquisition?.requirement).toBe("1080p");
+  });
+
+  test("uses profile targets rather than reserved ids for future quality slots", () => {
+    const quality = profile({ id: "quality-v2", name: "Cinema quality" });
+    const remote = profile({ id: "remote-v2", name: "Remote", target: "DIRECT_PLAY", preferredResolution: "1080p" });
+    const [version] = fingerprintTorrent(torrent("Example.Movie.2025.2160p.REMUX.ITA.mkv", 75_000_000_000), "alldebrid");
+    version.fingerprint.identity.tmdbId = "123";
+    const [group] = evaluateVersionGroups([version], [quality, remote], remotePolicy);
+    expect(group.remote?.status).toBe("REMOTE_MISSING");
   });
 });
