@@ -891,8 +891,8 @@ No raw provider object, credential, token or secret is copied to the export.
 
 Supported modes are `FULL_LIBRARY`, `KEEP_ONLY`, `PRIMARY_ONLY`,
 `REMOTE_ONLY`, `PRIMARY_REMOTE` and `SELECTED`. No importer or provider
-mutation is implemented. The Web UI panel remains a follow-up; the backend
-export function and tests are complete for this milestone.
+mutation is implemented. The backend exporter and Web UI panel are complete
+for this milestone.
 
 The real AllDebrid status inventory exposed an infohash for all 404 completed
 items. The read-only FULL export generated 404 manifest records and 404
@@ -906,3 +906,77 @@ reported; 102 acquisition intents were theoretical only. No 2160p version was
 assigned to REMOTE. Plex supplied 211 catalog items and matched 181 records;
 Jellyfin and TMDb were unavailable/configuration-unavailable in the isolated
 process, so original-language coverage remained zero.
+
+## 32. Shared TMDb service and current validation
+
+The existing Organizer read `TMDB_API_KEY` from the shared core config and
+implemented its own title/year search in `organizer.ts`. The lookup is now
+shared through `src/services/tmdbService.ts`, which owns read-only movie/TV
+search, deterministic candidate selection, external IDs, canonical title/year,
+original language and explicit availability status. Organizer and Version
+Manager use this service; there is no Version Manager-specific TMDb key.
+Version Manager retains its SQLite cache around the shared client.
+
+The active SchröDrive container and persisted configuration files available on
+the server do not expose a `TMDB_API_KEY`; no secret was printed, copied or
+committed. The real isolated validation therefore correctly reported TMDb as
+`configuration_unavailable`, while Plex remained available read-only:
+
+| Metric | Baseline | Current |
+|---|---:|---:|
+| Provider items / completed | 417 / 404 | 417 / 404 |
+| Fingerprints | 731 | 731 |
+| Version Groups / multiversion | 616 / 80 | 616 / 80 |
+| Resolved / fallback | 181 / 550 | 181 / 550 |
+| Conflicts | 0 | 0 |
+| Plex catalog / matches | 211 / 181 | 211 / 181 |
+| TMDb matches | 0 | 0 (`configuration_unavailable`) |
+| Original language | 0 | 0 |
+| REMOTE 1080p / missing | 334 / 288 | 334 / 288 |
+| REMOTE 2160p | 0 | 0 |
+
+TMDb cache activity was 0 hits / 0 misses because no configured key allowed no
+lookup. Once the existing deployment configuration is made available to the
+isolated process, the same pipeline will measure enrichment without changing
+the API contract.
+
+## 33. Generalization and upstream assessment
+
+The core model and exporter are provider-neutral. AllDebrid-specific behavior
+is confined to provider adapter/file-tree acquisition and inventory fields;
+`TorrentInfo`, `MediaFile`, `MediaFingerprint`, groups, profiles and export
+records do not require AllDebrid semantics. Plex, Jellyfin and TMDb are
+metadata adapters with explicit availability states, not core prerequisites.
+
+The remaining deployment presets are intentional configuration: the default
+PRIMARY preset prefers 2160p quality and the optional REMOTE preset requires
+verified 1080p. The engine evaluates enabled target-based profiles and tests
+already cover custom profile IDs, so it does not require the names PRIMARY or
+REMOTE. Seerr, CineCircle paths, Radarr/Sonarr and provider mutation are not
+Version Manager core dependencies. Residual coupling is limited to the
+backward-compatible default profile shape and the REMOTE-specific missing-state
+policy, both documented as presets for this milestone.
+
+## 34. Migration Export UI and security
+
+`/version-manager` now contains an Export / Migration panel. It calls the
+read-only `/api/version-manager/export` endpoint, previews provider-item,
+exportable-item and unique-magnet counts, and downloads `magnets.txt` or
+`manifest.json`. FULL_LIBRARY is inventory-driven and does not require
+identity, fingerprinting or Decision Engine output.
+
+The manifest is schema `1.0`, includes `generated_at`, `readOnly`, export mode
+and provider item records. It contains no raw provider object, API key, token,
+password, Plex/Jellyfin credential or TMDb key. Deduplication uses normalized
+infohash/magnet identity; a season pack remains one provider item and one
+magnet even when it produces multiple fingerprints. Import, add, delete,
+repair and provider mutation remain unimplemented.
+
+## 35. Golden real-data set
+
+The real multiversion set contains 80 groups. Representative regression cases
+include movie 2160p+1080p pairs, multiple 2160p releases (Love and Monsters,
+Silo), three-way movie versions (Mayday), and multi-version episodes in season
+packs (The Westies and Lucky). These are assessment examples only: no deletion
+preference is asserted. The engine verifies grouping, explainable profile
+eligibility and the hard rule that no 2160p version enters REMOTE.

@@ -24,6 +24,7 @@ import { classifyTorrent } from "../core/mediaClassifier";
 import { getWebdavOrganiserRoots } from "./mount";
 import { parseMediaFilename, selectMediaCandidate } from "./mediaParser";
 import { getOrganizerReview, recordOrganizerReview, type ReviewDecision, type ReviewOverride } from "./organizerReview";
+import { searchTmdb } from "./tmdbService";
 
 // ===========================================================================
 // Types & Constants
@@ -499,45 +500,9 @@ async function tmdbSearch(title: string, prefer: "tv" | "movie", year?: number):
   canonicalTitle?: string;
   canonicalYear?: number;
 }> {
-  if (!config.tmdbApiKey) return {};
-  try {
-    const params: Record<string, any> = { api_key: config.tmdbApiKey, query: title, include_adult: false };
-    if (year) {
-      // TMDB uses different year parameters for movies vs TV
-      if (prefer === "movie") params.year = year; else params.first_air_date_year = year;
-    }
-    const url = prefer === "movie" ? "https://api.themoviedb.org/3/search/movie" : "https://api.themoviedb.org/3/search/tv";
-    const { data } = await axios.get(url, { params, timeout: 10000 });
-    const results = Array.isArray(data?.results) ? data.results : [];
-    const candidates = results.map((item: any) => ({
-      id: String(item.id),
-      title: prefer === "movie" ? (item.title || item.original_title || "") : (item.name || item.original_name || ""),
-      kind: prefer === "movie" ? "movie" as const : "show" as const,
-      year: Number(String(prefer === "movie" ? item.release_date : item.first_air_date || "").slice(0, 4)) || undefined,
-    }));
-    const selection = selectMediaCandidate(
-      { title, year, kind: prefer === "movie" ? "movie" : "episode" },
-      candidates,
-    );
-    if (selection.status !== "matched" || !selection.candidate) return {};
-    const best = results.find((item: any) => String(item.id) === String(selection.candidate?.id));
-    if (!best) return {};
-    if (prefer === "movie") {
-      return {
-        confirmedType: "movie",
-        canonicalTitle: best.title || best.original_title || title,
-        canonicalYear: best.release_date ? Number(String(best.release_date).slice(0, 4)) : year,
-      };
-    } else {
-      return {
-        confirmedType: "tv",
-        canonicalTitle: best.name || best.original_name || title,
-        canonicalYear: best.first_air_date ? Number(String(best.first_air_date).slice(0, 4)) : year,
-      };
-    }
-  } catch (_e) {
-    return {};
-  }
+  const result = await searchTmdb(title, prefer, year);
+  if (result.status !== "matched" || !result.metadata) return {};
+  return { confirmedType: prefer === "movie" ? "movie" : "tv", canonicalTitle: result.metadata.title, canonicalYear: result.metadata.year };
 }
 
 /**

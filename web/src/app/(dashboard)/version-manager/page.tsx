@@ -35,6 +35,7 @@ type Preview = {
 
 type Profile = { id: string; name: string; enabled: boolean; target: string; preferredResolution: string }
 type Policy = { enableRemote: boolean; acquireMissingRemote: boolean }
+type ExportPreview = { providerItems: number; exportableItems: number; magnetCount: number; generatedAt: string }
 
 export default function VersionManagerPage() {
   const [preview, setPreview] = useState<Preview | null>(null)
@@ -43,6 +44,8 @@ export default function VersionManagerPage() {
   const [profiles, setProfiles] = useState<Profile[]>([])
   const [policy, setPolicy] = useState<Policy>({ enableRemote: false, acquireMissingRemote: false })
   const [saving, setSaving] = useState(false)
+  const [exportPreview, setExportPreview] = useState<ExportPreview | null>(null)
+  const [exportLoading, setExportLoading] = useState(false)
 
   useEffect(() => {
     fetch("/api/version-manager/status").then((response) => response.json()).then((data) => { setProfiles(data.profiles || []); setPolicy(data.policy || { enableRemote: false, acquireMissingRemote: false }) }).catch(() => undefined)
@@ -75,6 +78,21 @@ export default function VersionManagerPage() {
     finally { setSaving(false) }
   }
 
+  async function loadExportPreview() {
+    setExportLoading(true)
+    try {
+      const response = await fetch("/api/version-manager/export?mode=FULL_LIBRARY&format=preview")
+      const data = await response.json()
+      if (!response.ok || !data.ok) throw new Error(data.error || "Export preview failed")
+      setExportPreview(data)
+    } catch (err) { setError(err instanceof Error ? err.message : "Export preview failed") }
+    finally { setExportLoading(false) }
+  }
+
+  function downloadExport(format: "magnets" | "manifest") {
+    window.location.href = `/api/version-manager/export?mode=FULL_LIBRARY&format=${format}`
+  }
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
@@ -90,6 +108,14 @@ export default function VersionManagerPage() {
           <CardDescription>Inventory, fingerprinting and decisions are currently dry-run only. Provider deletion is not implemented.</CardDescription>
         </CardHeader>
         <CardContent className="flex gap-2"><Badge variant="outline">DRY RUN</Badge><Badge variant="secondary">PRIMARY enabled</Badge><Badge variant="outline">REMOTE {policy.enableRemote ? "enabled" : "disabled"}</Badge></CardContent>
+      </Card>
+      <Card>
+        <CardHeader><CardTitle>Export / Migration</CardTitle><CardDescription>Read-only FULL LIBRARY export. It uses provider inventory directly and includes uncertain or un-fingerprinted items when an infohash is available.</CardDescription></CardHeader>
+        <CardContent className="space-y-3">
+          <Button variant="outline" onClick={loadExportPreview} disabled={exportLoading}>{exportLoading ? "Loading…" : "Preview Full Library"}</Button>
+          {exportPreview && <div className="rounded border p-3 text-sm">Provider items: <strong>{exportPreview.providerItems}</strong> · Exportable: <strong>{exportPreview.exportableItems}</strong> · Unique magnets: <strong>{exportPreview.magnetCount}</strong><div className="mt-1 text-muted-foreground">Snapshot: {new Date(exportPreview.generatedAt).toLocaleString()}</div></div>}
+          <div className="flex flex-wrap gap-2"><Button onClick={() => downloadExport("magnets")} disabled={!exportPreview}>Download magnets.txt</Button><Button variant="outline" onClick={() => downloadExport("manifest")} disabled={!exportPreview}>Download manifest.json</Button></div>
+        </CardContent>
       </Card>
       <Card>
         <CardHeader><CardTitle>Optional multi-version mode</CardTitle><CardDescription>REMOTE is an independent 1080p Direct Play slot. It is disabled by default and never falls back to 2160p.</CardDescription></CardHeader>

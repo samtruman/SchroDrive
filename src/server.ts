@@ -38,6 +38,7 @@ import { evaluateVersionGroups, fingerprintTorrent, validateRule } from "./servi
 import { getLatestVersionManagerScan, getVersionManagerPolicy, getVersionProfiles, saveVersionManagerPolicy, saveVersionManagerScan, saveVersionProfiles } from "./services/versionManagerStore";
 import { probeVersionRecords } from "./services/versionManagerProbe";
 import { enrichVersionMetadata } from "./services/versionManagerMetadata";
+import { exportMigrationLibrary, type MigrationExportMode } from "./services/migrationExporter";
 
 // ===========================================================================
 // Server Initialisation
@@ -208,6 +209,25 @@ export function startServer() {
       res.json({ ok: true, mode: "dry-run", scanId, inventoryCount: versions.length, groupCount: groups.length, probe, metadata, groups });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message || "Version Manager preview failed" });
+    }
+  });
+
+  /** Read-only provider-inventory export for backup/migration. */
+  app.get("/api/version-manager/export", async (req, res) => {
+    try {
+      const mode = String(req.query.mode || "FULL_LIBRARY") as MigrationExportMode;
+      const inventory = (await Promise.all(registry.configured().map((provider) => provider.listTorrents()))).flat();
+      const exported = exportMigrationLibrary(inventory, [], { mode });
+      if (String(req.query.format || "preview") === "preview") {
+        return res.json({ ok: true, readOnly: true, mode, providerItems: inventory.length, exportableItems: exported.manifest.exportableItemCount, magnetCount: exported.manifest.magnetCount, generatedAt: exported.manifest.generatedAt });
+      }
+      if (String(req.query.format) === "magnets") {
+        res.type("text/plain").set("Content-Disposition", `attachment; filename=debrid-magnets.txt`).send(exported.magnetsText);
+        return;
+      }
+      res.type("application/json").set("Content-Disposition", `attachment; filename=debrid-migration-manifest.json`).send(JSON.stringify(exported.manifest, null, 2));
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || "Migration export failed" });
     }
   });
 

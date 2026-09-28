@@ -1,6 +1,7 @@
 import { config } from "../core/config";
 import { getDb } from "../core/db";
 import { normalizeMediaTitle } from "./mediaParser";
+import { searchTmdb } from "./tmdbService";
 import type { IdentityConflict, IdentityResolutionStatus, Provenance, VersionRecord } from "./versionManager";
 
 export type MetadataSourceStatus = "matched" | "not_matched" | "ambiguous" | "unavailable" | "configuration_unavailable";
@@ -219,15 +220,11 @@ async function tmdbLookup(version: VersionRecord, stats: MetadataStats): Promise
   const cached = getCachedVersionManagerMetadata(cacheKey);
   if (cached) { stats.cacheHits++; return { status: "matched", identityStatus: "resolved", item: cached, conflicts: [], confidence: 0.9, reason: "TMDb metadata cache hit" }; }
   stats.cacheMisses++;
-  const params = new URLSearchParams({ api_key: config.tmdbApiKey, query: identity.title, include_adult: "false" });
-  if (identity.year) params.set("year", String(identity.year));
-  const search = await requestJson(`https://api.themoviedb.org/3/search/${type}?${params}`);
-  if (!search.data?.results?.length) return { status: search.status === 0 ? "unavailable" : "not_matched", identityStatus: "fallback", conflicts: [], confidence: identity.confidence, reason: "TMDb returned no candidate" };
-  if (search.data.results.length > 1 && !identity.year) return { status: "ambiguous", identityStatus: "uncertain", conflicts: [], confidence: Math.min(identity.confidence, 0.55), reason: "TMDb returned multiple candidates without a year" };
-  const hit = search.data.results[0];
-  const external = await requestJson(`https://api.themoviedb.org/3/${type}/${hit.id}/external_ids?api_key=${encodeURIComponent(config.tmdbApiKey)}`);
-  const details = await requestJson(`https://api.themoviedb.org/3/${type}/${hit.id}?api_key=${encodeURIComponent(config.tmdbApiKey)}`);
-  const metadata: MetadataItem = { title: hit.title || hit.name, year: Number((hit.release_date || hit.first_air_date || "").slice(0, 4)) || identity.year, kind: type === "tv" ? "show" : "movie", tmdbId: String(hit.id), imdbId: external.data?.imdb_id, tvdbId: external.data?.tvdb_id ? String(external.data.tvdb_id) : undefined, originalLanguage: details.data?.original_language, source: "TMDB" };
+  const lookup = await searchTmdb(identity.title, type, identity.year);
+  if (lookup.status !== "matched" || !lookup.metadata) {
+    return { status: lookup.status, identityStatus: lookup.status === "ambiguous" || lookup.status === "configuration_unavailable" ? "uncertain" : "fallback", conflicts: [], confidence: lookup.status === "ambiguous" ? Math.min(identity.confidence, 0.55) : identity.confidence, reason: lookup.reason };
+  }
+  const metadata: MetadataItem = { title: lookup.metadata.title, year: lookup.metadata.year || identity.year, kind: type === "tv" ? "show" : "movie", tmdbId: lookup.metadata.tmdbId, imdbId: lookup.metadata.imdbId, tvdbId: lookup.metadata.tvdbId, originalLanguage: lookup.metadata.originalLanguage, source: "TMDB" };
   saveVersionManagerMetadataCache(cacheKey, "TMDB", metadata);
   return { status: "matched", identityStatus: "resolved", item: metadata, conflicts: [], confidence: 0.9, reason: "TMDb metadata lookup" };
 }
