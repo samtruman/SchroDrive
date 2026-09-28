@@ -328,7 +328,7 @@ export default function SettingsPage() {
       </Card>
 
       <Tabs defaultValue="general" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-4 lg:grid-cols-11">
+        <TabsList className="grid w-full grid-cols-4 lg:grid-cols-12">
           <TabsTrigger value="general" className="gap-2"><Settings className="h-4 w-4 hidden sm:block" />General</TabsTrigger>
           <TabsTrigger value="indexers" className="gap-2"><Search className="h-4 w-4 hidden sm:block" />Indexers</TabsTrigger>
           <TabsTrigger value="torbox" className="gap-2"><Database className="h-4 w-4 hidden sm:block" />TorBox</TabsTrigger>
@@ -336,6 +336,7 @@ export default function SettingsPage() {
           <TabsTrigger value="alldebrid" className="gap-2"><Database className="h-4 w-4 hidden sm:block" />AllDebrid</TabsTrigger>
           <TabsTrigger value="premiumize" className="gap-2"><Database className="h-4 w-4 hidden sm:block" />Premiumize</TabsTrigger>
           <TabsTrigger value="overseerr" className="gap-2"><Tv className="h-4 w-4 hidden sm:block" />Overseerr</TabsTrigger>
+          <TabsTrigger value="media_servers" className="gap-2"><Tv className="h-4 w-4 hidden sm:block" />Media Servers</TabsTrigger>
           <TabsTrigger value="mounts" className="gap-2"><HardDrive className="h-4 w-4 hidden sm:block" />Mounts</TabsTrigger>
           <TabsTrigger value="services" className="gap-2"><Server className="h-4 w-4 hidden sm:block" />Services</TabsTrigger>
           <TabsTrigger value="organizer" className="gap-2"><FolderSync className="h-4 w-4 hidden sm:block" />Organiser</TabsTrigger>
@@ -541,6 +542,33 @@ export default function SettingsPage() {
               <Separator />
               <ConfigSection title="Poller Settings" description="Poll Overseerr for approved requests">
                 <ConfigField label="Poll Interval (seconds)" envVar="POLL_INTERVAL_S" type="number" value={getValue("POLL_INTERVAL_S")} source={getSource("POLL_INTERVAL_S")} onChange={(v) => updateValue("POLL_INTERVAL_S", v)} />
+              </ConfigSection>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Optional media-server metadata providers */}
+        <TabsContent value="media_servers" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Media Server Metadata Providers</CardTitle>
+              <CardDescription>Plex and Jellyfin are optional evidence/enrichment sources for Version Manager. TMDb and filename parsing remain independent.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <ConfigSection title="Plex" description="Optional library identity, path and media metadata evidence">
+                <div className="grid gap-6 md:grid-cols-2">
+                  <ConfigField label="Plex URL" envVar="PLEX_URL" value={getValue("PLEX_URL")} source={getSource("PLEX_URL")} onChange={(v) => updateValue("PLEX_URL", v)} />
+                  <ConfigField label="Plex Token" envVar="PLEX_TOKEN" type="password" value={getValue("PLEX_TOKEN")} source={getSource("PLEX_TOKEN")} onChange={(v) => updateValue("PLEX_TOKEN", v)} />
+                  <ConfigField label="Plex Mount Path" envVar="PLEX_MOUNT_DIR" value={getValue("PLEX_MOUNT_DIR")} source={getSource("PLEX_MOUNT_DIR")} onChange={(v) => updateValue("PLEX_MOUNT_DIR", v)} />
+                </div>
+              </ConfigSection>
+              <Separator />
+              <ConfigSection title="Jellyfin" description="Optional library identity, path, external IDs and media-stream evidence">
+                <div className="grid gap-6 md:grid-cols-2">
+                  <ConfigField label="Jellyfin URL" envVar="JELLYFIN_URL" value={getValue("JELLYFIN_URL")} source={getSource("JELLYFIN_URL")} onChange={(v) => updateValue("JELLYFIN_URL", v)} />
+                  <ConfigField label="Jellyfin API Key" envVar="JELLYFIN_API_KEY" type="password" value={getValue("JELLYFIN_API_KEY")} source={getSource("JELLYFIN_API_KEY")} onChange={(v) => updateValue("JELLYFIN_API_KEY", v)} />
+                  <ConfigField label="Jellyfin User ID" envVar="JELLYFIN_USER_ID" value={getValue("JELLYFIN_USER_ID")} source={getSource("JELLYFIN_USER_ID")} onChange={(v) => updateValue("JELLYFIN_USER_ID", v)} />
+                </div>
               </ConfigSection>
             </CardContent>
           </Card>

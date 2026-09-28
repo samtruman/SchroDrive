@@ -1293,3 +1293,79 @@ configuration state, not a Plex/Jellyfin dependency or a shared-client
 visibility bug. The source change that adds persisted `SEERR_*` fallback is
 safe for a future configured deployment, but was not exercised against a
 credentialed service in this milestone.
+
+## 41. MediaServerProvider implementation status
+
+This milestone replaces the Version Manager's direct catalog functions with
+the shared `MediaServerProvider` contract and two adapters:
+
+- `PlexMediaServerProvider` preserves the existing section/catalog lookup,
+  GUID external-ID extraction, path matching and structured episode fields.
+- `JellyfinMediaServerProvider` uses the existing `JELLYFIN_URL`,
+  `JELLYFIN_API_KEY` and `JELLYFIN_USER_ID` configuration; reads ProviderIds,
+  path, production year, series/season/episode coordinates, original language
+  and deterministic `MediaSources.MediaStreams` evidence.
+
+The adapters expose the same capabilities: identity, external IDs, path
+mapping, metadata and media streams. Configuration states include configured,
+unavailable, configuration unavailable and authentication failure. The core
+now iterates providers rather than branching on Plex versus Jellyfin. Existing
+Plex thresholds, title matching, grouping and profile scoring were not
+changed. Plex and Jellyfin paths are both evidence sources; different paths
+do not conflict when canonical identity agrees.
+
+Jellyfin stream enrichment is conservative. It fills missing fingerprint
+fields only, preserving filename/ffprobe values and recording `JELLYFIN`
+provenance. Supported deterministic fields include dimensions, resolution,
+codec, bitrate, bit depth, HDR range, container, audio codec/channels/language,
+subtitle language/forced flag and Atmos hints. It does not replace ffprobe or
+claim client-specific Direct Play compatibility.
+
+The Settings UI now exposes the existing shared Plex/Jellyfin variables under
+Media Servers, and the configuration schema supports persisted canonical
+keys. No `VERSION_MANAGER_*` credentials or parallel settings store was
+introduced. The live server currently has TMDb configured from `/app/.env`,
+while Plex and Jellyfin containers are reachable but SchröDrive has neither
+provider URL nor credentials, so no authenticated media-server calls were
+performed.
+
+### Acquisition and missing-profile accounting
+
+The earlier live provider/file-tree control produced 288
+`REMOTE_MISSING` groups and 292 generic `AcquisitionNeed` records. The exact
+four-record difference is intentional: generic acquisition evaluates every
+enabled profile, whereas the compatibility `REMOTE_MISSING` field is emitted
+only when PRIMARY is already satisfied and the enabled Direct Play profile is
+missing.
+
+| Need source | Count |
+|---|---:|
+| Missing REMOTE profile | 288 |
+| Missing PRIMARY/QUALITY profile | 4 |
+| Total generic AcquisitionNeed | 292 |
+
+The four PRIMARY needs are not duplicate REMOTE needs. With the isolated
+validation configuration all 292 were identity-blocked because the runner had
+no resolved metadata; this is separate from Seerr provider readiness. With
+canonical TMDb identity, the core can be identity-eligible even while the
+Seerr adapter reports `configuration_unavailable`.
+
+### Matrix status
+
+| Mode | Real validation status | Result |
+|---|---|---|
+| TMDb only | Executed in prior read-only baseline; preserved by adapter refactor | 735 fingerprints; 615 groups; 576 resolved / 103 fallback / 56 uncertain / 0 conflict; 576 original languages |
+| TMDb + Plex | Not executable in current runtime | Plex container reachable, but SchröDrive Plex URL/token absent |
+| TMDb + Jellyfin | Not executable in current runtime | Jellyfin container reachable, but SchröDrive Jellyfin URL/key absent |
+| TMDb + Plex + Jellyfin | Not executable in current runtime | Both optional catalogs unavailable |
+| No media server + no TMDb | Covered by unit/regression tests | filename/path fallback and REVIEW/uncertain without crash |
+
+The preserved TMDb-only profile invariant remains REMOTE 1080p only; the
+current REMOTE preset assigns zero 2160p versions. FULL migration export
+remains provider-inventory based and independent of media-server availability.
+
+Golden cases retained for regression are The Westies, Reacher, Love and
+Monsters, Mayday, Finch, Lucky and Silo. The Westies season/episode precedence
+is preserved; Silo may remain uncertain without strong evidence. Acquisition
+continues to consume only canonical `ContentIdentity`, never Plex or Jellyfin
+item IDs.

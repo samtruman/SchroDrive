@@ -86,6 +86,14 @@ export const CONFIG_SCHEMA = {
   ORGANIZER_MODE: { type: "select", default: "symlink", options: ["symlink", "copy", "move"], category: "organizer", label: "Organizer Mode" },
   ORG_SCAN_INTERVAL_S: { type: "number", default: "300", category: "organizer", label: "Organizer Scan Interval (seconds)" },
 
+  // Optional media-server metadata providers
+  PLEX_URL: { type: "string", default: "", category: "media_servers", label: "Plex URL" },
+  PLEX_TOKEN: { type: "password", default: "", category: "media_servers", label: "Plex Token" },
+  PLEX_MOUNT_DIR: { type: "string", default: "", category: "media_servers", label: "Plex Mount Path" },
+  JELLYFIN_URL: { type: "string", default: "", category: "media_servers", label: "Jellyfin URL" },
+  JELLYFIN_API_KEY: { type: "password", default: "", category: "media_servers", label: "Jellyfin API Key" },
+  JELLYFIN_USER_ID: { type: "string", default: "", category: "media_servers", label: "Jellyfin User ID" },
+
   // Auto-Update
   AUTO_UPDATE_ENABLED: { type: "boolean", default: "false", category: "updates", label: "Enable Auto-Update" },
   AUTO_UPDATE_INTERVAL_S: { type: "number", default: "3600", category: "updates", label: "Update Check Interval (seconds)" },

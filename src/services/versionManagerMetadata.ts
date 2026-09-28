@@ -2,30 +2,14 @@ import { config } from "../core/config";
 import { getDb } from "../core/db";
 import { normalizeMediaTitle } from "./mediaParser";
 import { searchTmdb } from "./tmdbService";
+import { mediaServerProviders, type MediaServerCatalog, type MediaServerItem, type MediaStreamEvidence } from "./mediaServerProvider";
 import type { IdentityConflict, IdentityResolutionStatus, Provenance, VersionRecord } from "./versionManager";
 
-export type MetadataSourceStatus = "matched" | "not_matched" | "ambiguous" | "unavailable" | "configuration_unavailable";
+export type MetadataSourceStatus = "matched" | "not_matched" | "ambiguous" | "unavailable" | "configuration_unavailable" | "authentication_failed";
 
-export interface MetadataItem {
-  title?: string;
-  year?: number;
-  kind?: "movie" | "episode" | "show";
-  season?: number;
-  episode?: number;
-  path?: string;
-  tmdbId?: string;
-  imdbId?: string;
-  tvdbId?: string;
-  originalLanguage?: string;
-  source: Provenance;
-}
-
-export interface MetadataCatalog {
-  source: "PLEX" | "JELLYFIN";
-  status: MetadataSourceStatus;
-  items: MetadataItem[];
-  error?: string;
-}
+export type MetadataItem = MediaServerItem;
+export type MetadataCatalog = MediaServerCatalog;
+export type MediaStream = MediaStreamEvidence;
 
 export interface MetadataStats {
   plex: number;
@@ -122,7 +106,7 @@ function mergeItems(items: MetadataItem[]): MetadataItem | undefined {
 }
 
 function matchCatalog(version: VersionRecord, catalog: MetadataCatalog): ResolutionResult {
-  if (catalog.status === "configuration_unavailable" || catalog.status === "unavailable") return { status: catalog.status, identityStatus: "uncertain", conflicts: [], confidence: version.fingerprint.identity.confidence, reason: catalog.error || `${catalog.source} unavailable` };
+  if (catalog.status === "configuration_unavailable" || catalog.status === "unavailable" || catalog.status === "authentication_failed") return { status: catalog.status, identityStatus: "uncertain", conflicts: [], confidence: version.fingerprint.identity.confidence, reason: catalog.error || `${catalog.source} unavailable` };
   const identity = version.fingerprint.identity;
   const versionIds = new Set([identity.tmdbId, identity.imdbId, identity.tvdbId].filter(Boolean).map(String));
   const byId = catalog.items.filter((item) => Object.values(itemIds(item)).some((value) => versionIds.has(value)));
@@ -155,51 +139,27 @@ function applyItem(version: VersionRecord, result: ResolutionResult): void {
   if (item.title) { identity.title = item.title; identity.normalizedTitle = normalizeMediaTitle(item.title); identity.provenance = { ...identity.provenance, title: source, normalizedTitle: source }; }
   if (item.year) { identity.year = item.year; identity.provenance = { ...identity.provenance, year: source }; }
   if (item.originalLanguage) { identity.originalLanguage = item.originalLanguage.toLowerCase(); identity.provenance = { ...identity.provenance, originalLanguage: source }; }
+  if (item.streams?.length) {
+    const video = item.streams.find((stream) => stream.type === "video");
+    if (video) {
+      if (!version.fingerprint.video.width && video.width) version.fingerprint.video.width = video.width;
+      if (!version.fingerprint.video.height && video.height) version.fingerprint.video.height = video.height;
+      if (!version.fingerprint.video.resolution && video.height) version.fingerprint.video.resolution = `${video.height}p`;
+      if (!version.fingerprint.video.codec && video.codec) version.fingerprint.video.codec = video.codec;
+      if (!version.fingerprint.video.bitrate && video.bitrate) version.fingerprint.video.bitrate = video.bitrate;
+      if (!version.fingerprint.video.bitDepth && video.bitDepth) version.fingerprint.video.bitDepth = video.bitDepth;
+      if (!version.fingerprint.video.hdrFormat && video.hdr) version.fingerprint.video.hdrFormat = video.hdr;
+      version.fingerprint.video.provenance = { ...version.fingerprint.video.provenance, ...(video.width ? { width: source } : {}), ...(video.height ? { height: source } : {}), ...(video.codec ? { codec: source } : {}), ...(video.bitrate ? { bitrate: source } : {}), ...(video.hdr ? { hdrFormat: source } : {}) };
+    }
+    const audio = item.streams.filter((stream) => stream.type === "audio");
+    if (audio.length && version.fingerprint.audio.length === 0) version.fingerprint.audio = audio.map((stream) => ({ language: stream.language || "und", codec: stream.codec, channels: stream.channels, bitrate: stream.bitrate, atmos: stream.atmos, provenance: { language: source, codec: source, channels: source, bitrate: source, atmos: source } }));
+    const subtitles = item.streams.filter((stream) => stream.type === "subtitle");
+    if (subtitles.length && version.fingerprint.subtitles.length === 0) version.fingerprint.subtitles = subtitles.map((stream) => ({ language: stream.language || "und", codec: stream.codec, forced: stream.forced, provenance: { language: source, codec: source, forced: source } }));
+  }
   identity.resolutionStatus = result.identityStatus;
   identity.conflicts = result.conflicts.length ? result.conflicts : undefined;
   identity.confidence = result.confidence;
   identity.source = "provider";
-}
-
-async function requestJson(url: string, init?: RequestInit): Promise<{ status: number; data?: any }> {
-  try { const response = await fetch(url, init); return { status: response.status, data: response.ok ? await response.json() : undefined }; } catch { return { status: 0 }; }
-}
-
-function idsFromGuids(guids: Array<{ id?: string }> = []): Record<string, string> {
-  const result: Record<string, string> = {};
-  for (const guid of guids) {
-    const match = guid.id?.match(/(?:tmdb|themoviedb|imdb|tvdb):\/\/?(.+)/i);
-    if (!match) continue;
-    const type = guid.id!.split(":")[0].toLowerCase();
-    if (type.includes("tmdb")) result.tmdbId = match[1];
-    if (type.includes("imdb")) result.imdbId = match[1];
-    if (type.includes("tvdb")) result.tvdbId = match[1];
-  }
-  return result;
-}
-
-async function plexCatalog(): Promise<MetadataCatalog> {
-  if (!config.plexUrl || !config.plexToken) return { source: "PLEX", status: "configuration_unavailable", items: [], error: "Plex URL/token not configured" };
-  const headers = { Accept: "application/json", "X-Plex-Token": config.plexToken };
-  const sections = await requestJson(`${config.plexUrl.replace(/\/$/, "")}/library/sections`, { headers });
-  if (!sections.data) return { source: "PLEX", status: "unavailable", items: [], error: "Plex library sections request failed" };
-  const items: MetadataItem[] = [];
-  for (const section of sections.data?.MediaContainer?.Directory || []) {
-    const data = await requestJson(`${config.plexUrl.replace(/\/$/, "")}/library/sections/${section.key}/all?includeGuids=1&X-Plex-Container-Size=100000`, { headers });
-    for (const item of data.data?.MediaContainer?.Metadata || []) {
-      const external = idsFromGuids(item.Guid);
-      items.push({ title: item.title, year: item.year, kind: item.type === "episode" ? "episode" : item.type === "show" ? "show" : "movie", season: item.parentIndex, episode: item.index, path: item.Media?.[0]?.Part?.[0]?.file, ...external, source: "PLEX" });
-    }
-  }
-  return { source: "PLEX", status: "matched", items };
-}
-
-async function jellyfinCatalog(): Promise<MetadataCatalog> {
-  if (!config.jellyfinUrl || !config.jellyfinApiKey) return { source: "JELLYFIN", status: "configuration_unavailable", items: [], error: "Jellyfin URL/API key not configured" };
-  const url = `${config.jellyfinUrl.replace(/\/$/, "")}/Items?Recursive=true&IncludeItemTypes=Movie,Series,Episode&Fields=ProviderIds,Path,ProductionYear,ParentIndexNumber,IndexNumber,OriginalLanguage&Limit=100000`;
-  const response = await requestJson(url, { headers: { "X-Emby-Token": config.jellyfinApiKey } });
-  if (!response.data) return { source: "JELLYFIN", status: "unavailable", items: [], error: "Jellyfin library request failed" };
-  return { source: "JELLYFIN", status: "matched", items: (response.data.Items || []).map((item: any) => ({ title: item.Name, year: item.ProductionYear, kind: item.Type === "Episode" ? "episode" : item.Type === "Series" ? "show" : "movie", season: item.ParentIndexNumber, episode: item.IndexNumber, path: item.Path, tmdbId: item.ProviderIds?.Tmdb, imdbId: item.ProviderIds?.Imdb, tvdbId: item.ProviderIds?.Tvdb, originalLanguage: item.OriginalLanguage, source: "JELLYFIN" })) };
 }
 
 export function getCachedVersionManagerMetadata(cacheKey: string): MetadataItem | undefined {
@@ -248,7 +208,7 @@ export function resolveVersionIdentity(version: VersionRecord, catalogs: Metadat
   const results = catalogs.map((catalog) => matchCatalog(version, catalog));
   const matched = results.filter((result) => result.status === "matched" && result.item);
   if (!matched.length) {
-    const unavailable = results.find((result) => result.status === "configuration_unavailable" || result.status === "unavailable");
+    const unavailable = results.find((result) => result.status === "configuration_unavailable" || result.status === "unavailable" || result.status === "authentication_failed");
     if (unavailable) return unavailable;
     const ambiguous = results.some((result) => result.status === "ambiguous");
     return { status: ambiguous ? "ambiguous" : "not_matched", identityStatus: ambiguous ? "uncertain" : "fallback", conflicts: [], confidence: version.fingerprint.identity.confidence, reason: "No metadata source matched" };
@@ -260,10 +220,12 @@ export function resolveVersionIdentity(version: VersionRecord, catalogs: Metadat
 }
 
 export async function enrichVersionMetadata(versions: VersionRecord[]): Promise<MetadataStats> {
-  const [plex, jellyfin] = await Promise.all([plexCatalog(), jellyfinCatalog()]);
+  const catalogs = await Promise.all(mediaServerProviders.map((provider) => provider.catalog()));
+  const plex = catalogs.find((catalog) => catalog.source === "PLEX") || { source: "PLEX" as const, status: "configuration_unavailable" as const, items: [] };
+  const jellyfin = catalogs.find((catalog) => catalog.source === "JELLYFIN") || { source: "JELLYFIN" as const, status: "configuration_unavailable" as const, items: [] };
   const stats: MetadataStats = { plex: plex.items.length, jellyfin: jellyfin.items.length, tmdb: 0, matched: 0, unresolved: 0, conflicts: 0, filenameFallback: 0, originalLanguageResolved: 0, cacheHits: 0, cacheMisses: 0, tmdbResolutionAttempts: 0, tmdbRequests: 0, tmdbNotMatched: 0, tmdbAmbiguous: 0, tmdbUnavailable: 0, tmdbConfigurationUnavailable: 0, plexStatus: plex.status, jellyfinStatus: jellyfin.status, tmdbStatus: config.tmdbApiKey ? "not_matched" : "configuration_unavailable" };
   for (const version of versions) {
-    const catalogResult = resolveVersionIdentity(version, [plex, jellyfin]);
+    const catalogResult = resolveVersionIdentity(version, catalogs);
     let result = catalogResult;
     if (catalogResult.status === "matched") { applyItem(version, catalogResult); stats.matched++; }
     else {

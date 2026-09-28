@@ -6,6 +6,12 @@ const persistedTmdbApiKey = getPersistedEnvValue("TMDB_API_KEY");
 const persistedSeerrUrl = getPersistedEnvValue("SEERR_URL");
 const persistedSeerrApiKey = getPersistedEnvValue("SEERR_API_KEY");
 const persistedSeerrAuth = getPersistedEnvValue("SEERR_AUTH");
+const persistedPlexUrl = getPersistedEnvValue("PLEX_URL");
+const persistedPlexToken = getPersistedEnvValue("PLEX_TOKEN");
+const persistedPlexMountDir = getPersistedEnvValue("PLEX_MOUNT_DIR");
+const persistedJellyfinUrl = getPersistedEnvValue("JELLYFIN_URL");
+const persistedJellyfinApiKey = getPersistedEnvValue("JELLYFIN_API_KEY");
+const persistedJellyfinUserId = getPersistedEnvValue("JELLYFIN_USER_ID");
 
 const defaultMountBase = (process.env.MOUNT_BASE || (process.platform === 'darwin' ? "/Volumes/SchroDrive" : "/mnt/schrodrive"));
 
@@ -192,13 +198,13 @@ export const config = {
   orgScanIntervalSeconds: asNumber(process.env.ORG_SCAN_INTERVAL_S, 300),
   // --- Media Server Integration ---
   // Plex
-  plexUrl: process.env.PLEX_URL || process.env.PLEX_ADDRESS || "",
-  plexToken: process.env.PLEX_TOKEN || "",
-  plexMountDir: process.env.PLEX_MOUNT_DIR || "",
+  plexUrl: resolveRuntimeOrPersistedValue(process.env.PLEX_URL || process.env.PLEX_ADDRESS, persistedPlexUrl),
+  plexToken: resolveRuntimeOrPersistedValue(process.env.PLEX_TOKEN, persistedPlexToken),
+  plexMountDir: resolveRuntimeOrPersistedValue(process.env.PLEX_MOUNT_DIR, persistedPlexMountDir),
   // Jellyfin
-  jellyfinUrl: process.env.JELLYFIN_URL || process.env.JF_ADDRESS || "",
-  jellyfinApiKey: process.env.JELLYFIN_API_KEY || process.env.JF_API_KEY || "",
-  jellyfinUserId: process.env.JELLYFIN_USER_ID || "",
+  jellyfinUrl: resolveRuntimeOrPersistedValue(process.env.JELLYFIN_URL || process.env.JF_ADDRESS, persistedJellyfinUrl),
+  jellyfinApiKey: resolveRuntimeOrPersistedValue(process.env.JELLYFIN_API_KEY || process.env.JF_API_KEY, persistedJellyfinApiKey),
+  jellyfinUserId: resolveRuntimeOrPersistedValue(process.env.JELLYFIN_USER_ID, persistedJellyfinUserId),
   // Emby
   embyUrl: process.env.EMBY_URL || "",
   embyApiKey: process.env.EMBY_API_KEY || "",
