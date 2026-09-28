@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TorrentInfo } from "../../../src/providers";
-import { evaluateVersionGroups, fingerprintTorrent, type VersionProfile } from "../../../src/services/versionManager";
+import { evaluateRule, evaluateVersionGroups, fingerprintTorrent, validateRule, type VersionProfile } from "../../../src/services/versionManager";
 
 const profile = (overrides: Partial<VersionProfile> = {}): VersionProfile => ({
   id: "primary", name: "PRIMARY", enabled: true, target: "QUALITY", preferredResolution: "2160p",
@@ -49,5 +49,15 @@ describe("version manager", () => {
     expect(group.versions[0].fingerprint.audio.map((stream) => stream.language)).toEqual(["eng"]);
     expect(group.versions[0].decision).toBe("REVIEW");
     expect(group.versions[0].reasons.some((reason) => reason.code === "hard_requirement_failed")).toBe(true);
+  });
+
+  test("validates and evaluates nested AND/OR/NOT rules", () => {
+    const [version] = fingerprintTorrent(torrent("Example.Movie.2025.2160p.WEB-DL.ITA.mkv", 10_000), "alldebrid");
+    const rule = validateRule({ op: "AND", children: [
+      { op: "HAS", field: "audioLanguage", value: "ita" },
+      { op: "OR", children: [{ op: "COMPARE", field: "resolution", operator: "eq", value: "2160p" }, { op: "NOT", child: { op: "COMPARE", field: "source", operator: "eq", value: "REMUX" } }] },
+    ] });
+    expect(evaluateRule(rule, version)).toBe(true);
+    expect(() => validateRule({ op: "COMPARE", field: "unknown", operator: "eq", value: 1 })).toThrow();
   });
 });

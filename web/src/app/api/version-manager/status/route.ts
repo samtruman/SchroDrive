@@ -10,3 +10,14 @@ export async function GET() {
     return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Backend unavailable" }, { status: 502 })
   }
 }
+
+export async function PUT(request: Request) {
+  try {
+    const response = await fetch(`${BACKEND_URL}/api/version-manager/profiles`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: await request.text(),
+    })
+    return NextResponse.json(await response.json(), { status: response.status })
+  } catch (error) {
+    return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Backend unavailable" }, { status: 502 })
+  }
+}

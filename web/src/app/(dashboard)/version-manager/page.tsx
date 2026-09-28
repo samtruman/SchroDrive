@@ -1,6 +1,6 @@
 "use client"
 
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -26,10 +26,18 @@ type Preview = {
   }>
 }
 
+type Profile = { id: string; name: string; enabled: boolean; target: string; preferredResolution: string }
+
 export default function VersionManagerPage() {
   const [preview, setPreview] = useState<Preview | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [profiles, setProfiles] = useState<Profile[]>([])
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    fetch("/api/version-manager/status").then((response) => response.json()).then((data) => setProfiles(data.profiles || [])).catch(() => undefined)
+  }, [])
 
   async function runPreview() {
     setLoading(true)
@@ -44,6 +52,17 @@ export default function VersionManagerPage() {
     } finally {
       setLoading(false)
     }
+  }
+
+  async function saveProfiles() {
+    setSaving(true)
+    try {
+      const response = await fetch("/api/version-manager/status", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ profiles }) })
+      const data = await response.json()
+      if (!response.ok || !data.ok) throw new Error(data.error || "Profile save failed")
+      setProfiles(data.profiles)
+    } catch (err) { setError(err instanceof Error ? err.message : "Profile save failed") }
+    finally { setSaving(false) }
   }
 
   return (
@@ -61,6 +80,17 @@ export default function VersionManagerPage() {
           <CardDescription>Inventory, fingerprinting and decisions are currently dry-run only. Provider deletion is not implemented.</CardDescription>
         </CardHeader>
         <CardContent className="flex gap-2"><Badge variant="outline">DRY RUN</Badge><Badge variant="secondary">PRIMARY enabled</Badge><Badge variant="outline">REMOTE optional</Badge></CardContent>
+      </Card>
+      <Card>
+        <CardHeader><CardTitle>Version profiles</CardTitle><CardDescription>These settings are persisted locally. They only affect dry-run evaluation.</CardDescription></CardHeader>
+        <CardContent className="space-y-3">
+          {profiles.map((profile) => <div key={profile.id} className="flex flex-wrap items-center gap-3 rounded-lg border p-3">
+            <input type="checkbox" checked={profile.enabled} onChange={(event) => setProfiles((items) => items.map((item) => item.id === profile.id ? { ...item, enabled: event.target.checked } : item))} aria-label={`${profile.name} enabled`} />
+            <span className="min-w-48 font-medium">{profile.name}</span>
+            <label className="text-sm text-muted-foreground">Preferred resolution <select className="ml-2 rounded border bg-background px-2 py-1 text-foreground" value={profile.preferredResolution} onChange={(event) => setProfiles((items) => items.map((item) => item.id === profile.id ? { ...item, preferredResolution: event.target.value } : item))}><option>2160p</option><option>1080p</option><option>720p</option></select></label>
+          </div>)}
+          {profiles.length > 0 && <Button variant="outline" onClick={saveProfiles} disabled={saving}>{saving ? "Saving…" : "Save profiles"}</Button>}
+        </CardContent>
       </Card>
       {error && <Card><CardContent className="pt-6 text-destructive">{error}</CardContent></Card>}
       {preview && <Card>

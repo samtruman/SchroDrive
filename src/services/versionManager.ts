@@ -21,8 +21,72 @@ export interface VersionProfile {
   sourceOrder: string[];
   codecOrder: string[];
   audioOrder: string[];
+  hardRequirements?: RuleNode;
   maxBitrate?: number;
   maxSizeBytes?: number;
+}
+
+export type RuleNode =
+  | { op: "AND" | "OR"; children: RuleNode[] }
+  | { op: "NOT"; child: RuleNode }
+  | { op: "COMPARE"; field: string; operator: CompareOperator; value: unknown }
+  | { op: "IN"; field: string; values: unknown[] }
+  | { op: "HAS"; field: string; value: unknown };
+
+type CompareOperator = "eq" | "neq" | "gt" | "gte" | "lt" | "lte";
+
+const RULE_FIELDS = new Set(["resolution", "source", "codec", "bitrate", "size", "audioCodec", "audioLanguage", "channels", "profileEligible"]);
+
+export function validateRule(node: unknown, depth = 0): RuleNode {
+  if (depth > 8 || !node || typeof node !== "object" || Array.isArray(node)) throw new Error("Invalid version rule");
+  const value = node as Record<string, unknown>;
+  const op = value.op;
+  if (op === "AND" || op === "OR") {
+    if (!Array.isArray(value.children) || value.children.length === 0) throw new Error(`${op} requires children`);
+    return { op, children: value.children.map((child) => validateRule(child, depth + 1)) };
+  }
+  if (op === "NOT") return { op, child: validateRule(value.child, depth + 1) };
+  if (op === "COMPARE" && RULE_FIELDS.has(String(value.field)) && ["eq", "neq", "gt", "gte", "lt", "lte"].includes(String(value.operator))) {
+    return { op, field: String(value.field), operator: value.operator as CompareOperator, value: value.value };
+  }
+  if (op === "IN" && RULE_FIELDS.has(String(value.field)) && Array.isArray(value.values)) return { op, field: String(value.field), values: value.values };
+  if (op === "HAS" && RULE_FIELDS.has(String(value.field))) return { op, field: String(value.field), value: value.value };
+  throw new Error("Invalid version rule field or operator");
+}
+
+function ruleField(version: VersionRecord, field: string, profileEligible = true): unknown {
+  const fingerprint = version.fingerprint;
+  return ({
+    resolution: fingerprint.video.resolution,
+    source: fingerprint.release.source,
+    codec: fingerprint.video.codec,
+    bitrate: fingerprint.video.bitrate,
+    size: fingerprint.storage.size,
+    audioCodec: fingerprint.audio[0]?.codec,
+    audioLanguage: fingerprint.audio.map((stream) => stream.language),
+    channels: fingerprint.audio[0]?.channels,
+    profileEligible,
+  } as Record<string, unknown>)[field];
+}
+
+export function evaluateRule(node: RuleNode | undefined, version: VersionRecord, profileEligible = true): boolean {
+  if (!node) return true;
+  if (node.op === "AND") return node.children.every((child) => evaluateRule(child, version, profileEligible));
+  if (node.op === "OR") return node.children.some((child) => evaluateRule(child, version, profileEligible));
+  if (node.op === "NOT") return !evaluateRule(node.child, version, profileEligible);
+  if (node.op === "HAS") {
+    const actual = ruleField(version, node.field, profileEligible);
+    return Array.isArray(actual) ? actual.includes(node.value) : actual === node.value;
+  }
+  if (node.op === "IN") return node.values.includes(ruleField(version, node.field, profileEligible));
+  const comparison = node as Extract<RuleNode, { op: "COMPARE" }>;
+  const actual = ruleField(version, comparison.field, profileEligible);
+  if (comparison.operator === "eq") return actual === comparison.value;
+  if (comparison.operator === "neq") return actual !== comparison.value;
+  if (comparison.operator === "gt") return Number(actual) > Number(comparison.value);
+  if (comparison.operator === "gte") return Number(actual) >= Number(comparison.value);
+  if (comparison.operator === "lt") return Number(actual) < Number(comparison.value);
+  return Number(actual) <= Number(comparison.value);
 }
 
 export interface MediaFingerprint {
@@ -166,11 +230,13 @@ export const defaultVersionProfiles: VersionProfile[] = [
   {
     id: "primary", name: "PRIMARY / QUALITY", enabled: true, target: "QUALITY", preferredResolution: "2160p",
     languagePolicy: { required: { values: [], mode: "ALL" }, preferred: [], original: true },
+    hardRequirements: { op: "AND", children: [] },
     sourceOrder: ["REMUX", "BLURAY", "WEB-DL", "WEBRIP", "HDTV"], codecOrder: ["HEVC", "AV1", "H264"], audioOrder: ["TRUEHD", "DTS-HD MA", "DTS-HD", "DDP", "EAC3", "AAC"],
   },
   {
     id: "remote", name: "REMOTE / DIRECT PLAY", enabled: false, target: "DIRECT_PLAY", preferredResolution: "1080p",
     languagePolicy: { required: { values: [], mode: "ALL" }, preferred: [], original: false },
+    hardRequirements: { op: "AND", children: [] },
     sourceOrder: ["WEB-DL", "WEBRIP", "BLURAY", "REMUX"], codecOrder: ["H264", "HEVC", "AV1"], audioOrder: ["AAC", "EAC3", "DDP", "DTS-HD", "TRUEHD"],
   },
 ];
@@ -192,6 +258,9 @@ function evaluateProfile(version: VersionRecord, profile: VersionProfile): Profi
   const breakdown: Record<string, number> = {};
   if (!hasRequiredLanguages(version, profile.languagePolicy)) {
     reasons.push({ code: "required_language_missing", message: "Required audio language policy is not satisfied", facts: { required: profile.languagePolicy.required, available: version.fingerprint.audio.map((stream) => stream.language) } });
+  }
+  if (!evaluateRule(profile.hardRequirements, version)) {
+    reasons.push({ code: "hard_rule_failed", message: "Configured hard requirement rule is not satisfied", facts: { rule: profile.hardRequirements } });
   }
   const resolutionRank = rank(version.fingerprint.video.resolution, [profile.preferredResolution, "1080p", "720p"]);
   breakdown.resolution = Math.max(0, 40 - resolutionRank * 12);

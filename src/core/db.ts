@@ -202,6 +202,30 @@ function runMigrations(database: Database): void {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_organizer_reviews_decision
       ON organizer_reviews (decision, updated_at)`,
+    `CREATE TABLE IF NOT EXISTS version_manager_scans (
+      id TEXT PRIMARY KEY,
+      group_count INTEGER NOT NULL,
+      version_count INTEGER NOT NULL,
+      profiles_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS version_manager_profiles (
+      profile_id TEXT PRIMARY KEY,
+      profile_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE IF NOT EXISTS version_manager_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scan_id TEXT NOT NULL,
+      group_id TEXT NOT NULL,
+      item_id TEXT NOT NULL,
+      decision TEXT NOT NULL,
+      fingerprint_json TEXT NOT NULL,
+      reasons_json TEXT NOT NULL,
+      UNIQUE(scan_id, item_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_version_manager_items_scan
+      ON version_manager_items (scan_id, decision)`,
   ];
 
   for (const sql of migrations) {

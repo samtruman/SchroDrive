@@ -34,7 +34,8 @@ import { getBlacklistEntries, getBlacklistCount, addToBlacklist, removeFromBlack
 import { tokenRotator } from "./core/tokenRotator";
 import { decideOrganizerReview, filterOrganizerReviewsByParserStatus, listOrganizerReviewAudit, listOrganizerReviews, retryOrganizerReview, validateReviewOverride } from "./services/organizerReview";
 import { browseMountedFilesystem, FilesystemBrowserError } from "./core/filesystemBrowser";
-import { defaultVersionProfiles, evaluateVersionGroups, fingerprintTorrent } from "./services/versionManager";
+import { evaluateVersionGroups, fingerprintTorrent, validateRule } from "./services/versionManager";
+import { getLatestVersionManagerScan, getVersionProfiles, saveVersionManagerScan, saveVersionProfiles } from "./services/versionManagerStore";
 
 // ===========================================================================
 // Server Initialisation
@@ -180,7 +181,8 @@ export function startServer() {
       enabled: false,
       mode: "dry-run",
       deleteExecutor: "not_implemented",
-      profiles: defaultVersionProfiles,
+      profiles: getVersionProfiles(),
+      latestScan: getLatestVersionManagerScan() || null,
     });
   });
 
@@ -194,10 +196,23 @@ export function startServer() {
         const torrents = await provider.listTorrents();
         return torrents.flatMap((torrent) => fingerprintTorrent(torrent, provider.id));
       }))).flat();
-      const groups = evaluateVersionGroups(versions);
-      res.json({ ok: true, mode: "dry-run", inventoryCount: versions.length, groupCount: groups.length, groups });
+      const profiles = getVersionProfiles();
+      const groups = evaluateVersionGroups(versions, profiles);
+      const scanId = saveVersionManagerScan(groups, profiles);
+      res.json({ ok: true, mode: "dry-run", scanId, inventoryCount: versions.length, groupCount: groups.length, groups });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message || "Version Manager preview failed" });
+    }
+  });
+
+  app.put("/api/version-manager/profiles", (req, res) => {
+    try {
+      if (!Array.isArray(req.body?.profiles) || req.body.profiles.length === 0) return res.status(400).json({ ok: false, error: "profiles must be a non-empty array" });
+      const profiles = req.body.profiles.map((profile: any) => ({ ...profile, hardRequirements: profile.hardRequirements ? validateRule(profile.hardRequirements) : undefined }));
+      saveVersionProfiles(profiles);
+      res.json({ ok: true, profiles: getVersionProfiles() });
+    } catch (err: any) {
+      res.status(400).json({ ok: false, error: err?.message || "Invalid profiles" });
     }
   });
 
