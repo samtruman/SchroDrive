@@ -1,5 +1,6 @@
 import axios from "axios";
 import { config } from "../core/config";
+import { seerrApiBaseUrl } from "./seerrUrl";
 import type {
   AcquisitionAdapter,
   AcquisitionAdapterCapabilities,
@@ -21,7 +22,7 @@ function headers(): Record<string, string> {
 }
 
 function baseUrl(): string {
-  return config.overseerrUrl.replace(/\/$/, "");
+  return seerrApiBaseUrl(config.overseerrUrl);
 }
 
 function providerId(need: AcquisitionNeed): string | undefined {
@@ -64,7 +65,7 @@ export class SeerrAcquisitionAdapter implements AcquisitionAdapter {
     if (!id) return { status: "MEDIA_NOT_FOUND", detail: "Current Seerr adapter requires a TMDb ID mapping" };
     const mediaType = need.mediaType === "movie" ? "movie" : "tv";
     try {
-      const response = await axios.get(`${baseUrl()}/api/v1/${mediaType}/${encodeURIComponent(id)}`, { headers: headers(), timeout: 15000 });
+      const response = await axios.get(`${baseUrl()}/${mediaType}/${encodeURIComponent(id)}`, { headers: headers(), timeout: 15000 });
       return { status: mediaStatus(response.data), providerRequestId: response.data?.request?.id ? String(response.data.request.id) : undefined };
     } catch (error: any) {
       const status = Number(error?.response?.status);

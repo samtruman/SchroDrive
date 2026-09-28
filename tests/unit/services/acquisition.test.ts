@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { deriveAcquisitionNeeds, deduplicateAcquisitionNeeds, revalidateAcquisitionNeed } from "../../../src/services/acquisition";
 import { evaluateVersionGroups, fingerprintTorrent, type VersionProfile } from "../../../src/services/versionManager";
 import { SeerrAcquisitionAdapter } from "../../../src/services/seerrAcquisitionAdapter";
+import { seerrApiBaseUrl } from "../../../src/services/seerrUrl";
 
 const torrent = (name: string) => ({ id: name, name, status: "completed", progress: 100, bytes: 1_000_000, files: [{ id: "f", name, path: name, size: 1_000_000, selected: true }] });
 const profile = (overrides: Partial<VersionProfile> = {}): VersionProfile => ({
@@ -53,6 +54,12 @@ describe("generic acquisition core", () => {
 });
 
 describe("Seerr acquisition safety contract", () => {
+  test("normalizes service-root and API-root URLs without duplicating /api/v1", () => {
+    expect(seerrApiBaseUrl("http://seerr:5055")).toBe("http://seerr:5055/api/v1");
+    expect(seerrApiBaseUrl("http://seerr:5055/api/v1")).toBe("http://seerr:5055/api/v1");
+    expect(seerrApiBaseUrl("http://seerr:5055/api/v1/")).toBe("http://seerr:5055/api/v1");
+  });
+
   test("does not enable or send requests in this milestone", async () => {
     const adapter = new SeerrAcquisitionAdapter();
     expect((await adapter.capabilities()).canRequest).toBe(false);
