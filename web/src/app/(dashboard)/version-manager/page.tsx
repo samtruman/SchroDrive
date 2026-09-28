@@ -36,6 +36,15 @@ type Preview = {
 type Profile = { id: string; name: string; enabled: boolean; target: string; preferredResolution: string }
 type Policy = { enableRemote: boolean; acquireMissingRemote: boolean }
 type ExportPreview = { providerItems: number; exportableItems: number; magnetCount: number; generatedAt: string }
+type AcquisitionPreview = {
+  needId: string
+  status: string
+  mediaType: string
+  requestedProfileName: string
+  providerStatus: string
+  mappingWarning?: string
+  contentIdentity: { title?: string; tmdbId?: string; tvdbId?: string; imdbId?: string; season?: number; episode?: number; confidence: number }
+}
 
 export default function VersionManagerPage() {
   const [preview, setPreview] = useState<Preview | null>(null)
@@ -46,6 +55,8 @@ export default function VersionManagerPage() {
   const [saving, setSaving] = useState(false)
   const [exportPreview, setExportPreview] = useState<ExportPreview | null>(null)
   const [exportLoading, setExportLoading] = useState(false)
+  const [missing, setMissing] = useState<{ needs: AcquisitionPreview[]; adapter: { enabled: boolean; canRequest: boolean; tvScope: string } } | null>(null)
+  const [missingLoading, setMissingLoading] = useState(false)
 
   useEffect(() => {
     fetch("/api/version-manager/status").then((response) => response.json()).then((data) => { setProfiles(data.profiles || []); setPolicy(data.policy || { enableRemote: false, acquireMissingRemote: false }) }).catch(() => undefined)
@@ -89,6 +100,17 @@ export default function VersionManagerPage() {
     finally { setExportLoading(false) }
   }
 
+  async function loadMissingPreview() {
+    setMissingLoading(true)
+    try {
+      const response = await fetch("/api/version-manager/missing")
+      const data = await response.json()
+      if (!response.ok || !data.ok) throw new Error(data.error || "Missing versions preview failed")
+      setMissing({ needs: data.previews || [], adapter: data.adapter })
+    } catch (err) { setError(err instanceof Error ? err.message : "Missing versions preview failed") }
+    finally { setMissingLoading(false) }
+  }
+
   function downloadExport(format: "magnets" | "manifest") {
     window.location.href = `/api/version-manager/export?mode=FULL_LIBRARY&format=${format}`
   }
@@ -108,6 +130,17 @@ export default function VersionManagerPage() {
           <CardDescription>Inventory, fingerprinting and decisions are currently dry-run only. Provider deletion is not implemented.</CardDescription>
         </CardHeader>
         <CardContent className="flex gap-2"><Badge variant="outline">DRY RUN</Badge><Badge variant="secondary">PRIMARY enabled</Badge><Badge variant="outline">REMOTE {policy.enableRemote ? "enabled" : "disabled"}</Badge></CardContent>
+      </Card>
+      <Card>
+        <CardHeader><CardTitle>Missing Versions</CardTitle><CardDescription>Read-only acquisition preview. No Seerr request can be sent from this milestone.</CardDescription></CardHeader>
+        <CardContent className="space-y-3">
+          <Button variant="outline" onClick={loadMissingPreview} disabled={missingLoading || !policy.enableRemote}>{missingLoading ? "Checking…" : "Preview missing profiles"}</Button>
+          {!policy.enableRemote && <p className="text-sm text-muted-foreground">Enable REMOTE to evaluate missing profile needs.</p>}
+          {missing && <>
+            <div className="rounded border p-3 text-sm">Needs: <strong>{missing.needs.length}</strong> · Seerr: <strong>{missing.adapter.enabled ? "configured" : "configuration unavailable"}</strong> · requests: <strong>{missing.adapter.canRequest ? "enabled" : "disabled"}</strong></div>
+            <div className="space-y-2">{missing.needs.slice(0, 50).map((need) => <div key={need.needId} className="rounded border p-3 text-sm"><div className="flex flex-wrap items-center gap-2"><strong>{need.contentIdentity.title || "Unknown identity"}</strong>{need.contentIdentity.season !== undefined && <span>S{String(need.contentIdentity.season).padStart(2, "0")}E{String(need.contentIdentity.episode).padStart(2, "0")}</span>}<Badge variant={need.status === "ACQUISITION_ELIGIBLE" ? "default" : "secondary"}>{need.status}</Badge></div><div className="text-muted-foreground">{need.requestedProfileName} · {need.mediaType} · confidence {Math.round(need.contentIdentity.confidence * 100)}% · Seerr {need.providerStatus}</div>{need.mappingWarning && <div className="mt-1 text-amber-600">{need.mappingWarning}</div>}</div>)}</div>
+          </>}
+        </CardContent>
       </Card>
       <Card>
         <CardHeader><CardTitle>Export / Migration</CardTitle><CardDescription>Read-only FULL LIBRARY export. It uses provider inventory directly and includes uncertain or un-fingerprinted items when an infohash is available.</CardDescription></CardHeader>

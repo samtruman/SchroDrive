@@ -3,6 +3,9 @@ import { asBool, asNumber, splitCsv } from './utils';
 import { getPersistedEnvValue, resolveRuntimeOrPersistedValue } from './configApi';
 
 const persistedTmdbApiKey = getPersistedEnvValue("TMDB_API_KEY");
+const persistedSeerrUrl = getPersistedEnvValue("SEERR_URL");
+const persistedSeerrApiKey = getPersistedEnvValue("SEERR_API_KEY");
+const persistedSeerrAuth = getPersistedEnvValue("SEERR_AUTH");
 
 const defaultMountBase = (process.env.MOUNT_BASE || (process.platform === 'darwin' ? "/Volumes/SchroDrive" : "/mnt/schrodrive"));
 
@@ -27,12 +30,14 @@ export const config = {
   indexerProvider: (process.env.INDEXER_PROVIDER || "auto") as "prowlarr" | "jackett" | "auto",
   torboxApiKey: process.env.TORBOX_API_KEY || "",
   torboxBaseUrl: process.env.TORBOX_BASE_URL || "https://api.torbox.app",
-  overseerrAuth: process.env.SEERR_AUTH || process.env.OVERSEERR_AUTH || process.env.JELLYSEERR_AUTH || "",
+  overseerrAuth: resolveRuntimeOrPersistedValue(process.env.SEERR_AUTH || process.env.OVERSEERR_AUTH || process.env.JELLYSEERR_AUTH, persistedSeerrAuth),
   // Seerr / Overseerr / Jellyseerr API (poller) configuration
   // Seerr is the merged successor to Overseerr + Jellyseerr — all three share the same API.
   // Priority: SEERR_* > OVERSEERR_* > JELLYSEERR_* (all are supported for backward compatibility)
-  overseerrUrl: process.env.SEERR_URL || process.env.OVERSEERR_URL || process.env.JELLYSEERR_URL || "",
-  overseerrApiKey: process.env.SEERR_API_KEY || process.env.OVERSEERR_API_KEY || process.env.JELLYSEERR_API_KEY || "",
+  overseerrUrl: resolveRuntimeOrPersistedValue(process.env.SEERR_URL || process.env.OVERSEERR_URL || process.env.JELLYSEERR_URL, persistedSeerrUrl),
+  overseerrApiKey: resolveRuntimeOrPersistedValue(process.env.SEERR_API_KEY || process.env.OVERSEERR_API_KEY || process.env.JELLYSEERR_API_KEY, persistedSeerrApiKey),
+  // Real requests remain disabled until an explicitly controlled future milestone.
+  acquisitionRequestsEnabled: asBool(process.env.ACQUISITION_REQUESTS_ENABLED, false),
   pollIntervalSeconds: asNumber(process.env.POLL_INTERVAL_S, 30),
   // Runtime toggles
   runWebhook: asBool(process.env.RUN_WEBHOOK, true),

@@ -247,6 +247,20 @@ function runMigrations(database: Database): void {
       fetched_at TEXT NOT NULL,
       expires_at TEXT NOT NULL
     )`,
+    `CREATE TABLE IF NOT EXISTS acquisition_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      need_id TEXT NOT NULL,
+      identity_json TEXT NOT NULL,
+      profile_id TEXT NOT NULL,
+      adapter_id TEXT NOT NULL,
+      phase TEXT NOT NULL,
+      status TEXT NOT NULL,
+      provider_request_id TEXT,
+      detail TEXT,
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_acquisition_audit_need
+      ON acquisition_audit (need_id, created_at)`,
   ];
 
   for (const sql of migrations) {
@@ -255,6 +269,37 @@ function runMigrations(database: Database): void {
     } catch (err: any) {
       console.error(`[${new Date().toISOString()}][db] Migration failed: ${err?.message}`);
     }
+  }
+}
+
+export interface AcquisitionAuditRecord {
+  needId: string;
+  identity: unknown;
+  profileId: string;
+  adapterId: string;
+  phase: "PREVIEW" | "REVALIDATION" | "REQUEST";
+  status: string;
+  providerRequestId?: string;
+  detail?: string;
+  createdAt?: string;
+}
+
+export function recordAcquisitionAudit(record: AcquisitionAuditRecord): void {
+  try {
+    getDb().prepare(`INSERT INTO acquisition_audit (need_id, identity_json, profile_id, adapter_id, phase, status, provider_request_id, detail, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      record.needId,
+      JSON.stringify(record.identity),
+      record.profileId,
+      record.adapterId,
+      record.phase,
+      record.status,
+      record.providerRequestId ?? null,
+      record.detail ?? null,
+      record.createdAt || new Date().toISOString(),
+    );
+  } catch (error: any) {
+    console.error(`[${new Date().toISOString()}][db] acquisition audit error: ${error?.message}`);
   }
 }
 

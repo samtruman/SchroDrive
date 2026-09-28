@@ -1148,3 +1148,148 @@ improve identity, path mapping, external-ID evidence and lookup efficiency;
 they do not enable the Version Manager. The only code change in this step was
 the deterministic parser precedence fix. AcquisitionAdapter, Seerr, import,
 Delete Executor and provider mutation remain out of scope.
+
+## 38. Acquisition Core and Seerr Adapter (current milestone)
+
+The acquisition boundary is now provider-neutral:
+
+`VersionGroup -> VersionProfile evaluation -> AcquisitionNeed -> AcquisitionAdapter`.
+
+`AcquisitionNeed` carries canonical `ContentIdentity`, media type, optional
+season/episode, missing profile, existing/rejected versions, confidence,
+eligibility and a separate acquisition status. It does not contain Plex,
+Jellyfin, AllDebrid or Seerr-specific identifiers. Resolved identities with a
+canonical TMDb/TVDb/IMDb ID can be eligible; fallback, uncertain and conflict
+identities are blocked. Disabled or satisfied profiles produce no need.
+
+Revalidation and stable local idempotency keys are implemented before an
+adapter is called. A newly available version therefore turns an old need into
+`PROFILE_SATISFIED`, and equivalent needs are deduplicated. Acquisition states
+are kept separate from `KEEP`, `REVIEW` and `DELETE_CANDIDATE`.
+
+`SeerrAcquisitionAdapter` is the first adapter. It reuses the existing
+`SEERR_*` / `OVERSEERR_*` / `JELLYSEERR_*` configuration and the same persisted
+settings fallback used by the shared runtime. Its current surface is
+read-only: capabilities, status and preview use GET requests only;
+`request()` is deliberately disabled and no POST/PUT/DELETE is issued in this
+milestone. A provider status of configuration unavailable, unavailable, media
+not found, not requested, pending/processing or available is kept distinct.
+The current adapter reports TV request scope as season-level; it does not claim
+that an episode-level missing profile can be requested as an episode. Mapping
+from a VersionProfile to Radarr/Sonarr quality settings remains an explicit
+future configuration concern and is never inferred as an exact fingerprint
+guarantee.
+
+The `/version-manager` page now includes a read-only Missing Versions panel
+and the backend exposes `/api/version-manager/missing`. Preview/audit records
+contain no credentials. The audit table records need, canonical identity,
+profile, adapter, phase and result only. There is no request confirmation
+action in the current UI.
+
+## 39. Media Server Provider Generalization
+
+### Current Jellyfin assessment
+
+SchröDrive already has `src/integrations/jellyfin.ts` for favourites/watchlist,
+library refresh and streaming checks. The Version Manager also has a
+read-only Jellyfin catalog path in `versionManagerMetadata.ts`, configured by
+the existing `JELLYFIN_URL`, `JELLYFIN_API_KEY` and optional user ID settings.
+It requests ProviderIds, path, production year, season/episode and original
+language. That is sufficient for identity enrichment: TMDb, TVDb and IMDb IDs,
+series/episode coordinates and original-language evidence. The current catalog
+query does not yet provide a normalized technical fingerprint (video codec,
+HDR/DV, bitrate, audio/subtitle streams); this remains future media-fingerprint
+enrichment, not a replacement for ffprobe.
+
+Plex has equivalent optional read-only catalog matching and contributes GUIDs,
+external IDs, path and season/episode evidence. The current implementation
+still has direct `plexCatalog()` and `jellyfinCatalog()` branches rather than a
+shared `MediaServerProvider` contract. This is a documented architectural
+coupling for the next milestone, not a dependency introduced into Acquisition.
+No Plex precedence or confidence threshold was changed here.
+
+### Target contract and provider matrix
+
+The next milestone should extract a shared provider contract covering
+capabilities, identity lookup/external IDs, path/media mapping, metadata and
+media streams. Plex and Jellyfin should be adapters contributing evidence;
+concordant sources strengthen identity, while strong disagreement remains
+reviewable. The target must support TMDb-only, TMDb+Plex, TMDb+Jellyfin,
+TMDb+Plex+Jellyfin and graceful filename fallback with no media server or
+TMDb.
+
+| Mode | Identity | Fingerprint enrichment | Acquisition |
+|---|---|---|---|
+| TMDb only | canonical metadata | ffprobe/provider | canonical ID only |
+| TMDb + Plex | optional IDs/path/evidence | future Plex media data | unchanged |
+| TMDb + Jellyfin | optional IDs/path/evidence | future Jellyfin media data | unchanged |
+| TMDb + both | fused provenance/conflict detection | future multi-source enrichment | unchanged |
+| No media server/TMDb | filename fallback/review | provider/ffprobe | blocked unless identity resolves |
+
+The acquisition invariant is therefore `canonical ContentIdentity ->
+AcquisitionAdapter -> Seerr`, never Plex/Jellyfin directly. The complete
+MediaServerProvider abstraction and confidence fusion are proposed for the
+next milestone.
+
+## 40. Acquisition read-only validation
+
+The live AllDebrid read-only run used the current provider API and a temporary
+isolated data directory. It fetched the magnet inventory and completed file
+trees only; no add, delete, repair, organizer, mount, Seerr request or media
+server mutation was enabled.
+
+| Metric | Result |
+|---|---:|
+| Provider items | 417 |
+| Completed | 404 |
+| Completed file-tree directories | 404 |
+| Fingerprints | 735 |
+| Version Groups (filename-only control) | 632 |
+| Multiversion groups | 80 |
+| REMOTE_MISSING | 288 |
+| REMOTE 1080p | 341 |
+| REMOTE 2160p | 0 |
+| AcquisitionNeed records | 292 |
+| Acquisition eligible | 0 |
+| Acquisition blocked | 292 |
+| Movie needs / TV episode needs | 118 / 174 |
+
+The 632 groups are a provider/file-tree control without Plex or TMDb
+enrichment, so they are not substituted for the comparable TMDb baseline
+groups. The 288 REMOTE_MISSING count matches the current profile evaluation;
+the additional four generic needs are profiles with no eligible winner outside
+the REMOTE-only subset. All 292 needs were blocked because canonical identity
+was not resolved in this deliberately isolated runner. Seerr was reachable on
+the host as a public health endpoint, but the SchröDrive runtime/configuration
+available to the runner had no Seerr URL or authentication/API key. The adapter
+therefore correctly reported `configuration_unavailable`; no status lookup was
+attempted and no request was sent. This is an environment/configuration
+blocker, not an inference that media is absent or unrequested.
+
+The adapter capability result was: movies supported, TV supported with
+season-level request scope, `canRequest=false`. Representative previews were
+therefore safe blocked previews with canonical identity still required before
+any future provider status lookup. The next validation must provide the
+existing SchröDrive Seerr configuration to the isolated runner without
+printing or persisting credentials, then repeat the same GET-only run.
+
+### Seerr configuration classification
+
+The distinction is explicit:
+
+| Layer | Result | Evidence |
+|---|---|---|
+| Seerr service reachable | Yes | local health/public endpoint returned HTTP 200 |
+| SchröDrive integration configured | No | live `/api/config` reports `SEERR_URL`, `SEERR_API_KEY` and `SEERR_AUTH` as `present=false`, `source=default` |
+| Runtime source | None | `process.env` has no configured Seerr values; `/app/.env` and checked persisted env paths contain no Seerr keys |
+| Existing poller | Disabled | live config reports `RUN_POLLER=false`; its code uses the same `config.overseerrUrl/overseerrApiKey/overseerrAuth` contract |
+| AcquisitionAdapter | `configuration_unavailable` | correct result when URL plus authentication are absent |
+
+The service being reachable therefore does not imply that SchröDrive is
+authorized/configured to use it. No API key/token was printed, copied or
+inserted into a runner, and no authenticated Seerr request was made. The
+previous `configuration_unavailable` result is consequently a real missing
+configuration state, not a Plex/Jellyfin dependency or a shared-client
+visibility bug. The source change that adds persisted `SEERR_*` fallback is
+safe for a future configured deployment, but was not exercised against a
+credentialed service in this milestone.

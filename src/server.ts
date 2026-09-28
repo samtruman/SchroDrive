@@ -35,10 +35,13 @@ import { tokenRotator } from "./core/tokenRotator";
 import { decideOrganizerReview, filterOrganizerReviewsByParserStatus, listOrganizerReviewAudit, listOrganizerReviews, retryOrganizerReview, validateReviewOverride } from "./services/organizerReview";
 import { browseMountedFilesystem, FilesystemBrowserError } from "./core/filesystemBrowser";
 import { evaluateVersionGroups, fingerprintTorrent, validateRule } from "./services/versionManager";
+import { deriveAcquisitionNeeds } from "./services/acquisition";
+import { SeerrAcquisitionAdapter } from "./services/seerrAcquisitionAdapter";
 import { getLatestVersionManagerScan, getVersionManagerPolicy, getVersionProfiles, saveVersionManagerPolicy, saveVersionManagerScan, saveVersionProfiles } from "./services/versionManagerStore";
 import { probeVersionRecords } from "./services/versionManagerProbe";
 import { enrichVersionMetadata } from "./services/versionManagerMetadata";
 import { exportMigrationLibrary, type MigrationExportMode } from "./services/migrationExporter";
+import { recordAcquisitionAudit } from "./core/db";
 
 // ===========================================================================
 // Server Initialisation
@@ -209,6 +212,34 @@ export function startServer() {
       res.json({ ok: true, mode: "dry-run", scanId, inventoryCount: versions.length, groupCount: groups.length, probe, metadata, groups });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message || "Version Manager preview failed" });
+    }
+  });
+
+  /**
+   * GET /api/version-manager/missing — read-only missing-profile and Seerr
+   * status projection. This endpoint never sends an acquisition request.
+   */
+  app.get("/api/version-manager/missing", async (_req, res) => {
+    try {
+      const versions = (await Promise.all(registry.configured().map(async (provider) => {
+        const torrents = await provider.listTorrents();
+        return torrents.flatMap((torrent) => fingerprintTorrent(torrent, provider.id));
+      }))).flat();
+      const probe = await probeVersionRecords(versions);
+      await enrichVersionMetadata(versions);
+      const profiles = getVersionProfiles();
+      const policy = getVersionManagerPolicy();
+      const groups = evaluateVersionGroups(versions, profiles, policy);
+      const needs = policy.enableRemote ? deriveAcquisitionNeeds(groups, profiles, { adapterId: "seerr", acquisitionEnabled: policy.acquireMissingRemote }) : [];
+      const adapter = new SeerrAcquisitionAdapter();
+      const previews = await Promise.all(needs.map(async (need) => {
+        const preview = await adapter.preview(need);
+        recordAcquisitionAudit({ needId: need.id, identity: need.contentIdentity, profileId: need.missingProfileId, adapterId: preview.adapterId, phase: "PREVIEW", status: preview.status, detail: preview.mappingWarning });
+        return preview;
+      }));
+      return res.json({ ok: true, readOnly: true, mode: "dry-run", inventoryCount: versions.length, groupCount: groups.length, probe, needs, previews, adapter: await adapter.capabilities() });
+    } catch (err: any) {
+      return res.status(500).json({ ok: false, error: err?.message || "Missing profile preview failed" });
     }
   });
 

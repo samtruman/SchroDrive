@@ -149,6 +149,8 @@ export interface MediaFingerprint {
   probe: { status: "not_requested" | "complete" | "unavailable" | "error"; tool: "filename" | "provider" | "ffprobe"; version?: string; error?: string };
 }
 
+export type ContentIdentity = MediaFingerprint["identity"];
+
 export type Provenance = "ALLDEBRID" | "FILENAME" | "FFPROBE" | "PLEX" | "JELLYFIN" | "TMDB" | "TVDB" | "IMDB" | "UNKNOWN";
 
 export type IdentityResolutionStatus = "resolved" | "fallback" | "uncertain" | "conflict";
@@ -178,6 +180,11 @@ export interface ProfileEvaluation {
   reasons: Reason[];
 }
 
+export interface ProfileStatus {
+  profileId: string;
+  satisfied: boolean;
+}
+
 export interface VersionEvaluation extends VersionRecord {
   decision: VersionDecision;
   evaluations: ProfileEvaluation[];
@@ -189,6 +196,8 @@ export interface VersionGroup {
   identity: MediaFingerprint["identity"];
   versions: VersionEvaluation[];
   remote?: RemoteStatus;
+  /** Generic profile state used by acquisition; REMOTE remains a compatibility view. */
+  profileStatuses?: ProfileStatus[];
 }
 
 const LANGUAGE_ALIASES: Record<string, string> = {
@@ -401,6 +410,10 @@ export function evaluateVersionGroups(versions: VersionRecord[], profiles = defa
         }
       }
     }
-    return { id, identity: members[0].fingerprint.identity, versions: evaluations, remote };
+    const profileStatuses = activeProfiles.map((profile) => ({
+      profileId: profile.id,
+      satisfied: evaluations.some((version) => version.fingerprint.identity.confidence >= 0.65 && version.evaluations.some((evaluation) => evaluation.profileId === profile.id && evaluation.eligible && version.decision === "KEEP")),
+    }));
+    return { id, identity: members[0].fingerprint.identity, versions: evaluations, remote, profileStatuses };
   });
 }
