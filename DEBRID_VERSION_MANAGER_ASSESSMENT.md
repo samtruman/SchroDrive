@@ -1369,3 +1369,41 @@ Monsters, Mayday, Finch, Lucky and Silo. The Westies season/episode precedence
 is preserved; Silo may remain uncertain without strong evidence. Acquisition
 continues to consume only canonical `ContentIdentity`, never Plex or Jellyfin
 item IDs.
+
+### Organizer safety follow-up
+
+The standard 3067092 Organizer had a concrete regression relative to the
+previous validation runtime: when two sources resolved to one canonical
+destination, it could unlink the existing symlink and replace it with the
+incoming source. The fix keeps the existing destination and allocates a
+stable alternate name for the incoming source. The alternate suffix is the
+first eight hexadecimal characters of SHA-1(source path), with a deterministic
+numeric disambiguator only if that exact name is already occupied. Discovery
+is sorted before assignment, so rescans and reversed discovery order produce
+the same destinations without an order-dependent replacement.
+
+The operation is idempotent: an existing link to the same source is a no-op;
+valid links, regular files, and directories are never overwritten or removed.
+Organizer remains responsible only for discovery and preservation. It does not
+select PRIMARY/REMOTE or make KEEP/REVIEW/DELETE decisions.
+
+`ORGANIZER_FILENAME_MODE` is now a shared persisted setting with `canonical`
+and `original` values. The latter uses the source basename while retaining the
+new collision-safe behavior.
+
+The old `validationMountPrecheck.ts` was not copied wholesale. Its
+CineCircle/AllDebrid-specific API, WebDAV, manifest, and duplicate-discovery
+checks are deployment diagnostics rather than generic Organizer safety
+requirements. The standard path now fails closed on unavailable source roots
+or traversal errors, scans before pruning, skips pruning on an empty
+discovery, and performs pruning only after a non-empty successful discovery.
+Dry-run performs no mkdir, symlink, unlink, or prune operation. These choices
+preserve the safety-critical behavior without coupling the standard Organizer
+to a particular provider API.
+
+Regression coverage is in
+`tests/unit/services/organizer-safety.test.ts`, using temporary fixtures only,
+for collisions, idempotence, real-file/directory protection, movie and TV
+multiversion cases, multifile inputs, filename modes, broken-link safety, and
+zero-mutation dry-run behavior. The runtime container remains on
+`RUN_ORGANIZER_WATCH=false`; this code has not been rebuilt or deployed here.

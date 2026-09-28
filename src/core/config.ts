@@ -12,6 +12,7 @@ const persistedPlexMountDir = getPersistedEnvValue("PLEX_MOUNT_DIR");
 const persistedJellyfinUrl = getPersistedEnvValue("JELLYFIN_URL");
 const persistedJellyfinApiKey = getPersistedEnvValue("JELLYFIN_API_KEY");
 const persistedJellyfinUserId = getPersistedEnvValue("JELLYFIN_USER_ID");
+const persistedOrganizerFilenameMode = getPersistedEnvValue("ORGANIZER_FILENAME_MODE");
 
 const defaultMountBase = (process.env.MOUNT_BASE || (process.platform === 'darwin' ? "/Volumes/SchroDrive" : "/mnt/schrodrive"));
 
@@ -194,6 +195,7 @@ export const config = {
   tmdbApiKey: resolveRuntimeOrPersistedValue(process.env.TMDB_API_KEY, persistedTmdbApiKey),
   organizedBase: process.env.ORGANIZED_BASE || `${defaultMountBase}/organized`,
   organizerMode: (process.env.ORGANIZER_MODE || "symlink") as "symlink" | "copy" | "move",
+  organizerFilenameMode: resolveRuntimeOrPersistedValue(process.env.ORGANIZER_FILENAME_MODE, persistedOrganizerFilenameMode) as "canonical" | "original",
   runOrganizerWatch: asBool(process.env.RUN_ORGANIZER_WATCH),
   orgScanIntervalSeconds: asNumber(process.env.ORG_SCAN_INTERVAL_S, 300),
   // --- Media Server Integration ---
