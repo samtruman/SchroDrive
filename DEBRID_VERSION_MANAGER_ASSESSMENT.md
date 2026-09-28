@@ -664,3 +664,99 @@ than guessing.
 - [Zurg public configuration/wiki](https://github.com/debridmediamanager/zurg-public/wiki/Config)
 - [vibeDebrid](https://github.com/vibeMonarch/vibeDebrid)
 - [SchröDrive repository](https://github.com/moderniselife/SchroDrive)
+
+## 27. M1 implementation and real-library verification — 2026-09-28
+
+M1 is now implemented on `feature/debrid-version-manager-assessment`.
+
+Implemented:
+
+- `ffprobe` integration in `src/services/versionManagerProbe.ts`;
+- runner image dependency (`ffmpeg`, which provides `ffprobe`);
+- read-only probe states: `complete`, `unavailable`, and `error`;
+- SQLite cache keyed by canonical mounted path and byte size. The cache does
+  not use VFS mtime because the live AllDebrid mount refreshed mtime between
+  identical reads;
+- per-field provenance for identity, video, audio, subtitles, release and
+  storage data;
+- verified width/height, standard resolution bucket, codec, bitrate, bit depth,
+  HDR10/HDR10+/Dolby Vision, container, audio codec/language/channels/bitrate,
+  Atmos detection and subtitle language/forced status;
+- optional Plex/Jellyfin metadata adapters and TMDb fallback. They use only
+  read APIs and are not required by the core/provider abstraction;
+- Version Manager preview API and UI now expose probe state, scores and
+  explanations.
+
+No delete executor, provider delete call, repair, dead scanner or production
+restart was added.
+
+### Real AllDebrid read-only scan
+
+The inventory was collected from the active AllDebrid provider and the media
+files were probed through the SchröDrive mount in an isolated probe container.
+The SchröDrive production container was not restarted or replaced.
+
+| Metric | Result |
+|---|---:|
+| Media records analysed | 303 |
+| Files successfully probed | 296 |
+| Probe unavailable | 7 |
+| Probe errors | 0 |
+| First-pass cache misses | 296 |
+| Second-pass cache hits | 296 |
+| Version groups | 286 |
+| Groups with multiple versions | 16 |
+| Identity-uncertain records/groups | 70 |
+| Metadata-server matches | 0 in isolated run; no Plex/Jellyfin/TMDb credentials were supplied to the probe container |
+
+With both `PRIMARY / QUALITY` and `REMOTE / DIRECT PLAY` enabled for this
+read-only evaluation, the 303 records produced:
+
+| Decision | Count |
+|---|---:|
+| KEEP | 230 |
+| DELETE_CANDIDATE | 3 |
+| REVIEW | 70 |
+
+`DELETE_CANDIDATE` is only a dry-run label. No deletion is implemented or
+possible through this milestone.
+
+The reason distribution was: 432 profile-winner explanations, 3 no-profile-slot
+explanations and 70 identity-uncertain reviews. A version can satisfy both
+profiles, so profile-winner explanations can exceed the number of records.
+
+### Representative multiversion groups
+
+The following are real read-only results. Bitrates are bits/s; audio channels
+are reported by ffprobe. `P` and `R` are the PRIMARY and REMOTE scores.
+
+| Group | Verified versions and decision | Scores / explanation |
+|---|---|---|
+| Operazione Speciale Lioness | 2160p HEVC DV, 25.65 Mb/s, ITA/ENG EAC3 5.1, ENG Atmos → KEEP; second equivalent 24.93 Mb/s → DELETE_CANDIDATE | P70/R60; first wins both slots |
+| Slow Horses | 2160p HEVC DV, 25.87 Mb/s → KEEP; 1080p HEVC, 6.10 Mb/s → KEEP | P67/R48 vs P55/R88; separate quality and remote winners |
+| Love and Monsters (2020) | 2160p HEVC, 66.98 Mb/s DTS/FLAC → KEEP; 2160p HEVC, 17.99 Mb/s EAC3/AC3 → KEEP | P75/R30 vs P74/R50; each wins a profile |
+| Mayday (2026) | 2160p HEVC DV, 26.67 Mb/s → DELETE_CANDIDATE; 1080p H264, 12.78 Mb/s Atmos → KEEP; 2160p HEVC, 25.30 Mb/s → KEEP | R101 for 1080p; primary retained separately |
+| The Whisper Man (2026) | 2160p HEVC, 15.75 Mb/s → KEEP; 1080p HEVC, 2.88 Mb/s → KEEP | P61 vs R99; dual profile result |
+| Finch (2021) | 2160p HEVC, 26.69 Mb/s → KEEP; 1080p H264, 15.45 Mb/s multilingual Atmos → KEEP | P61 vs R101; direct-play candidate retains languages |
+| Reacher | 2160p HEVC DV, 15.14 Mb/s → KEEP; 1080p HEVC, 2.32 Mb/s AC3 2.0 → KEEP | P70 vs R69; separate winners |
+| The Westies — group A | 1080p H264, 10.26 Mb/s → KEEP; 1080p HEVC, 6.47 Mb/s → KEEP | P52/R101 vs P58/R100; different profile winners |
+| The Westies — group B | 1080p HEVC, 7.11 Mb/s → KEEP; 1080p H264, 10.10 Mb/s → KEEP | P58/R99 vs P52/R101; codec/bitrate trade-off exposed |
+| The Westies — group C | 1080p HEVC, 6.65 Mb/s → KEEP; 1080p H264, 9.41 Mb/s → KEEP | P58/R100 vs P52/R102; both profiles remain satisfied |
+
+The probe output included Matroska container, exact dimensions, audio stream
+bitrate, subtitle count and provenance `FFPROBE`. Seven records could not be
+resolved to a local mounted media path and therefore remain incomplete rather
+than being treated as verified.
+
+### M1 status and remaining gaps
+
+M1 is functionally complete for read-only probing and cache validation. Identity
+IDs and `original_language` are wired for Plex/Jellyfin/TMDb enrichment, but
+the real run did not have usable metadata-server credentials in its isolated
+environment, so the report must not claim those IDs were verified. Filename
+identity remains the fallback and low-confidence records stay `REVIEW`.
+
+Remaining work before any upstream proposal is stronger identity matching,
+metadata-backed original-language validation, richer direct-play compatibility,
+review/history UI and broader provider-backed tests. Deletion remains outside
+scope.

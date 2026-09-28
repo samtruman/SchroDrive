@@ -226,6 +226,14 @@ function runMigrations(database: Database): void {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_version_manager_items_scan
       ON version_manager_items (scan_id, decision)`,
+    `CREATE TABLE IF NOT EXISTS version_manager_probe_cache (
+      cache_key TEXT PRIMARY KEY,
+      path TEXT NOT NULL,
+      fingerprint_json TEXT NOT NULL,
+      ffprobe_version TEXT,
+      probed_at TEXT NOT NULL,
+      status TEXT NOT NULL
+    )`,
   ];
 
   for (const sql of migrations) {

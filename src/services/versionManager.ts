@@ -91,6 +91,9 @@ export function evaluateRule(node: RuleNode | undefined, version: VersionRecord,
 
 export interface MediaFingerprint {
   identity: {
+    tmdbId?: string;
+    imdbId?: string;
+    tvdbId?: string;
     title?: string;
     normalizedTitle?: string;
     year?: number;
@@ -98,24 +101,33 @@ export interface MediaFingerprint {
     season?: number;
     episode?: number;
     episodeEnd?: number;
+    originalLanguage?: string;
     confidence: number;
     source: "filename" | "provider" | "unknown";
+    provenance?: Record<string, Provenance>;
   };
   video: {
     resolution?: string;
+    width?: number;
+    height?: number;
     codec?: string;
     bitrate?: number;
     bitDepth?: number;
     hdr10?: boolean;
     hdr10Plus?: boolean;
     dolbyVision?: boolean;
+    container?: string;
+    hdrFormat?: string;
+    provenance?: Record<string, Provenance>;
   };
-  audio: Array<{ language: string; codec?: string; channels?: number; atmos?: boolean }>;
-  subtitles: Array<{ language: string; forced?: boolean }>;
-  release: { source?: string; group?: string };
-  storage: { provider: string; torrentId: string; fileId?: string; path: string; size: number; addedAt?: string };
-  probe: { status: "not_requested" | "complete"; tool: "filename" | "provider" };
+  audio: Array<{ language: string; codec?: string; channels?: number; bitrate?: number; atmos?: boolean; provenance?: Record<string, Provenance> }>;
+  subtitles: Array<{ language: string; codec?: string; forced?: boolean; provenance?: Record<string, Provenance> }>;
+  release: { source?: string; group?: string; provenance?: Record<string, Provenance> };
+  storage: { provider: string; torrentId: string; fileId?: string; path: string; size: number; addedAt?: string; provenance?: Record<string, Provenance> };
+  probe: { status: "not_requested" | "complete" | "unavailable" | "error"; tool: "filename" | "provider" | "ffprobe"; version?: string; error?: string };
 }
+
+export type Provenance = "ALLDEBRID" | "FILENAME" | "FFPROBE" | "PLEX" | "JELLYFIN" | "TMDB" | "TVDB" | "IMDB" | "UNKNOWN";
 
 export interface VersionRecord {
   id: string;
@@ -211,15 +223,17 @@ export function fingerprintTorrent(torrent: TorrentInfo, provider = "unknown"): 
           episodeEnd: parsed.episodeEnd,
           confidence: parsed.confidence,
           source: parsed.status === "matched" ? "filename" : "unknown",
+          provenance: { title: "FILENAME", normalizedTitle: "FILENAME", kind: "FILENAME", season: "FILENAME", episode: "FILENAME", year: "FILENAME" },
         },
         video: {
           resolution: inferResolution(name), codec: inferCodec(name),
           hdr10: /HDR10?(?:\b|\+|\.)/i.test(name), hdr10Plus: /HDR10\+/i.test(name),
           dolbyVision: /(?:\bDV\b|DOLBY[ ._-]?VISION)/i.test(name),
+          provenance: { resolution: "FILENAME", codec: "FILENAME", hdr10: "FILENAME", hdr10Plus: "FILENAME", dolbyVision: "FILENAME" },
         },
-        audio: (languages.length > 0 ? languages : ["eng"]).map((language) => ({ language, ...audio })),
-        subtitles: [], release: { source: inferSource(name), group: name.match(/-([A-Za-z0-9]+)(?:\.[^.]+)?$/)?.[1] },
-        storage: { provider, torrentId: torrent.id, fileId: file.id, path: file.path, size: file.size || torrent.bytes, addedAt: torrent.addedAt?.toISOString() },
+        audio: (languages.length > 0 ? languages : ["eng"]).map((language) => ({ language, ...audio, provenance: { language: "FILENAME", codec: "FILENAME", channels: "FILENAME", atmos: "FILENAME" } })),
+        subtitles: [], release: { source: inferSource(name), group: name.match(/-([A-Za-z0-9]+)(?:\.[^.]+)?$/)?.[1], provenance: { source: "FILENAME", group: "FILENAME" } },
+        storage: { provider, torrentId: torrent.id, fileId: file.id, path: file.path, size: file.size || torrent.bytes, addedAt: torrent.addedAt?.toISOString(), provenance: { provider: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", torrentId: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", path: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", size: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN" } },
         probe: { status: "not_requested", tool: "filename" },
       },
     };

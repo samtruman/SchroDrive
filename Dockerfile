@@ -36,7 +36,7 @@ ENV NODE_ENV=production
 # Install system dependencies
 # Note: oven/bun is Debian-based, not Alpine — use apt instead of apk
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    rclone fuse3 curl ca-certificates supervisor \
+    rclone fuse3 curl ca-certificates supervisor ffmpeg \
     && rm -rf /var/lib/apt/lists/* \
     && printf 'user_allow_other\n' >> /etc/fuse.conf || true
 

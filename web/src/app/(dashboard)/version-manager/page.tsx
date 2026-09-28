@@ -13,7 +13,11 @@ type PreviewVersion = {
     video: { resolution?: string; codec?: string }
     release: { source?: string }
     audio: Array<{ language: string; codec?: string }>
+    probe: { status: string; tool: string }
+    identity: { tmdbId?: string; imdbId?: string; tvdbId?: string }
   }
+  evaluations: Array<{ profileId: string; score?: number; eligible: boolean; reasons: Array<{ message: string }> }>
+  reasons: Array<{ message: string }>
 }
 
 type Preview = {
@@ -24,6 +28,8 @@ type Preview = {
     identity: { title?: string; year?: number; confidence: number }
     versions: PreviewVersion[]
   }>
+  probe?: { requested: number; probed: number; cacheHits: number; cacheMisses: number; unavailable: number; errors: number }
+  metadata?: { plex: number; jellyfin: number; tmdb: number; matched: number; unresolved: number }
 }
 
 type Profile = { id: string; name: string; enabled: boolean; target: string; preferredResolution: string }
@@ -94,11 +100,12 @@ export default function VersionManagerPage() {
       </Card>
       {error && <Card><CardContent className="pt-6 text-destructive">{error}</CardContent></Card>}
       {preview && <Card>
-        <CardHeader><CardTitle>Latest preview</CardTitle><CardDescription>{preview.inventoryCount} media files in {preview.groupCount} version groups.</CardDescription></CardHeader>
+        <CardHeader><CardTitle>Latest verified preview</CardTitle><CardDescription>{preview.inventoryCount} media files in {preview.groupCount} version groups.</CardDescription></CardHeader>
         <CardContent className="space-y-3">
+          {preview.probe && <div className="grid gap-2 text-sm md:grid-cols-6"><span>Probed: <strong>{preview.probe.probed}</strong></span><span>Cache hit: <strong>{preview.probe.cacheHits}</strong></span><span>Cache miss: <strong>{preview.probe.cacheMisses}</strong></span><span>Unavailable: <strong>{preview.probe.unavailable}</strong></span><span>Errors: <strong>{preview.probe.errors}</strong></span><span>Metadata matched: <strong>{preview.metadata?.matched ?? 0}</strong></span></div>}
           {preview.groups.slice(0, 50).map((group) => <div key={group.id} className="rounded-lg border p-4">
             <div className="mb-2 flex items-center justify-between"><div className="font-medium">{group.identity.title || "Unknown identity"}{group.identity.year ? ` (${group.identity.year})` : ""}</div><span className="text-xs text-muted-foreground">confidence {Math.round(group.identity.confidence * 100)}%</span></div>
-            <div className="space-y-2">{group.versions.map((version) => <div key={version.id} className="flex flex-wrap items-center gap-2 text-sm"><Badge variant={version.decision === "KEEP" ? "default" : version.decision === "REVIEW" ? "secondary" : "destructive"}>{version.decision}</Badge><span>{version.fingerprint.video.resolution || "?"} {version.fingerprint.release.source || "unknown source"}</span><span className="text-muted-foreground">{version.fingerprint.video.codec || "?"} · {version.fingerprint.audio.map((audio) => audio.language).join(", ") || "unknown language"}</span></div>)}</div>
+            <div className="space-y-2">{group.versions.map((version) => <div key={version.id} className="rounded border p-2 text-sm"><div className="flex flex-wrap items-center gap-2"><Badge variant={version.decision === "KEEP" ? "default" : version.decision === "REVIEW" ? "secondary" : "destructive"}>{version.decision}</Badge><span>{version.fingerprint.video.resolution || "?"} {version.fingerprint.release.source || "unknown source"}</span><span className="text-muted-foreground">{version.fingerprint.video.codec || "?"} · {version.fingerprint.audio.map((audio) => audio.language).join(", ") || "unknown language"}</span><Badge variant="outline">{version.fingerprint.probe.status}</Badge></div><div className="mt-1 text-xs text-muted-foreground">{version.evaluations.map((evaluation) => `${evaluation.profileId}: ${evaluation.eligible ? evaluation.score ?? "eligible" : "ineligible"}`).join(" · ")} — {version.reasons.map((reason) => reason.message).join("; ")}</div></div>)}</div>
           </div>)}
         </CardContent>
       </Card>}

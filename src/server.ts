@@ -36,6 +36,8 @@ import { decideOrganizerReview, filterOrganizerReviewsByParserStatus, listOrgani
 import { browseMountedFilesystem, FilesystemBrowserError } from "./core/filesystemBrowser";
 import { evaluateVersionGroups, fingerprintTorrent, validateRule } from "./services/versionManager";
 import { getLatestVersionManagerScan, getVersionProfiles, saveVersionManagerScan, saveVersionProfiles } from "./services/versionManagerStore";
+import { probeVersionRecords } from "./services/versionManagerProbe";
+import { enrichVersionMetadata } from "./services/versionManagerMetadata";
 
 // ===========================================================================
 // Server Initialisation
@@ -196,10 +198,12 @@ export function startServer() {
         const torrents = await provider.listTorrents();
         return torrents.flatMap((torrent) => fingerprintTorrent(torrent, provider.id));
       }))).flat();
+      const probe = await probeVersionRecords(versions);
+      const metadata = await enrichVersionMetadata(versions);
       const profiles = getVersionProfiles();
       const groups = evaluateVersionGroups(versions, profiles);
       const scanId = saveVersionManagerScan(groups, profiles);
-      res.json({ ok: true, mode: "dry-run", scanId, inventoryCount: versions.length, groupCount: groups.length, groups });
+      res.json({ ok: true, mode: "dry-run", scanId, inventoryCount: versions.length, groupCount: groups.length, probe, metadata, groups });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message || "Version Manager preview failed" });
     }
