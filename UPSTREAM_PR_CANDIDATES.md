@@ -479,6 +479,78 @@ Standalone after the current commit is published.
 Shared URL normalization, two call-site updates, Settings copy correction, and
 unit coverage. No acquisition request enablement.
 
+## 9. Settings provenance — distinguish container environment from persisted `.env`
+
+### Classification
+
+`GENERIC_UPSTREAM_FIX`
+
+### PR dependency
+
+`STANDALONE`
+
+### Component
+
+Settings / configuration API / Web UI
+
+### Problem
+
+Settings values saved in SchröDrive's persistent `/app/.env` were reported as
+container environment variables and became locked in the UI.
+
+### Root cause
+
+Bun loads `.env` values into `process.env` before the application evaluates
+`getConfigWithSources()`. The implementation used `process.env[key]` as the
+sole provenance test, losing the distinction between Docker/container
+environment and persisted dotenv data.
+
+### Previous behavior
+
+Persisted Plex, Jellyfin, Seerr and other settings were returned with
+`source: "env"`, so the UI displayed them as locked and disabled editing.
+
+### Expected behavior
+
+Actual container environment values remain locked. Values read from the
+SchröDrive-managed dotenv file remain editable, and defaults remain editable.
+Runtime/container values still take precedence over persisted values.
+
+### Fix
+
+The configuration API reads original environment variable names from
+`/proc/self/environ` on Linux/Docker, while preserving the existing public
+`source: env|file|default` contract. It additionally returns explicit
+`provenance` (`CONTAINER_ENV`, `PERSISTED_DOTENV`, `DEFAULT`) and `locked`
+metadata. Tests can inject the original key set without changing production
+environment semantics.
+
+### Files changed
+
+`src/core/configApi.ts`, `tests/unit/core/configApi.test.ts`.
+
+### Tests
+
+Coverage for real container precedence/locking, persisted editable values,
+defaults, persisted reload/edit, partial-save secret preservation, and
+container-over-persisted precedence.
+
+### Upstream applicability
+
+The same `process.env[key]` provenance logic is present in the fetched
+`upstream/develop` at `f6f20d52cddca44529e225128095a13c97c0e428`, so this remains
+a generic upstream candidate rather than a deployment-specific workaround.
+
+### Isolation
+
+Standalone configuration-core change, separate from Version Manager and Seerr
+URL/key fixes.
+
+### Proposed PR scope
+
+Configuration provenance correction plus focused regression tests; preserve the
+existing Settings API fields and do not change provider integrations.
+
 ## Candidate summary
 
 | Candidate | Classification | Commit | Standalone | Tests | Upstream status | Priority |
@@ -491,6 +563,7 @@ unit coverage. No acquisition request enablement.
 | Persisted `.env` fallback | NEEDS_UPSTREAM_VERIFICATION | `e7983ad` | extract | config unit tests | absent; applicability needs review | medium |
 | Seerr canonical Settings keys | GENERIC_UPSTREAM_FIX | `2e6e4c9` | yes | config persistence | absent from fetched upstream develop | HIGH |
 | Seerr URL/API-root normalization | GENERIC_UPSTREAM_FIX | pending | yes | URL normalization unit test | needs upstream verification | HIGH |
+| Settings dotenv provenance | GENERIC_UPSTREAM_FIX | pending | yes | config provenance/persistence tests | present in fetched upstream develop | HIGH |
 
 No PR, upstream branch, existing PR, or commit history was modified by this
 tracking update.
