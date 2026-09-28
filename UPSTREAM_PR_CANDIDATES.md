@@ -418,6 +418,67 @@ No separate generic secret-loss bug was reproduced in this assessment. The
 UI/API still need a future security review of how secret values are represented
 in GET responses; that is not folded into the Seerr key fix here.
 
+## 8. Seerr service URL/API-root normalization
+
+### Classification
+
+`GENERIC_UPSTREAM_FIX`
+
+### PR dependency
+
+`STANDALONE`
+
+### Component
+
+Seerr adapter / poller / Settings UI
+
+### Problem
+
+The UI instructed users to enter a URL including `/api/v1`, while the
+read-only acquisition adapter appended `/api/v1` itself. The poller expected
+the opposite form and appended request paths directly. A valid service-root
+configuration could therefore work in one path and fail in another, or produce
+`/api/v1/api/v1/...` in the adapter.
+
+### Root cause
+
+There was no shared normalization contract for the configured Seerr service
+URL.
+
+### Expected behavior
+
+Accept both `http://seerr:5055` and `http://seerr:5055/api/v1`, normalize them
+to one API root, and never duplicate the API prefix.
+
+### Fix
+
+The current working fix adds a shared `seerrApiBaseUrl` helper, uses it from
+the adapter and poller, and changes the UI description to recommend the
+service-root form. It does not change credentials or send requests.
+
+### Files changed
+
+`src/services/seerrUrl.ts`, `src/services/seerrAcquisitionAdapter.ts`,
+`src/services/overseerr.ts`, `web/src/app/(dashboard)/settings/page.tsx`.
+
+### Tests
+
+Unit coverage for service-root, API-root, and trailing-slash inputs.
+
+### Upstream applicability
+
+Generic and independent of CineCircle and Version Manager. Upstream status is
+not yet checked against a newer upstream implementation.
+
+### Isolation
+
+Standalone after the current commit is published.
+
+### Proposed PR scope
+
+Shared URL normalization, two call-site updates, Settings copy correction, and
+unit coverage. No acquisition request enablement.
+
 ## Candidate summary
 
 | Candidate | Classification | Commit | Standalone | Tests | Upstream status | Priority |
@@ -429,6 +490,7 @@ in GET responses; that is not folded into the Seerr key fix here.
 | Organizer filename mode | NEEDS_UPSTREAM_VERIFICATION | `36d57a1` / `e7cf2de` | no | filename/safety | intent not yet verified | medium |
 | Persisted `.env` fallback | NEEDS_UPSTREAM_VERIFICATION | `e7983ad` | extract | config unit tests | absent; applicability needs review | medium |
 | Seerr canonical Settings keys | GENERIC_UPSTREAM_FIX | `2e6e4c9` | yes | config persistence | absent from fetched upstream develop | HIGH |
+| Seerr URL/API-root normalization | GENERIC_UPSTREAM_FIX | pending | yes | URL normalization unit test | needs upstream verification | HIGH |
 
 No PR, upstream branch, existing PR, or commit history was modified by this
 tracking update.
