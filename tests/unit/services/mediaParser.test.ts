@@ -26,6 +26,16 @@ describe("structured media parser", () => {
     expect(parsed.episodeEnd).toBe(3);
   });
 
+  test("prefers season/episode over a parenthesized series year", () => {
+    const parsed = parseMediaFilename("The Westies (2026) - S01E01 - The Troubles (1080p).mkv");
+    expect(parsed.status).toBe("matched");
+    expect(parsed.kind).toBe("episode");
+    expect(parsed.title).toBe("The Westies");
+    expect(parsed.year).toBe(2026);
+    expect(parsed.season).toBe(1);
+    expect(parsed.episode).toBe(1);
+  });
+
   test("does not treat a four digit movie year as an anime episode", () => {
     const parsed = parseMediaFilename("Davos.1917.2160p.HDR.mkv");
     expect(parsed.kind).toBe("movie");

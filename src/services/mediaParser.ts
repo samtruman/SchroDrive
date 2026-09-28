@@ -100,21 +100,6 @@ export function parseMediaFilename(filename: string, relativePath = filename): P
   const normalized = base.replace(/[._]+/g, " ").replace(/\s+/g, " ").trim();
   const parentTitle = titleFromParent(relativePath);
 
-  const parenthesizedMovie = base.match(/^(.*?)\s*\(((?:19|20|21)\d{2})\)(?:\s+.*)?$/);
-  if (parenthesizedMovie) {
-    const title = cleanTitle(parenthesizedMovie[1]);
-    if (title) {
-      return result(sourceBasename, extension, {
-        status: "matched",
-        kind: "movie",
-        title,
-        year: Number(parenthesizedMovie[2]),
-        confidence: 0.98,
-        reason: "parenthesized movie year",
-      });
-    }
-  }
-
   // Standard season/episode notation, including multi-episode releases.
   const seasonEpisode = normalized.match(/^(.*?)(?:\s+|-)?S(\d{1,2})E(\d{1,3})(?:(?:-?E?|[ .-])?(\d{1,3}))?\b/i);
   if (seasonEpisode) {
@@ -145,6 +130,23 @@ export function parseMediaFilename(filename: string, relativePath = filename): P
         episodeEnd: seasonEpisode[4] ? Number(seasonEpisode[4]) : undefined,
         confidence: 0.88,
         reason: "season-episode token with parent title",
+      });
+    }
+  }
+
+  // Check parenthesized movie years only after episode notation. A release
+  // such as "The Westies (2026) - S01E01 ..." is an episode, not a movie.
+  const parenthesizedMovie = base.match(/^(.*?)\s*\(((?:19|20|21)\d{2})\)(?:\s+.*)?$/);
+  if (parenthesizedMovie) {
+    const title = cleanTitle(parenthesizedMovie[1]);
+    if (title) {
+      return result(sourceBasename, extension, {
+        status: "matched",
+        kind: "movie",
+        title,
+        year: Number(parenthesizedMovie[2]),
+        confidence: 0.98,
+        reason: "parenthesized movie year",
       });
     }
   }

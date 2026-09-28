@@ -1049,3 +1049,102 @@ groups were `REMOTE_MISSING`, and no 2160p version entered REMOTE. Acquisition
 remained disabled by policy, so no Seerr request was generated. FULL export
 remained inventory-driven: 417 manifest records and 417 deduplicated magnet
 lines, including identity-independent provider items.
+
+## 37. Media Server Independence
+
+### Dependency assessment
+
+Plex and Jellyfin are not structural dependencies of the Version Manager.
+`enrichVersionMetadata()` loads them as optional catalogs. Their contributions
+are limited to candidate matching by external ID, path or structured title /
+season / episode metadata, plus enrichment and confidence evidence. The
+Version Group key and profile engine consume the normalized fingerprint
+identity and verified media attributes; they do not call Plex or Jellyfin.
+
+The filename/path parser and TMDb service remain usable when both catalogs are
+unavailable. With neither media server nor TMDb, the pipeline degrades to
+filename/path identity, `fallback`/`uncertain` status and `REVIEW` rather than
+crashing. A regression test now covers this no-catalog path.
+
+The assessment found one deterministic parser coupling that Plex had been
+masking: the parenthesized movie-year rule ran before the season/episode rule.
+`The Westies (2026) - S01E01 ...` was therefore initially classified as a
+movie without Plex path mapping. The safe fix gives season/episode notation
+precedence and adds a regression test. No confidence threshold or fuzzy
+matching rule was changed.
+
+### Live comparison
+
+The requested historical baseline is retained below. Because the live
+AllDebrid file tree now exposed 735 fingerprints rather than 731, a paired
+post-fix control was also run against the same inventory for an apples-to-apples
+comparison.
+
+| Metric | Historical Plex + TMDb | Paired Plex + TMDb | Paired TMDb-only | Delta TMDb-only |
+|---|---:|---:|---:|---:|
+| Provider items / completed | 417 / 404 | 417 / 404 | 417 / 404 | 0 / 0 |
+| Fingerprints | 731 | 735 | 735 | 0 |
+| Version Groups | 616 | 618 | 615 | -3 |
+| Multiversion groups | 80 | 90 | 92 | +2 |
+| Resolved | 602 | 620 | 576 | -44 |
+| Fallback | 88 | 70 | 103 | +33 |
+| Uncertain | 45 | 45 | 56 | +11 |
+| Conflict | 0 | 0 | 0 | 0 |
+| Original language known | 420 | 438 | 576 | +138 |
+| TMDb matched | 420 | 438 | 576 | +138 |
+| REMOTE 1080p | 334 | 338 | 336 | -2 |
+| REMOTE_MISSING | 288 | 280 | 278 | -2 |
+| REMOTE 2160p | 0 | 0 | 0 | 0 |
+| FULL export items / unique magnets | 417 / 417 | 417 / 417 | 417 / 417 | 0 / 0 |
+
+Paired Plex control statistics were 553 identity-resolution attempts, 158
+TMDb HTTP requests, 394 cache hits, 438 TMDb matches and zero network errors.
+TMDb-only statistics were 735 attempts, 322 HTTP requests, 412 cache hits, 576
+matches, 102 not-matched results, 56 ambiguous results, zero network errors
+and one legacy `configuration_unavailable` status caused by a record without a
+usable title. The key was available in both runs and no credential was logged.
+
+Plex supplied 211 catalog entries. The paired run had 182 Plex matches and 438
+TMDb fallback matches; the TMDb-only run recovered 576 matches without Plex.
+The implementation is Plex-first, so direct Plex+TMDb concordance is not
+claimed for the same item: TMDb is intentionally skipped after a strong Plex
+match. No new conflict or cross-provider disagreement appeared.
+
+TMDb-only ID coverage was TMDb 576, IMDb 557 and TVDb 429. Original-language
+coverage was 576: English 566, Hebrew 3, Korean 2, Portuguese, Chinese,
+Spanish, Italian and another Chinese/variant code represented the remaining
+records. Real examples included `Toy Story 5` (`en`), `Diabolik` (`it`) and
+`Tehran` (`he`). `ORIGINAL` therefore remains metadata-driven and is not an
+implicit English alias.
+
+### Golden dataset comparison
+
+The post-fix golden checks showed the following stable behavior in both modes:
+
+- `The Westies` season-pack files now resolve as episode `S01E01`, `S01E02`,
+  etc., with TMDb series ID `286709`; versions of the same episode converge.
+- `Love and Monsters`, `Mayday` and `Finch` retain their TMDb movie identity,
+  multiversion grouping and PRIMARY decisions without Plex.
+- `Reacher` episode versions retain series ID `108978`, season/episode
+  separation and the same PRIMARY/REMOTE eligibility.
+- `Lucky` episode versions retain series ID `278624` and the same episode
+  grouping.
+- `Silo` episodes without a year remain `uncertain` in TMDb-only mode when
+  TMDb returns an ambiguous/no reliable candidate; Plex can enrich these via
+  library mapping. This is a bounded metadata-quality gap, not a crash or a
+  structural Plex requirement.
+
+The paired post-fix profile result was 338 REMOTE 1080p and 280 missing; the
+TMDb-only result was 336 REMOTE 1080p and 278 missing. Both modes produced zero
+REMOTE 2160p assignments. The two-count differences follow the changed
+identity eligibility, not a change to REMOTE semantics.
+
+### Final architecture and upstream implication
+
+Required core inputs are `DebridProvider`, provider item/file discovery and
+filename/path parsing. TMDb is the preferred canonical metadata provider when
+configured. Plex and Jellyfin are optional MetadataProvider adapters that can
+improve identity, path mapping, external-ID evidence and lookup efficiency;
+they do not enable the Version Manager. The only code change in this step was
+the deterministic parser precedence fix. AcquisitionAdapter, Seerr, import,
+Delete Executor and provider mutation remain out of scope.

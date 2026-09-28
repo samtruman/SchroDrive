@@ -94,6 +94,14 @@ describe("version manager metadata identity", () => {
     expect(result.identityStatus).toBe("uncertain");
   });
 
+  test("does not require Plex or Jellyfin for graceful filename fallback", () => {
+    const item = version("Independent.Movie.2020.1080p.WEB-DL.mkv");
+    const result = resolveVersionIdentity(item, []);
+    expect(result.status).toBe("not_matched");
+    expect(result.identityStatus).toBe("fallback");
+    expect(result.confidence).toBeGreaterThan(0);
+  });
+
   test("supports ORIGINAL as a language requirement using metadata, not an English assumption", () => {
     const item = version("Spirited.Away.2001.1080p.WEB-DL.ITA.JPN.mkv");
     item.fingerprint.identity.originalLanguage = "ja";
