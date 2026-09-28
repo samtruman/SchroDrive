@@ -30,6 +30,24 @@ describe("MediaServerProvider adapters", () => {
     }
   });
 
+  test("uses Jellyfin MediaBrowser authorization for catalog requests", async () => {
+    config.jellyfinUrl = "http://jellyfin.test";
+    config.jellyfinApiKey = "test-only";
+    const previousFetch = globalThis.fetch;
+    let authorization = "";
+    globalThis.fetch = (async (_input, init) => {
+      authorization = new Headers(init?.headers).get("Authorization") || "";
+      return new Response(JSON.stringify({ Items: [] }));
+    }) as typeof fetch;
+    try {
+      await new JellyfinMediaServerProvider().catalog();
+      expect(authorization).toBe('MediaBrowser Token="test-only"');
+    } finally {
+      globalThis.fetch = previousFetch;
+      Object.assign(config, original);
+    }
+  });
+
   test("distinguishes Jellyfin authentication failure and network unavailability", async () => {
     config.jellyfinUrl = "http://jellyfin.test";
     config.jellyfinApiKey = "test-only";

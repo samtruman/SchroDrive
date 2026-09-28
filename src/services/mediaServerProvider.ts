@@ -143,7 +143,7 @@ export class JellyfinMediaServerProvider implements MediaServerProvider {
   async catalog(): Promise<MediaServerCatalog> {
     if (!config.jellyfinUrl || !config.jellyfinApiKey) return { source: this.id, status: "configuration_unavailable", items: [], error: "Jellyfin URL/API key not configured" };
     const url = `${config.jellyfinUrl.replace(/\/$/, "")}/Items?Recursive=true&IncludeItemTypes=Movie,Series,Episode&Fields=ProviderIds,Path,ProductionYear,ParentIndexNumber,IndexNumber,OriginalLanguage,MediaSources&Limit=100000`;
-    const response = await requestJson(url, { headers: { "X-Emby-Token": config.jellyfinApiKey } });
+    const response = await requestJson(url, { headers: { Authorization: `MediaBrowser Token="${config.jellyfinApiKey}"` } });
     const status = catalogStatus(response);
     if (!response.data) return { source: this.id, status, items: [], error: "Jellyfin library request failed" };
     const items = (response.data.Items || []).map((item: any): MediaServerItem => {
