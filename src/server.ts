@@ -34,6 +34,7 @@ import { getBlacklistEntries, getBlacklistCount, addToBlacklist, removeFromBlack
 import { tokenRotator } from "./core/tokenRotator";
 import { decideOrganizerReview, filterOrganizerReviewsByParserStatus, listOrganizerReviewAudit, listOrganizerReviews, retryOrganizerReview, validateReviewOverride } from "./services/organizerReview";
 import { browseMountedFilesystem, FilesystemBrowserError } from "./core/filesystemBrowser";
+import { defaultVersionProfiles, evaluateVersionGroups, fingerprintTorrent } from "./services/versionManager";
 
 // ===========================================================================
 // Server Initialisation
@@ -162,6 +163,42 @@ export function startServer() {
         return summary;
       })(),
     });
+  });
+
+  // ===========================================================================
+  // Version Manager (read-only preview)
+  // ===========================================================================
+
+  /**
+   * GET /api/version-manager/status — Reports the safe initial state.
+   * The first milestone is deliberately read-only and never calls a provider
+   * delete operation.
+   */
+  app.get("/api/version-manager/status", (_req, res) => {
+    res.json({
+      ok: true,
+      enabled: false,
+      mode: "dry-run",
+      deleteExecutor: "not_implemented",
+      profiles: defaultVersionProfiles,
+    });
+  });
+
+  /**
+   * GET /api/version-manager/preview — Builds a live, read-only inventory
+   * projection and evaluates configured profiles in memory.
+   */
+  app.get("/api/version-manager/preview", async (_req, res) => {
+    try {
+      const versions = (await Promise.all(registry.configured().map(async (provider) => {
+        const torrents = await provider.listTorrents();
+        return torrents.flatMap((torrent) => fingerprintTorrent(torrent, provider.id));
+      }))).flat();
+      const groups = evaluateVersionGroups(versions);
+      res.json({ ok: true, mode: "dry-run", inventoryCount: versions.length, groupCount: groups.length, groups });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || "Version Manager preview failed" });
+    }
   });
 
   // ===========================================================================

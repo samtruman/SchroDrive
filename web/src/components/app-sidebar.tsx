@@ -13,6 +13,7 @@ import {
   Download,
   Magnet,
   ClipboardCheck,
+  Layers3,
 } from "lucide-react"
 
 import {
@@ -46,6 +47,7 @@ const navigation = [
       { name: "Search", href: "/search", icon: Search },
       { name: "Add Content", href: "/add", icon: Plus },
       { name: "Organizer Review", href: "/review", icon: ClipboardCheck },
+      { name: "Version Manager", href: "/version-manager", icon: Layers3 },
     ],
   },
   {
