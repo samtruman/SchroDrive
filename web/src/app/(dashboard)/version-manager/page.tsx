@@ -14,7 +14,7 @@ type PreviewVersion = {
     release: { source?: string }
     audio: Array<{ language: string; codec?: string }>
     probe: { status: string; tool: string }
-    identity: { tmdbId?: string; imdbId?: string; tvdbId?: string }
+    identity: { title?: string; year?: number; kind?: string; season?: number; episode?: number; originalLanguage?: string; confidence: number; resolutionStatus?: string; tmdbId?: string; imdbId?: string; tvdbId?: string; provenance?: Record<string, string>; conflicts?: Array<{ field: string; values: Array<{ value: string; source: string }> }> }
   }
   evaluations: Array<{ profileId: string; score?: number; eligible: boolean; reasons: Array<{ message: string }> }>
   reasons: Array<{ message: string }>
@@ -25,12 +25,12 @@ type Preview = {
   groupCount: number
   groups: Array<{
     id: string
-    identity: { title?: string; year?: number; confidence: number }
+    identity: { title?: string; year?: number; kind?: string; season?: number; episode?: number; originalLanguage?: string; confidence: number; resolutionStatus?: string; tmdbId?: string; imdbId?: string; tvdbId?: string; provenance?: Record<string, string>; conflicts?: Array<{ field: string; values: Array<{ value: string; source: string }> }> }
   versions: PreviewVersion[]
     remote?: { status: "SATISFIED" | "REMOTE_MISSING"; reasonCode?: string; acquisition?: { status: string } }
   }>
   probe?: { requested: number; probed: number; cacheHits: number; cacheMisses: number; unavailable: number; errors: number }
-  metadata?: { plex: number; jellyfin: number; tmdb: number; matched: number; unresolved: number }
+  metadata?: { plex: number; jellyfin: number; tmdb: number; matched: number; unresolved: number; conflicts: number; filenameFallback: number; originalLanguageResolved: number; cacheHits: number; cacheMisses: number; plexStatus: string; jellyfinStatus: string; tmdbStatus: string }
 }
 
 type Profile = { id: string; name: string; enabled: boolean; target: string; preferredResolution: string }
@@ -66,7 +66,7 @@ export default function VersionManagerPage() {
   async function saveProfiles() {
     setSaving(true)
     try {
-      const response = await fetch("/api/version-manager/status", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ profiles, policy }) })
+      const response = await fetch("/api/version-manager/profiles", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ profiles, policy }) })
       const data = await response.json()
       if (!response.ok || !data.ok) throw new Error(data.error || "Profile save failed")
       setProfiles(data.profiles)
@@ -114,9 +114,12 @@ export default function VersionManagerPage() {
         <CardHeader><CardTitle>Latest verified preview</CardTitle><CardDescription>{preview.inventoryCount} media files in {preview.groupCount} version groups.</CardDescription></CardHeader>
         <CardContent className="space-y-3">
           {preview.probe && <div className="grid gap-2 text-sm md:grid-cols-6"><span>Probed: <strong>{preview.probe.probed}</strong></span><span>Cache hit: <strong>{preview.probe.cacheHits}</strong></span><span>Cache miss: <strong>{preview.probe.cacheMisses}</strong></span><span>Unavailable: <strong>{preview.probe.unavailable}</strong></span><span>Errors: <strong>{preview.probe.errors}</strong></span><span>Metadata matched: <strong>{preview.metadata?.matched ?? 0}</strong></span></div>}
+          {preview.metadata && <div className="rounded border p-3 text-sm">Identity: <strong>{preview.metadata.matched}</strong> matched · <strong>{preview.metadata.unresolved}</strong> fallback/uncertain · <strong>{preview.metadata.conflicts}</strong> conflicts · original language <strong>{preview.metadata.originalLanguageResolved}</strong> · metadata cache {preview.metadata.cacheHits} hit / {preview.metadata.cacheMisses} miss. Plex: {preview.metadata.plexStatus}; Jellyfin: {preview.metadata.jellyfinStatus}; TMDb: {preview.metadata.tmdbStatus}.</div>}
           {policy.enableRemote && <div className="text-sm">REMOTE missing: <strong>{preview.groups.filter((group) => group.remote?.status === "REMOTE_MISSING").length}</strong> groups</div>}
           {preview.groups.slice(0, 50).map((group) => <div key={group.id} className="rounded-lg border p-4">
             <div className="mb-2 flex items-center justify-between"><div className="font-medium">{group.identity.title || "Unknown identity"}{group.identity.year ? ` (${group.identity.year})` : ""}</div><span className="text-xs text-muted-foreground">confidence {Math.round(group.identity.confidence * 100)}%</span></div>
+            <div className="mb-2 text-xs text-muted-foreground">IDs: TMDb {group.identity.tmdbId || "—"} · IMDb {group.identity.imdbId || "—"} · TVDb {group.identity.tvdbId || "—"} · original language {group.identity.originalLanguage || "—"} · {group.identity.resolutionStatus || "fallback"}</div>
+            {group.identity.conflicts && <div className="mb-2 text-xs text-amber-600">Identity conflict: {group.identity.conflicts.map((conflict) => `${conflict.field}=${conflict.values.map((value) => `${value.value} (${value.source})`).join(" vs ")}`).join("; ")}</div>}
             {group.remote?.status === "REMOTE_MISSING" && <div className="mb-2 text-sm text-amber-600">REMOTE_MISSING — no eligible verified 1080p version{group.remote.acquisition ? " · ACQUISITION_NEEDED" : " · informational only"}</div>}
             <div className="space-y-2">{group.versions.map((version) => <div key={version.id} className="rounded border p-2 text-sm"><div className="flex flex-wrap items-center gap-2"><Badge variant={version.decision === "KEEP" ? "default" : version.decision === "REVIEW" ? "secondary" : "destructive"}>{version.decision}</Badge><span>{version.fingerprint.video.resolution || "?"} {version.fingerprint.release.source || "unknown source"}</span><span className="text-muted-foreground">{version.fingerprint.video.codec || "?"} · {version.fingerprint.audio.map((audio) => audio.language).join(", ") || "unknown language"}</span><Badge variant="outline">{version.fingerprint.probe.status}</Badge></div><div className="mt-1 text-xs text-muted-foreground">{version.evaluations.map((evaluation) => `${evaluation.profileId}: ${evaluation.eligible ? evaluation.score ?? "eligible" : "ineligible"}`).join(" · ")} — {version.reasons.map((reason) => reason.message).join("; ")}</div></div>)}</div>
           </div>)}

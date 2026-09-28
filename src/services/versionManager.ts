@@ -124,6 +124,8 @@ export interface MediaFingerprint {
     originalLanguage?: string;
     confidence: number;
     source: "filename" | "provider" | "unknown";
+    resolutionStatus?: IdentityResolutionStatus;
+    conflicts?: IdentityConflict[];
     provenance?: Record<string, Provenance>;
   };
   video: {
@@ -148,6 +150,13 @@ export interface MediaFingerprint {
 }
 
 export type Provenance = "ALLDEBRID" | "FILENAME" | "FFPROBE" | "PLEX" | "JELLYFIN" | "TMDB" | "TVDB" | "IMDB" | "UNKNOWN";
+
+export type IdentityResolutionStatus = "resolved" | "fallback" | "uncertain" | "conflict";
+
+export interface IdentityConflict {
+  field: string;
+  values: Array<{ value: string; source: Provenance }>;
+}
 
 export interface VersionRecord {
   id: string;
@@ -184,6 +193,7 @@ export interface VersionGroup {
 const LANGUAGE_ALIASES: Record<string, string> = {
   ita: "ita", italian: "ita", eng: "eng", english: "eng", original: "original",
   fre: "fra", french: "fra", ger: "deu", german: "deu", spa: "spa", spanish: "spa",
+  jpn: "ja", japanese: "ja", ja: "ja", zho: "zh", chi: "zh", kor: "ko", rus: "ru",
 };
 
 function languagesFromName(name: string): string[] {
@@ -282,9 +292,12 @@ export const defaultVersionManagerPolicy: VersionManagerPolicy = {
 };
 
 function hasRequiredLanguages(version: VersionRecord, policy: LanguagePolicy): boolean {
-  const available = new Set(version.fingerprint.audio.map((stream) => stream.language));
+  const available = new Set(version.fingerprint.audio.map((stream) => LANGUAGE_ALIASES[stream.language.toLowerCase()] || stream.language.toLowerCase()));
   const required = policy.required.values.map((value) => LANGUAGE_ALIASES[value.toLowerCase()] || value.toLowerCase());
-  return policy.required.mode === "ANY" ? required.length === 0 || required.some((value) => available.has(value)) : required.every((value) => available.has(value));
+  const original = version.fingerprint.identity.originalLanguage ? LANGUAGE_ALIASES[version.fingerprint.identity.originalLanguage.toLowerCase()] || version.fingerprint.identity.originalLanguage.toLowerCase() : undefined;
+  const hasOriginal = Boolean(original && available.has(original));
+  const matches = (value: string) => value === "original" ? hasOriginal : available.has(value);
+  return policy.required.mode === "ANY" ? required.length === 0 || required.some(matches) : required.every(matches);
 }
 
 function rank(value: string | undefined, order: string[]): number {

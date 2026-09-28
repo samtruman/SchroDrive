@@ -790,3 +790,38 @@ The policy is persisted in `version_manager_policy`, exposed by the status API,
 and configurable in `/version-manager`. The profile engine remains target-based
 and can support additional slots in future; PRIMARY/REMOTE are not used as the
 core data model.
+
+## 29. Identity and metadata resolution milestone
+
+The Version Manager identity pipeline keeps the filename parser as a
+provider-agnostic fallback, then resolves metadata in this order:
+
+1. provider IDs already present in the fingerprint;
+2. Plex GUID/provider IDs, path and structured movie/series/season/episode
+   identity;
+3. Jellyfin `ProviderIds`, path and structured identity;
+4. TMDb title/year lookup when configured;
+5. the original filename/path identity with an explicit fallback status.
+
+The normalized identity records `resolutionStatus` (`resolved`, `fallback`,
+`uncertain`, `conflict`), per-field provenance, confidence, original language,
+and provider-ID conflicts. Plex/Jellyfin/TMDb states remain distinguishable as
+matched, not matched, ambiguous, unavailable, or configuration unavailable;
+an empty result is not treated as proof that the library is empty.
+Episodes retain series identity plus season/episode, so different episodes do
+not enter the same Version Group. `original` language requirements compare
+metadata `originalLanguage` with normalized audio language codes rather than
+assuming English.
+
+TMDb resolutions use the persistent `version_manager_metadata_cache` table,
+with provider/query identity, metadata, timestamps, a one-day TTL, and explicit
+invalidation. FFprobe remains independently cached in
+`version_manager_probe_cache`. This milestone performs no provider, media file,
+symlink, Organizer, repair, or delete operation.
+
+Tests cover certain IDs, title/year fallback, homonyms, Plex GUIDs, Jellyfin
+ProviderIds, conflicting IDs, series episodes and alternate versions,
+unresolved identities, original-language policy, and metadata cache
+hit/invalidation behavior. Live library validation was intentionally not run:
+the previously assessed Organizer incident still requires a human remediation
+decision, and no temporary runtime was started.

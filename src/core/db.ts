@@ -239,6 +239,14 @@ function runMigrations(database: Database): void {
       probed_at TEXT NOT NULL,
       status TEXT NOT NULL
     )`,
+    `CREATE TABLE IF NOT EXISTS version_manager_metadata_cache (
+      cache_key TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      metadata_json TEXT NOT NULL,
+      status TEXT NOT NULL,
+      fetched_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    )`,
   ];
 
   for (const sql of migrations) {
