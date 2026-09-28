@@ -34,10 +34,10 @@ async function requestWithRetry<T>(request: () => Promise<T>, options: TmdbReque
   let lastError: unknown;
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
-      return await Promise.race([
-        request(),
-        new Promise<T>((_, reject) => setTimeout(() => reject(new Error("TMDb request timed out")), timeoutMs)),
-      ]);
+      return await new Promise<T>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("TMDb request timed out")), timeoutMs);
+        request().then(resolve, reject).finally(() => clearTimeout(timer));
+      });
     } catch (error) {
       lastError = error;
       if (attempt < retries) await new Promise((resolve) => setTimeout(resolve, backoffMs * 2 ** attempt));

@@ -31,10 +31,10 @@ function hash(value: string): string {
 }
 
 function timeout<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
-  return Promise.race([
-    promise,
-    new Promise<T>((_, reject) => setTimeout(() => reject(new Error("TMDB_REQUEST_TIMEOUT")), milliseconds)),
-  ]);
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("TMDB_REQUEST_TIMEOUT")), milliseconds);
+    promise.then(resolve, reject).finally(() => clearTimeout(timer));
+  });
 }
 
 function loadCheckpoint(): Checkpoint {
