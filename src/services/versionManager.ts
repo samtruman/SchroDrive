@@ -1,5 +1,6 @@
-import type { TorrentInfo } from "../providers";
+import type { RecoverabilityEvidence, TorrentInfo } from "../providers";
 import { normalizeMediaTitle, parseMediaFilename } from "./mediaParser";
+import { evaluateRecoverability } from "./migrationExporter";
 import { createHash } from "node:crypto";
 
 export type VersionDecision = "KEEP" | "DELETE_CANDIDATE" | "REVIEW";
@@ -144,6 +145,7 @@ export interface MediaFingerprint {
     imdbId?: string;
     tvdbId?: string;
     title?: string;
+    originalTitle?: string;
     normalizedTitle?: string;
     year?: number;
     kind?: "movie" | "episode" | "unknown";
@@ -152,7 +154,7 @@ export interface MediaFingerprint {
     episodeEnd?: number;
     originalLanguage?: string;
     confidence: number;
-    source: "filename" | "provider" | "unknown";
+    source: "filename" | "provider" | "manual" | "unknown";
     resolutionStatus?: IdentityResolutionStatus;
     conflicts?: IdentityConflict[];
     descriptiveDisagreements?: IdentityConflict[];
@@ -175,13 +177,13 @@ export interface MediaFingerprint {
   audio: Array<{ language: string; codec?: string; channels?: number; bitrate?: number; atmos?: boolean; provenance?: Record<string, Provenance> }>;
   subtitles: Array<{ language: string; codec?: string; forced?: boolean; provenance?: Record<string, Provenance> }>;
   release: { source?: string; group?: string; provenance?: Record<string, Provenance> };
-  storage: { provider: string; torrentId: string; fileId?: string; path: string; size: number; infoHash?: string; addedAt?: string; provenance?: Record<string, Provenance> };
+  storage: { provider: string; torrentId: string; fileId?: string; path: string; size: number; infoHash?: string; addedAt?: string; recoverability?: RecoverabilityEvidence; provenance?: Record<string, Provenance> };
   probe: { status: "not_requested" | "complete" | "unavailable" | "error"; tool: "filename" | "provider" | "ffprobe"; version?: string; error?: string };
 }
 
 export type ContentIdentity = MediaFingerprint["identity"];
 
-export type Provenance = "ALLDEBRID" | "FILENAME" | "FFPROBE" | "PLEX" | "JELLYFIN" | "TMDB" | "TVDB" | "IMDB" | "UNKNOWN";
+export type Provenance = "ALLDEBRID" | "FILENAME" | "FFPROBE" | "PLEX" | "JELLYFIN" | "TMDB" | "TVDB" | "IMDB" | "MANUAL" | "UNKNOWN";
 
 export type IdentityResolutionStatus = "resolved" | "fallback" | "uncertain" | "conflict";
 
@@ -302,6 +304,7 @@ export function fingerprintTorrent(torrent: TorrentInfo, provider = "unknown"): 
     const name = (file.name || path).trim();
     const languages = languagesFromName(name);
     const audio = inferAudio(name);
+    const recoverability = evaluateRecoverability(torrent);
     return {
       id: `${provider}:${torrent.id}:${file.id}`,
       fingerprint: {
@@ -325,7 +328,7 @@ export function fingerprintTorrent(torrent: TorrentInfo, provider = "unknown"): 
         },
         audio: (languages.length > 0 ? languages : ["eng"]).map((language) => ({ language, ...audio, provenance: { language: "FILENAME", codec: "FILENAME", channels: "FILENAME", atmos: "FILENAME" } })),
         subtitles: [], release: { source: inferSource(name), group: name.match(/-([A-Za-z0-9]+)(?:\.[^.]+)?$/)?.[1], provenance: { source: "FILENAME", group: "FILENAME" } },
-        storage: { provider, torrentId: torrent.id, fileId: file.id, path, size: file.size || torrent.bytes, infoHash: torrent.infoHash || torrent.raw?.infoHash || torrent.raw?.infohash || torrent.raw?.hash, addedAt: torrent.addedAt?.toISOString(), provenance: { provider: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", torrentId: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", path: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", size: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", infoHash: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN" } },
+        storage: { provider, torrentId: torrent.id, fileId: file.id, path, size: file.size || torrent.bytes, infoHash: torrent.infoHash || torrent.raw?.infoHash || torrent.raw?.infohash || torrent.raw?.hash || torrent.raw?.hashString, recoverability, addedAt: torrent.addedAt?.toISOString(), provenance: { provider: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", torrentId: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", path: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", size: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", infoHash: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN" } },
         probe: { status: "not_requested", tool: "filename" },
       },
     };
@@ -429,14 +432,15 @@ export function evaluateVersionGroups(versions: VersionRecord[], profiles = defa
     }
     for (const version of evaluations) {
       const hasHardRequirementFailure = version.evaluations.some((evaluation) => !evaluation.eligible);
-      const recoverable = Boolean(version.fingerprint.storage.infoHash);
+      const recoverability = version.fingerprint.storage.recoverability?.status || (version.fingerprint.storage.infoHash ? "RECOVERABLE" : "UNKNOWN");
+      const recoverable = recoverability === "RECOVERABLE";
       const safeForDelete = (policy.safety?.requireRecoverableBeforeDelete ?? true) ? recoverable : true;
       const hasSurvivingKeep = evaluations.some((candidate) => candidate.decision === "KEEP");
       if (version.decision === "REVIEW" && !hasHardRequirementFailure && version.fingerprint.identity.confidence >= 0.65 && evaluations.length > 1 && hasSurvivingKeep && safeForDelete) {
         version.decision = "DELETE_CANDIDATE";
         version.reasons.push({ code: "no_profile_slot", message: "Does not win an enabled profile in this version group", facts: { groupId: id } });
       } else if (version.decision === "REVIEW") {
-        if (!safeForDelete && version.fingerprint.identity.confidence >= 0.65 && !hasHardRequirementFailure) version.reasons.push({ code: "recoverability_required", message: "Delete preview requires a recoverable provider item", facts: { infoHashAvailable: recoverable } });
+        if (!safeForDelete && version.fingerprint.identity.confidence >= 0.65 && !hasHardRequirementFailure) version.reasons.push({ code: recoverability === "NOT_RECOVERABLE" ? "recoverability_required" : "recoverability_unknown", message: recoverability === "NOT_RECOVERABLE" ? "Delete preview requires a recoverable provider item" : "Recoverability could not be established for this provider item", facts: { recoverabilityStatus: recoverability, infoHashAvailable: recoverable } });
         version.reasons.push({
           code: hasHardRequirementFailure ? "hard_requirement_failed" : "identity_uncertain",
           message: hasHardRequirementFailure ? "A profile hard requirement failed; operator review is required" : "Identity confidence is insufficient for an automatic candidate decision",

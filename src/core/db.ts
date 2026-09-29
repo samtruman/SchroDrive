@@ -219,6 +219,11 @@ function runMigrations(database: Database): void {
       policy_json TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )`,
+    `CREATE TABLE IF NOT EXISTS version_manager_identity_overrides (
+      identity_key TEXT PRIMARY KEY,
+      override_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
     `CREATE TABLE IF NOT EXISTS version_manager_preview_audit (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       policy_hash TEXT NOT NULL,

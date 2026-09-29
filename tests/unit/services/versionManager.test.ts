@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { TorrentInfo } from "../../../src/providers";
 import { evaluateRule, evaluateVersionGroups, fingerprintTorrent, validateRule, type VersionManagerPolicy, type VersionProfile } from "../../../src/services/versionManager";
+import { applyManualIdentityOverrides, clearManualIdentityOverride, saveManualIdentityOverride } from "../../../src/services/manualIdentity";
 
 const profile = (overrides: Partial<VersionProfile> = {}): VersionProfile => ({
   id: "primary", name: "PRIMARY", enabled: true, target: "QUALITY", preferredResolution: "2160p",
@@ -158,7 +159,20 @@ describe("version manager", () => {
     first.fingerprint.storage.infoHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const group = evaluateVersionGroups([first, second], [profile()], { enableRemote: false, acquireMissingRemote: false })[0];
     expect(group.versions.some((version) => version.decision === "DELETE_CANDIDATE")).toBe(false);
+    expect(group.versions.find((version) => version.fingerprint.storage.infoHash)?.reasons.some((reason) => reason.code.startsWith("recoverability_"))).toBe(false);
+    expect(group.versions.some((version) => version.reasons.some((reason) => reason.code === "recoverability_unknown"))).toBe(true);
+  });
+
+  test("distinguishes known non-recoverable from unknown while keeping both fail-closed", () => {
+    const winner = fingerprintTorrent(torrent("Known.2024.2160p.REMUX.mkv", 20_000), "alldebrid")[0];
+    const known = fingerprintTorrent(torrent("Known.2024.1080p.WEB-DL.mkv", 10_000), "alldebrid")[0];
+    const unknown = fingerprintTorrent(torrent("Known.2024.720p.WEB-DL.mkv", 8_000), "alldebrid")[0];
+    winner.fingerprint.storage.infoHash = "b".repeat(40);
+    known.fingerprint.storage.recoverability = { status: "NOT_RECOVERABLE", source: "PROVIDER_CAPABILITY", reason: "fixture" };
+    const group = evaluateVersionGroups([winner, known, unknown], [profile({ languagePolicy: { required: { values: [], mode: "ALL" }, preferred: [], original: false } })])[0];
     expect(group.versions.some((version) => version.reasons.some((reason) => reason.code === "recoverability_required"))).toBe(true);
+    expect(group.versions.some((version) => version.reasons.some((reason) => reason.code === "recoverability_unknown"))).toBe(true);
+    expect(group.versions.some((version) => version.decision === "DELETE_CANDIDATE")).toBe(false);
   });
 
   test("records profile ownership when one version wins multiple profiles", () => {
@@ -167,5 +181,18 @@ describe("version manager", () => {
     const [group] = evaluateVersionGroups(fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.ITA.mkv", 10_000), "alldebrid"), [primary, remote], remotePolicy);
     const kept = group.versions.find((version) => version.decision === "KEEP");
     expect(kept?.satisfiesProfiles).toEqual(["primary", "remote"]);
+  });
+
+  test("applies the exact manual TMDb identity before grouping and preserves safety blockers", () => {
+    const versions = fingerprintTorrent(torrent("Ambiguous.Release.2024.1080p.WEB-DL.ITA.mkv", 10_000), "alldebrid");
+    const original = versions[0].fingerprint.identity;
+    saveManualIdentityOverride(original, { tmdbId: "4242", title: "Canonical Film", originalTitle: "Canonical Original", year: 2024, kind: "movie", originalLanguage: "ita" });
+    const applied = applyManualIdentityOverrides(versions);
+    expect(applied[0].fingerprint.identity.tmdbId).toBe("4242");
+    expect(applied[0].fingerprint.identity.title).toBe("Canonical Film");
+    expect(applied[0].fingerprint.identity.originalTitle).toBe("Canonical Original");
+    expect(applied[0].fingerprint.identity.source).toBe("manual");
+    expect(applied[0].fingerprint.identity.provenance?.tmdbId).toBe("MANUAL");
+    clearManualIdentityOverride(original);
   });
 });

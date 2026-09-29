@@ -1,8 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import type { TorrentInfo } from "../../../src/providers";
 import { fingerprintTorrent, evaluateVersionGroups, defaultVersionProfiles } from "../../../src/services/versionManager";
-import { exportMigrationLibrary } from "../../../src/services/migrationExporter";
-import { isRecoverable } from "../../../src/services/migrationExporter";
+import { evaluateRecoverability, exportMigrationLibrary, isRecoverable, resolveProviderItemRecoverability } from "../../../src/services/migrationExporter";
 
 function item(id: string, name: string, files: TorrentInfo["files"], extra: Partial<TorrentInfo> = {}): TorrentInfo {
   return { id, name, status: "finished", progress: 100, bytes: 100, files, ...extra };
@@ -56,6 +55,27 @@ describe("migration exporter", () => {
   test("recoverability requires a canonical magnet or infohash", () => {
     expect(isRecoverable(item("recoverable", "x", [], { infoHash: "1".repeat(40) }))).toBe(true);
     expect(isRecoverable(item("not-recoverable", "x", []))).toBe(false);
+    expect(evaluateRecoverability(item("unknown", "x", [])).status).toBe("UNKNOWN");
+    expect(evaluateRecoverability(item("raw", "x", [], { raw: { hashString: "2".repeat(40) } })).status).toBe("RECOVERABLE");
+    expect(evaluateRecoverability(item("magnet", "x", [], { magnetUri: "magnet:?xt=urn:btih:" + "3".repeat(40) })).status).toBe("RECOVERABLE");
+    expect(evaluateRecoverability(item("explicit", "x", [], { raw: { recoverable: false } })).status).toBe("NOT_RECOVERABLE");
+  });
+
+  test("resolves provider recoverability once and shares it across multifile versions", async () => {
+    let lookups = 0;
+    const provider = { id: "fixture", getInfoHash: async () => { lookups++; return "4".repeat(40); } } as any;
+    const pack = item("pack", "Pack", [
+      { id: "one", name: "Pack.S01E01.mkv", path: "Pack.S01E01.mkv", size: 1, selected: true },
+      { id: "two", name: "Pack.S01E02.mkv", path: "Pack.S01E02.mkv", size: 1, selected: true },
+    ]);
+    const cache = new Map();
+    await resolveProviderItemRecoverability(pack, provider, cache);
+    await resolveProviderItemRecoverability(pack, provider, cache);
+    const versions = fingerprintTorrent(pack, "fixture");
+    expect(lookups).toBe(1);
+    expect(versions).toHaveLength(2);
+    expect(versions.every((version) => version.fingerprint.storage.recoverability?.status === "RECOVERABLE")).toBe(true);
+    expect(versions.every((version) => version.fingerprint.storage.recoverability?.source === "PROVIDER_LOOKUP")).toBe(true);
   });
 
   test("manifest output contains no local file path or credential fields", () => {

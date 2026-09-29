@@ -52,6 +52,120 @@ function ErrorBox({ error }: { error?: string }) {
     </div>
   ) : null;
 }
+
+function IdentityResolver({
+  reviewId,
+  identity,
+  initialQuery,
+  initialType,
+  initialYear,
+  existingOverride,
+  onSaved,
+  actionLabel,
+}: {
+  reviewId?: string;
+  identity?: Record<string, unknown>;
+  initialQuery?: string;
+  initialType?: "movie" | "tv";
+  initialYear?: number;
+  existingOverride?: Record<string, unknown>;
+  onSaved?: () => void;
+  actionLabel?: string;
+}) {
+  const [query, setQuery] = useState(initialQuery || "");
+  const [type, setType] = useState<"movie" | "tv">(initialType || "movie");
+  const [year, setYear] = useState(initialYear ? String(initialYear) : "");
+  const [results, setResults] = useState<any[]>([]);
+  const [selected, setSelected] = useState<any>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [open, setOpen] = useState(Boolean(existingOverride));
+
+  async function search() {
+    if (!query.trim()) return;
+    setBusy(true); setMessage("");
+    try {
+      const params = new URLSearchParams({ query: query.trim(), type });
+      if (year.trim()) params.set("year", year.trim());
+      const response = await fetch(`/api/version-manager/identity/search?${params}`, { cache: "no-store" });
+      const body = await response.json();
+      if (!response.ok || !body.ok) throw new Error(body.error || "TMDb search failed");
+      setResults(body.results || []);
+    } catch (error: any) { setMessage(error.message || "TMDb search failed"); }
+    finally { setBusy(false); }
+  }
+
+  async function confirm() {
+    if (!selected || (!reviewId && !identity)) return;
+    setBusy(true); setMessage("");
+    try {
+      const override = {
+        title: selected.title, originalTitle: selected.originalTitle, year: selected.year,
+        kind: selected.mediaType === "movie" ? "movie" : "episode", tmdbId: selected.tmdbId,
+        imdbId: selected.imdbId, tvdbId: selected.tvdbId, originalLanguage: selected.originalLanguage,
+      };
+      const response = await fetch(reviewId ? `/api/organizer/review/${encodeURIComponent(reviewId)}` : "/api/version-manager/identity/override", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify(reviewId ? { decision: "accepted", override } : { identity, override }),
+      });
+      const body = await response.json();
+      if (!response.ok || !body.ok) throw new Error(body.error || "Unable to save identity match");
+      let evaluation = body;
+      if (reviewId && identity) {
+        const reevaluate = await fetch("/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ identity, override }) });
+        evaluation = await reevaluate.json();
+        if (!reevaluate.ok || !evaluation.ok) throw new Error(evaluation.error || "Unable to reevaluate identity");
+      }
+      setMessage(evaluation.reevaluated ? "Manual match saved and policy reevaluated." : "Manual match saved; it will be applied on the next cached evaluation.");
+      onSaved?.();
+    } catch (error: any) { setMessage(error.message || "Unable to save identity match"); }
+    finally { setBusy(false); }
+  }
+
+  async function clearMatch() {
+    if (!reviewId && !identity) return;
+    setBusy(true); setMessage("");
+    try {
+      const response = await fetch(reviewId ? `/api/organizer/review/${encodeURIComponent(reviewId)}` : "/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(reviewId ? { action: "clear-match" } : { action: "clear", identity }) });
+      const body = await response.json();
+      if (!response.ok || !body.ok) throw new Error(body.error || "Unable to clear manual match");
+      let evaluation = body;
+      if (reviewId && identity) {
+        const reevaluate = await fetch("/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "clear", identity }) });
+        evaluation = await reevaluate.json();
+        if (!reevaluate.ok || !evaluation.ok) throw new Error(evaluation.error || "Unable to reevaluate identity");
+      }
+      setMessage(evaluation.reevaluated ? "Manual match cleared and policy reevaluated." : "Manual match cleared; automatic resolver will be used on the next evaluation.");
+      onSaved?.();
+    } catch (error: any) { setMessage(error.message || "Unable to clear manual match"); }
+    finally { setBusy(false); }
+  }
+
+  return <div className="space-y-3">
+    {!open ? <Button size="sm" onClick={() => setOpen(true)}>{actionLabel || (existingOverride ? "Change Match" : "Resolve Identity")}</Button> : <div className="space-y-3 rounded border p-3">
+      <p className="text-sm font-medium">{actionLabel || (existingOverride ? "Change Match" : "Resolve Identity")}</p>
+    <div className="flex flex-wrap items-center gap-2">
+      <Input className="min-w-48 flex-1" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search TMDb title…" />
+      <select className="rounded border bg-background p-2 text-sm" value={type} onChange={(event) => setType(event.target.value as "movie" | "tv")}>
+        <option value="movie">Movie</option><option value="tv">TV</option>
+      </select>
+      <Input className="w-24" value={year} onChange={(event) => setYear(event.target.value)} placeholder="Year" inputMode="numeric" />
+      <Button size="sm" variant="outline" onClick={() => void search()} disabled={busy || !query.trim()}><Search className="mr-2 h-4 w-4" />Search</Button>
+    </div>
+    {message && <p className="text-sm text-muted-foreground">{message}</p>}
+    {results.length > 0 && <div className="space-y-2">
+      {results.map((candidate) => <button type="button" key={`${candidate.mediaType}:${candidate.tmdbId}`} onClick={() => setSelected(candidate)} className={`block w-full rounded border p-3 text-left text-sm ${selected?.tmdbId === candidate.tmdbId ? "border-primary bg-primary/5" : "hover:border-primary/50"}`}>
+        <div className="flex flex-wrap items-center justify-between gap-2"><strong>{candidate.title}</strong><Badge variant="outline">TMDb {candidate.tmdbId}</Badge></div>
+        <p className="text-muted-foreground">{candidate.originalTitle || "Original title unavailable"} · {candidate.mediaType.toUpperCase()} · {candidate.releaseDate || "Date unknown"} · {candidate.originalLanguage || "language unknown"}</p>
+        <p className="text-xs text-muted-foreground">IMDb: {candidate.imdbId || "—"} · TVDb: {candidate.tvdbId || "—"}</p>
+        {candidate.overview && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{candidate.overview}</p>}
+      </button>)}
+      <Button size="sm" onClick={() => void confirm()} disabled={busy || !selected || (!reviewId && !identity)}>Confirm manual match</Button>
+      {existingOverride && <Button size="sm" variant="outline" onClick={() => void clearMatch()} disabled={busy}>Clear manual match</Button>}
+    </div>}
+    </div>}
+  </div>;
+}
 function Stat({
   label,
   value,
@@ -101,7 +215,7 @@ function useJson<T>(url: string, enabled = true) {
   return { data, loading, error, reload: load };
 }
 
-function SectionNav({ view }: { view: View }) {
+function SectionNav({ view, reviewCount }: { view: View; reviewCount?: number }) {
   const links = [
     ["Overview", "/media-manager"],
     ["Library", "/media-manager/library"],
@@ -124,7 +238,12 @@ function SectionNav({ view }: { view: View }) {
           }
           size="sm"
         >
-          <Link href={href}>{label}</Link>
+          <Link href={href}>
+            {label}
+            {label === "Library" && reviewCount !== undefined && reviewCount > 0 && (
+              <Badge className="ml-2" variant="destructive">{reviewCount}</Badge>
+            )}
+          </Link>
         </Button>
       ))}
     </nav>
@@ -134,14 +253,16 @@ function Header({
   view,
   title,
   description,
+  reviewCount,
 }: {
   view: View;
   title: string;
   description: string;
+  reviewCount?: number;
 }) {
   return (
     <>
-      <SectionNav view={view} />
+      <SectionNav view={view} reviewCount={reviewCount} />
       <div>
         <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
         <p className="mt-1 text-sm text-muted-foreground">{description}</p>
@@ -150,9 +271,12 @@ function Header({
   );
 }
 
-function DetailPanel({ item, onClose }: { item: any; onClose: () => void }) {
-  const identity = item.identity || item.contentIdentity || {};
+function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; onClose: () => void; onReviewAction?: (id: string, body: Record<string, unknown>) => void; onSaved?: () => void }) {
+  const review = item.review || (item.parsed ? item : undefined);
+  const identity = item.identity || item.contentIdentity || (review ? { title: review.parsed?.title, year: review.parsed?.year, kind: review.parsed?.kind, confidence: review.parsed?.confidence, source: review.override ? "manual" : "unknown" } : {});
   const versions = item.versions || item.existingVersions || [];
+  const reviewStatus = review?.parsed?.status;
+  const identityAction = review?.override ? "Change Match" : reviewStatus === "ambiguous" || reviewStatus === "unmatched" || reviewStatus === "fallback" || reviewStatus === "conflict" ? "Resolve Identity" : "Change Match";
   return (
     <Card className="border-primary/40">
       <CardHeader className="flex flex-row items-start justify-between">
@@ -193,6 +317,9 @@ function DetailPanel({ item, onClose }: { item: any; onClose: () => void }) {
               {identity.provenance ? JSON.stringify(identity.provenance) : "—"}
             </p>
           </dl>
+          {review && <div className="mt-4 rounded border bg-muted/20 p-3"><h3 className="mb-2 font-semibold">Detected identity</h3><p><b>Title:</b> {review.parsed?.title || "—"}</p><p><b>Type:</b> {review.parsed?.kind || "—"}</p><p><b>Status:</b> {review.parsed?.status || "—"}</p><p><b>Confidence:</b> {review.parsed?.confidence ?? "—"}</p><p><b>Reason:</b> {review.parsed?.reason || "—"}</p></div>}
+          {(identity.title || item.title) && <div className="mt-4"><h3 className="mb-2 font-semibold">Identity actions</h3><IdentityResolver reviewId={item.reviewId || review?.id} identity={{ title: identity.title || item.title, year: identity.year, kind: identity.kind, mediaType: identity.mediaType, tmdbId: identity.tmdbId }} initialQuery={identity.title || item.title} initialType={identity.kind === "episode" || identity.mediaType === "tv" ? "tv" : "movie"} initialYear={identity.year} existingOverride={item.override || review?.override || (identity.source === "manual" ? { tmdbId: identity.tmdbId } : undefined)} actionLabel={identityAction} onSaved={onSaved} /></div>}
+          {review && onReviewAction && <div className="mt-4 flex flex-wrap gap-2"><Button size="sm" variant="secondary" onClick={() => onReviewAction(review.id, { decision: "accepted" })}>Accept as detected</Button><Button size="sm" variant="outline" onClick={() => onReviewAction(review.id, { action: "retry" })}>Retry / Resume</Button><Button size="sm" variant="outline" onClick={() => onReviewAction(review.id, { decision: "dismissed" })}>Dismiss</Button></div>}
         </section>
         <section>
           <h3 className="mb-2 font-semibold">Profiles</h3>
@@ -274,7 +401,12 @@ function DetailPanel({ item, onClose }: { item: any; onClose: () => void }) {
 function Overview() {
   const status = useJson<any>("/api/version-manager/status");
   const migration = useJson<any>("/api/version-manager/migration/state");
+  const reviewQueue = useJson<any>("/api/organizer/review?limit=200&status=pending");
   const profiles = status.data?.profiles || [];
+  const identityIssues = (reviewQueue.data?.entries || []).filter((entry: any) =>
+    entry.parsed?.status === "ambiguous" || entry.parsed?.status === "unmatched",
+  ).length;
+  const latestScan = status.data?.latestScan;
   const [scan, setScan] = useState<any>(null);
   const [scanning, setScanning] = useState(false);
   async function runScan() {
@@ -297,6 +429,7 @@ function Overview() {
         view="overview"
         title="Media Manager"
         description="Inventory, identity, versions, acquisition and recovery in one place."
+        reviewCount={identityIssues}
       />
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-4">
         <div>
@@ -335,6 +468,33 @@ function Overview() {
         />
         <Stat label="Safety" value="DRY RUN" detail="Delete disabled" />
       </div>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Needs attention</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <Link href="/media-manager/library/review?reason=identity" className="rounded-md border p-3 transition-colors hover:border-primary">
+            <p className="text-sm text-muted-foreground">Identity issues</p>
+            <p className="mt-1 text-2xl font-semibold">{reviewQueue.loading ? "—" : identityIssues}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Manual match available</p>
+          </Link>
+          <Link href="/media-manager/library/review" className="rounded-md border p-3 transition-colors hover:border-primary">
+            <p className="text-sm text-muted-foreground">Policy review</p>
+            <p className="mt-1 text-2xl font-semibold">{latestScan?.reviewCount ?? "—"}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Safety and policy blockers</p>
+          </Link>
+          <Link href="/media-manager/library/missing" className="rounded-md border p-3 transition-colors hover:border-primary">
+            <p className="text-sm text-muted-foreground">Missing</p>
+            <p className="mt-1 text-2xl font-semibold">{latestScan ? (latestScan.primaryMissing || 0) + (latestScan.remoteMissing || 0) : "—"}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Unsatisfied enabled profiles</p>
+          </Link>
+          <Link href="/media-manager/library/delete-preview" className="rounded-md border p-3 transition-colors hover:border-primary">
+            <p className="text-sm text-muted-foreground">Delete candidates</p>
+            <p className="mt-1 text-2xl font-semibold">{latestScan?.deleteCandidateCount ?? "—"}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Read-only preview</p>
+          </Link>
+        </CardContent>
+      </Card>
       <div className="grid gap-4 lg:grid-cols-3">
         <Card>
           <CardHeader>
@@ -401,8 +561,15 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const [mediaType, setMediaType] = useState("all");
   const [decision, setDecision] = useState("all");
   const [selected, setSelected] = useState<any>(null);
+  const reviewQueue = useJson<any>("/api/organizer/review?limit=200&status=pending");
+  const [identityOnly, setIdentityOnly] = useState(false);
+  const identityIssueCount = (reviewQueue.data?.entries || []).filter((entry: any) =>
+    entry.parsed?.status === "ambiguous" || entry.parsed?.status === "unmatched",
+  ).length;
   useEffect(() => {
-    setPreset(new URLSearchParams(window.location.search).get("view") || initialPreset);
+    const params = new URLSearchParams(window.location.search);
+    setPreset(params.get("view") || initialPreset);
+    setIdentityOnly(params.get("reason") === "identity");
   }, [pathname, initialPreset]);
   const preview = useJson<any>(
     "/api/version-manager/preview",
@@ -487,6 +654,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
         view="library"
         title="Library"
         description="One operational view for content, missing profiles and review work."
+        reviewCount={identityIssueCount}
       />
       <div className="flex flex-wrap gap-2">
         <Button
@@ -707,6 +875,22 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       )}
       {preset === "review" && (
         <>
+          <Card>
+            <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+              <div>
+                <p className="font-semibold">Review queue</p>
+                <p className="text-sm text-muted-foreground">
+                  {identityOnly
+                    ? "Identity issues with a manual Resolve Identity action."
+                    : "Organizer identity issues and other operator review work."}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 text-sm">
+                <span>Identity issues</span>
+                <Badge variant={identityIssueCount > 0 ? "destructive" : "outline"}>{identityIssueCount}</Badge>
+              </div>
+            </CardContent>
+          </Card>
           <ErrorBox error={reviewError} />
           {!review ? (
             <p className="text-sm text-muted-foreground">
@@ -714,7 +898,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
             </p>
           ) : (
             <div className="space-y-3">
-              {(review.entries || []).map((entry: any) => (
+              {(review.entries || []).filter((entry: any) => !identityOnly || entry.parsed?.status === "ambiguous" || entry.parsed?.status === "unmatched").map((entry: any) => (
                 <Card key={entry.id}>
                   <CardContent className="space-y-3 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -734,6 +918,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                       {entry.parsed?.title || "No title"} ·{" "}
                       {entry.parsed?.reason || "Review required"}
                     </p>
+                    <IdentityResolver reviewId={entry.id} identity={{ title: entry.parsed?.title, year: entry.parsed?.year, kind: entry.parsed?.kind === "episode" ? "episode" : "movie" }} initialQuery={entry.parsed?.title} initialType={entry.parsed?.kind === "episode" ? "tv" : "movie"} initialYear={entry.parsed?.year} existingOverride={entry.override} actionLabel={entry.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />
                     <div className="flex flex-wrap gap-2">
                       <Button
                         size="sm"
@@ -742,7 +927,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                         }
                       >
                         <Check className="mr-2 h-4 w-4" />
-                        Accept
+                        Accept as detected
                       </Button>
                       <Button
                         size="sm"
@@ -764,22 +949,22 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                         <RefreshCw className="mr-2 h-4 w-4" />
                         Retry / Resume
                       </Button>
-                      <Button size="sm" variant="ghost" asChild>
-                        <Link href={`/review/${encodeURIComponent(entry.id)}`}>
-                          <ExternalLink className="mr-2 h-4 w-4" />
-                          Details
-                        </Link>
+                      <Button size="sm" variant="ghost" onClick={() => setSelected(entry)}>
+                        <ExternalLink className="mr-2 h-4 w-4" />Details
                       </Button>
                     </div>
                   </CardContent>
                 </Card>
               ))}
+              {review.entries && review.entries.filter((entry: any) => !identityOnly || entry.parsed?.status === "ambiguous" || entry.parsed?.status === "unmatched").length === 0 && (
+                <Card><CardContent className="p-6 text-sm text-muted-foreground">No identity issues require manual resolution.</CardContent></Card>
+              )}
             </div>
           )}
         </>
       )}
       {selected && (
-        <DetailPanel item={selected} onClose={() => setSelected(null)} />
+        <DetailPanel item={selected} onClose={() => setSelected(null)} onReviewAction={reviewAction} onSaved={() => { void loadReview(); setSelected(null); }} />
       )}
     </div>
   );

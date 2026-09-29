@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { getDb } from "../../../src/core/db";
 import {
   clearOrganizerReviews,
+  clearOrganizerReviewOverride,
   decideOrganizerReview,
   getOrganizerReview,
   listOrganizerReviewAudit,
@@ -59,6 +60,18 @@ describe("Organizer review queue", () => {
     expect(() => validateReviewOverride({ title: "" })).toThrow();
     expect(() => validateReviewOverride({ unexpected: true })).toThrow();
     expect(validateReviewOverride(undefined)).toBeUndefined();
+    expect(validateReviewOverride({ title: "Film", tmdbId: "123", imdbId: "tt123", originalTitle: "Original Film" })).toEqual({ title: "Film", tmdbId: "123", imdbId: "tt123", originalTitle: "Original Film" });
+  });
+
+  test("clears a persisted manual identity match and returns it to automatic review", () => {
+    clearOrganizerReviews();
+    const entry = recordOrganizerReview("/mount/Clear.mkv", parsed);
+    decideOrganizerReview(entry.id, "accepted", { title: "Matched", tmdbId: "123" });
+    const cleared = clearOrganizerReviewOverride(entry.id);
+    expect(cleared?.decision).toBe("pending");
+    expect(cleared?.override).toBeUndefined();
+    expect(listOrganizerReviewAudit(entry.id).at(-1)?.action).toBe("cleared_override");
+    clearOrganizerReviews();
   });
 
   test("retrieves an accepted override by source path", () => {

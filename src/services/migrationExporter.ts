@@ -1,4 +1,4 @@
-import type { TorrentInfo } from "../providers";
+import type { DebridProvider, RecoverabilityEvidence, TorrentInfo } from "../providers";
 import type { VersionGroup, VersionRecord } from "./versionManager";
 import { base32ToHex } from "../core/utils";
 
@@ -27,7 +27,9 @@ export interface MigrationExportItem {
   providerItemId: string;
   exportable: boolean;
   exportReason?: "MAGNET_AVAILABLE" | "INFOHASH_AVAILABLE" | "MAGNET_OR_INFOHASH_MISSING";
-  recoverability: { recoverable: boolean; basis: "MAGNET" | "INFOHASH" | "NONE" };
+  recoverability: { recoverable: boolean; status: RecoverabilityEvidence["status"]; basis: "MAGNET" | "INFOHASH" | "NONE" };
+  recoverabilityStatus?: RecoverabilityEvidence["status"];
+  recoverabilitySource?: RecoverabilityEvidence["source"];
   magnetUri?: string;
   infoHash?: string;
   originalName: string;
@@ -64,6 +66,32 @@ export interface MigrationExportResult {
 export function canonicalInfoHash(value?: string): string | undefined {
   const hash = value?.trim().replace(/^0x/i, "");
   return hash && /^[a-f0-9]{40}$/i.test(hash) ? hash.toLowerCase() : undefined;
+}
+
+export function evaluateRecoverability(item: TorrentInfo): RecoverabilityEvidence {
+  if (item.recoverability) return item.recoverability;
+  const directHash = canonicalInfoHash(item.infoHash || item.raw?.infoHash || item.raw?.infohash || item.raw?.hash || item.raw?.hashString || item.raw?.data?.hash || item.raw?.data?.hashString);
+  if (directHash) return { status: "RECOVERABLE", source: "INFOHASH", infoHash: directHash };
+  const magnet = item.magnetUri || rawString(item, ["magnet", "magnetUri", "uri", "url"]);
+  if (magnet?.startsWith("magnet:?") && /btih:[^&]+/i.test(magnet)) return { status: "RECOVERABLE", source: "MAGNET" };
+  if (item.raw?.recoverable === false || item.raw?.recoverability === "NOT_RECOVERABLE") return { status: "NOT_RECOVERABLE", source: "PROVIDER_CAPABILITY", reason: "Provider item explicitly marked non-recoverable" };
+  return { status: "UNKNOWN", source: "PROVIDER_CAPABILITY", reason: "No canonical hash or magnet evidence available" };
+}
+
+export async function resolveProviderItemRecoverability(item: TorrentInfo, provider: DebridProvider, cache = new Map<string, RecoverabilityEvidence>()): Promise<RecoverabilityEvidence> {
+  const key = `${provider.id}:${item.id}`;
+  const cached = cache.get(key);
+  if (cached) { item.recoverability = cached; return cached; }
+  let evidence = evaluateRecoverability(item);
+  if (evidence.status === "UNKNOWN" && provider.getInfoHash) {
+    const infoHash = canonicalInfoHash(await provider.getInfoHash(item.id) || undefined);
+    if (infoHash) evidence = { status: "RECOVERABLE", source: "PROVIDER_LOOKUP", infoHash };
+    else evidence = { status: "UNKNOWN", source: "PROVIDER_LOOKUP", reason: "Provider lookup returned no canonical hash" };
+  }
+  cache.set(key, evidence);
+  item.recoverability = evidence;
+  if (evidence.infoHash && !item.infoHash) item.infoHash = evidence.infoHash;
+  return evidence;
 }
 
 function rawString(item: TorrentInfo, keys: string[]): string | undefined {
@@ -126,13 +154,16 @@ export function exportMigrationLibrary(inventory: TorrentInfo[], groups: Version
     return versions.some(({ version }) => slots.primary.has(version.id) || slots.remote.has(version.id));
   }).map((item): MigrationExportItem => {
     const extracted = extractMagnet(item);
+    const recoverability = evaluateRecoverability(item);
     const linked = [...byVersion.values()].filter(({ version }) => version.fingerprint.storage.torrentId === String(item.id));
     return {
       provider: item.raw?.provider || options.sourceProvider || "unknown",
       providerItemId: String(item.id),
       exportable: Boolean(extracted.magnetUri),
       exportReason: extracted.reason,
-      recoverability: { recoverable: Boolean(extracted.magnetUri), basis: extracted.infoHash ? "INFOHASH" : extracted.magnetUri ? "MAGNET" : "NONE" },
+      recoverability: { recoverable: recoverability.status === "RECOVERABLE", status: recoverability.status, basis: extracted.infoHash ? "INFOHASH" : extracted.magnetUri ? "MAGNET" : "NONE" },
+      recoverabilityStatus: recoverability.status,
+      recoverabilitySource: recoverability.source,
       magnetUri: extracted.magnetUri,
       infoHash: extracted.infoHash,
       originalName: item.filename || item.name,
@@ -150,5 +181,5 @@ export function exportMigrationLibrary(inventory: TorrentInfo[], groups: Version
 }
 
 export function isRecoverable(providerItem: TorrentInfo): boolean {
-  return Boolean(extractMagnet(providerItem).magnetUri);
+  return evaluateRecoverability(providerItem).status === "RECOVERABLE";
 }

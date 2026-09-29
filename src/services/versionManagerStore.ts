@@ -1,5 +1,5 @@
 import { getDb } from "../core/db";
-import { defaultVersionManagerPolicy, defaultVersionProfiles, validateRule, versionManagerPolicyHash, type VersionGroup, type VersionManagerPolicy, type VersionProfile } from "./versionManager";
+import { defaultVersionManagerPolicy, defaultVersionProfiles, validateRule, versionManagerPolicyHash, type VersionGroup, type VersionManagerPolicy, type VersionProfile, type VersionRecord } from "./versionManager";
 
 function normalizePolicy(policy: Partial<VersionManagerPolicy>): VersionManagerPolicy {
   return {
@@ -87,4 +87,12 @@ export function saveVersionManagerScan(groups: VersionGroup[], profiles: Version
 export function getLatestVersionManagerScan(): { id: string; groupCount: number; versionCount: number; createdAt: string } | undefined {
   const row = getDb().prepare("SELECT id, group_count, version_count, created_at FROM version_manager_scans ORDER BY created_at DESC LIMIT 1").get() as any;
   return row ? { id: row.id, groupCount: row.group_count, versionCount: row.version_count, createdAt: row.created_at } : undefined;
+}
+
+export function getLatestVersionManagerRecords(): VersionRecord[] {
+  const scan = getLatestVersionManagerScan();
+  if (!scan) return [];
+  return (getDb().prepare("SELECT item_id, fingerprint_json FROM version_manager_items WHERE scan_id = ?").all(scan.id) as any[]).flatMap((row) => {
+    try { return [{ id: row.item_id, fingerprint: JSON.parse(row.fingerprint_json) } as VersionRecord]; } catch { return []; }
+  });
 }

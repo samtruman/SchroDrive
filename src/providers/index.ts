@@ -12,6 +12,16 @@
 // Types
 // ===========================================================================
 
+export type RecoverabilityStatus = "RECOVERABLE" | "NOT_RECOVERABLE" | "UNKNOWN";
+export type RecoverabilitySource = "INFOHASH" | "MAGNET" | "PROVIDER_LOOKUP" | "PROVIDER_CAPABILITY";
+
+export interface RecoverabilityEvidence {
+  status: RecoverabilityStatus;
+  source: RecoverabilitySource;
+  infoHash?: string;
+  reason?: string;
+}
+
 /** Normalised torrent representation returned by all providers. */
 export interface TorrentInfo {
   /** Unique torrent identifier from the provider. */
@@ -36,6 +46,8 @@ export interface TorrentInfo {
   magnetUri?: string;
   /** Optional infohash when the provider exposes it. */
   infoHash?: string;
+  /** Provider-item-level restore evidence, shared by all derived media files. */
+  recoverability?: RecoverabilityEvidence;
 }
 
 /** A single file within a torrent. */

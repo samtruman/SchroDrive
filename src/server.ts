@@ -22,7 +22,7 @@ import fs from "fs";
 import path from "path";
 import { config } from "./core/config";
 import { searchIndexer, pickBestResult, getMagnet, getProviderName, isIndexerConfigured } from "./indexers/index";
-import { registry, type DebridProvider, type TorrentInfo, type DownloadInfo } from "./providers";
+import { registry, type DebridProvider, type RecoverabilityEvidence, type TorrentInfo, type DownloadInfo } from "./providers";
 import { startOverseerrPoller } from "./services/overseerr";
 import { startAutoUpdater } from "./services/autoUpdate";
 import { getConfigWithSources, saveConfigToFile, triggerRestart, isRunningInDocker, CONFIG_SCHEMA } from "./core/configApi";
@@ -32,15 +32,17 @@ import { getBridgeStatuses, refreshBridges, getExternalWebdavStatus } from "./se
 import { getPreWarmStatus } from "./services/cloudLinks/bridge";
 import { getBlacklistEntries, getBlacklistCount, addToBlacklist, removeFromBlacklist, isBlacklisted } from "./core/blacklist";
 import { tokenRotator } from "./core/tokenRotator";
-import { decideOrganizerReview, filterOrganizerReviewsByParserStatus, listOrganizerReviewAudit, listOrganizerReviews, retryOrganizerReview, validateReviewOverride } from "./services/organizerReview";
+import { clearOrganizerReviewOverride, decideOrganizerReview, filterOrganizerReviewsByParserStatus, listOrganizerReviewAudit, listOrganizerReviews, retryOrganizerReview, validateReviewOverride } from "./services/organizerReview";
 import { browseMountedFilesystem, FilesystemBrowserError } from "./core/filesystemBrowser";
-import { evaluateVersionGroups, fingerprintTorrent, validateRule, versionManagerPolicyHash } from "./services/versionManager";
+import { evaluateVersionGroups, fingerprintTorrent, validateRule, versionManagerPolicyHash, type VersionRecord } from "./services/versionManager";
 import { deriveAcquisitionNeeds } from "./services/acquisition";
 import { SeerrAcquisitionAdapter } from "./services/seerrAcquisitionAdapter";
-import { getLatestVersionManagerScan, getVersionManagerPolicy, getVersionManagerPolicyHash, getVersionProfiles, saveVersionManagerPolicy, saveVersionManagerPreviewAudit, saveVersionManagerScan, saveVersionProfiles } from "./services/versionManagerStore";
+import { getLatestVersionManagerRecords, getLatestVersionManagerScan, getVersionManagerPolicy, getVersionManagerPolicyHash, getVersionProfiles, saveVersionManagerPolicy, saveVersionManagerPreviewAudit, saveVersionManagerScan, saveVersionProfiles } from "./services/versionManagerStore";
 import { probeVersionRecords } from "./services/versionManagerProbe";
 import { enrichVersionMetadata } from "./services/versionManagerMetadata";
-import { exportMigrationLibrary, normalizeMigrationExportMode } from "./services/migrationExporter";
+import { searchTmdbCandidates } from "./services/tmdbService";
+import { applyManualIdentityOverrides, clearManualIdentityOverride, identityOverrideKey, saveManualIdentityOverride, type ManualIdentityOverride } from "./services/manualIdentity";
+import { exportMigrationLibrary, normalizeMigrationExportMode, resolveProviderItemRecoverability } from "./services/migrationExporter";
 import { analyzeMigrationImport, executeMigrationImportBulk, executeMigrationImportItem, getRecoverableManifestItem, migrationAuditOutcome } from "./services/migrationImporter";
 import { aggregateMigrationJobs, effectiveMigrationStatus } from "./services/migrationState";
 import { migrationRouteLevel, providerMigrationCapabilities } from "./services/providerMigrationCapabilities";
@@ -49,6 +51,19 @@ import { listMigrationAudit, recordAcquisitionAudit, recordMigrationAudit } from
 // ===========================================================================
 // Server Initialisation
 // ===========================================================================
+
+async function loadVersionManagerInventory(): Promise<VersionRecord[]> {
+  const resolved: VersionRecord[] = [];
+  const recoverabilityCache = new Map<string, RecoverabilityEvidence>();
+  for (const provider of registry.configured()) {
+    const torrents = await provider.listTorrents();
+    for (const torrent of torrents) {
+      await resolveProviderItemRecoverability(torrent, provider, recoverabilityCache);
+      resolved.push(...fingerprintTorrent(torrent, provider.id));
+    }
+  }
+  return resolved;
+}
 
 /**
  * Initialises and starts the Express HTTP server with all API routes,
@@ -203,15 +218,13 @@ export function startServer() {
    */
   app.get("/api/version-manager/preview", async (_req, res) => {
     try {
-      const versions = (await Promise.all(registry.configured().map(async (provider) => {
-        const torrents = await provider.listTorrents();
-        return torrents.flatMap((torrent) => fingerprintTorrent(torrent, provider.id));
-      }))).flat();
-      const probe = await probeVersionRecords(versions);
-      const metadata = await enrichVersionMetadata(versions);
+      const versions = await loadVersionManagerInventory();
+      const evaluatedVersions = applyManualIdentityOverrides(versions);
+      const probe = await probeVersionRecords(evaluatedVersions);
+      const metadata = await enrichVersionMetadata(evaluatedVersions);
       const profiles = getVersionProfiles();
       const policy = getVersionManagerPolicy();
-      const groups = evaluateVersionGroups(versions, profiles, policy);
+      const groups = evaluateVersionGroups(evaluatedVersions, profiles, policy);
       const scanId = saveVersionManagerScan(groups, profiles);
       res.json({ ok: true, mode: "dry-run", scanId, policyHash: versionManagerPolicyHash(policy), inventoryCount: versions.length, groupCount: groups.length, probe, metadata, groups });
     } catch (err: any) {
@@ -222,15 +235,13 @@ export function startServer() {
   /** Read-only policy evaluation intended for cleanup review. It never calls provider delete. */
   app.get("/api/version-manager/delete-preview", async (_req, res) => {
     try {
-      const versions = (await Promise.all(registry.configured().map(async (provider) => {
-        const torrents = await provider.listTorrents();
-        return torrents.flatMap((torrent) => fingerprintTorrent(torrent, provider.id));
-      }))).flat();
-      await probeVersionRecords(versions);
-      await enrichVersionMetadata(versions);
+      const versions = await loadVersionManagerInventory();
+      const evaluatedVersions = applyManualIdentityOverrides(versions);
+      await probeVersionRecords(evaluatedVersions);
+      await enrichVersionMetadata(evaluatedVersions);
       const profiles = getVersionProfiles();
       const policy = getVersionManagerPolicy();
-      const groups = evaluateVersionGroups(versions, profiles, policy);
+      const groups = evaluateVersionGroups(evaluatedVersions, profiles, policy);
       const versionsFlat = groups.flatMap((group) => group.versions);
       const counts = {
         contents: groups.length,
@@ -257,15 +268,13 @@ export function startServer() {
    */
   app.get("/api/version-manager/missing", async (_req, res) => {
     try {
-      const versions = (await Promise.all(registry.configured().map(async (provider) => {
-        const torrents = await provider.listTorrents();
-        return torrents.flatMap((torrent) => fingerprintTorrent(torrent, provider.id));
-      }))).flat();
-      const probe = await probeVersionRecords(versions);
-      await enrichVersionMetadata(versions);
+      const versions = await loadVersionManagerInventory();
+      const evaluatedVersions = applyManualIdentityOverrides(versions);
+      const probe = await probeVersionRecords(evaluatedVersions);
+      await enrichVersionMetadata(evaluatedVersions);
       const profiles = getVersionProfiles();
       const policy = getVersionManagerPolicy();
-      const groups = evaluateVersionGroups(versions, profiles, policy);
+      const groups = evaluateVersionGroups(evaluatedVersions, profiles, policy);
       const needs = policy.enableRemote ? deriveAcquisitionNeeds(groups, profiles, { adapterId: "seerr", acquisitionEnabled: policy.acquireMissingRemote }) : [];
       const adapter = new SeerrAcquisitionAdapter();
       const previews = await Promise.all(needs.map(async (need) => {
@@ -290,6 +299,10 @@ export function startServer() {
       const inventory = source
         ? await source.listTorrents()
         : (await Promise.all(registry.configured().map((provider) => provider.listTorrents()))).flat();
+      if (source) {
+        const recoverabilityCache = new Map<string, RecoverabilityEvidence>();
+        for (const item of inventory) await resolveProviderItemRecoverability(item, source, recoverabilityCache);
+      }
       const selectedProviderItemIds = typeof req.query.selected === "string" ? req.query.selected.split(",").map((value) => value.trim()).filter(Boolean) : undefined;
       const selectedInventory = selectedProviderItemIds ? inventory.filter((item) => selectedProviderItemIds.includes(String(item.id))) : inventory;
       const exportInventory = source?.getTorrentFileTree
@@ -539,6 +552,11 @@ export function startServer() {
 
   /** POST /api/organizer/review/:id — Records a manual review decision or safe retry. */
   app.post('/api/organizer/review/:id', (req, res) => {
+    if (req.body?.action === 'clear-match') {
+      const entry = clearOrganizerReviewOverride(String(req.params.id));
+      if (!entry) return res.status(404).json({ ok: false, error: 'Review entry not found' });
+      return res.json({ ok: true, entry });
+    }
     if (req.body?.action === 'retry') {
       const entry = retryOrganizerReview(String(req.params.id));
       if (!entry) return res.status(404).json({ ok: false, error: 'Review entry not found' });
@@ -559,6 +577,51 @@ export function startServer() {
   /** GET /api/organizer/review/:id/audit — Returns the decision history. */
   app.get('/api/organizer/review/:id/audit', (req, res) => {
     res.json({ ok: true, audit: listOrganizerReviewAudit(String(req.params.id)) });
+  });
+
+  // Persists a canonical manual identity for Content Detail records that do
+  // not have an Organizer Review, then reevaluates the latest cached scan.
+  // This is deliberately cache-only: it never starts a provider rescan.
+  app.post('/api/version-manager/identity/override', (req, res) => {
+    const identity = req.body?.identity;
+    if (!identity || typeof identity !== 'object') return res.status(400).json({ ok: false, error: 'identity is required' });
+    const identityValue = {
+      title: typeof identity.title === 'string' ? identity.title : undefined,
+      year: typeof identity.year === 'number' ? identity.year : undefined,
+      kind: identity.kind === 'episode' || identity.mediaType === 'tv' ? 'episode' : identity.kind === 'movie' || identity.mediaType === 'movie' ? 'movie' : undefined,
+      season: typeof identity.season === 'number' ? identity.season : undefined,
+      episode: typeof identity.episode === 'number' ? identity.episode : undefined,
+      tmdbId: typeof identity.tmdbId === 'string' ? identity.tmdbId : undefined,
+    } as const;
+    let override: ManualIdentityOverride | undefined;
+    try { override = validateReviewOverride(req.body?.override) as ManualIdentityOverride | undefined; }
+    catch (err: any) { return res.status(400).json({ ok: false, error: err?.message || 'Invalid manual identity' }); }
+    if (req.body?.action === 'clear') clearManualIdentityOverride(identityValue);
+    else {
+      if (!override) return res.status(400).json({ ok: false, error: 'override is required' });
+      saveManualIdentityOverride(identityValue, override);
+    }
+    const records = applyManualIdentityOverrides(getLatestVersionManagerRecords());
+    const groups = evaluateVersionGroups(records, getVersionProfiles(), getVersionManagerPolicy());
+    const key = identityOverrideKey(identityValue);
+    const affectedGroups = groups.filter((group) => identityOverrideKey(group.identity) === key || (override?.tmdbId && group.identity.tmdbId === override.tmdbId));
+    res.json({ ok: true, identity: affectedGroups[0]?.identity || identityValue, groups: affectedGroups, reevaluated: records.length > 0, readOnlyEvaluation: true });
+  });
+
+  // Read-only TMDb candidate search used by the Media Manager identity picker.
+  app.get('/api/version-manager/identity/search', async (req, res) => {
+    const query = String(req.query.query || '').trim();
+    const mediaType = req.query.type === 'tv' ? 'tv' : req.query.type === 'movie' ? 'movie' : undefined;
+    const yearValue = req.query.year === undefined || req.query.year === '' ? undefined : Number(req.query.year);
+    if (!query || query.length > 200) return res.status(400).json({ ok: false, error: 'query is required and must be at most 200 characters' });
+    if (!mediaType) return res.status(400).json({ ok: false, error: 'type must be movie or tv' });
+    if (yearValue !== undefined && (!Number.isInteger(yearValue) || yearValue < 1800 || yearValue > 2200)) return res.status(400).json({ ok: false, error: 'year is invalid' });
+    try {
+      const results = await searchTmdbCandidates(query, mediaType, yearValue);
+      res.json({ ok: true, query, mediaType, year: yearValue, results });
+    } catch (error: any) {
+      res.status(502).json({ ok: false, error: error?.message || 'TMDb search failed' });
+    }
   });
 
   /** GET /api/infringement-list/check — Checks if a name matches the blacklist. */

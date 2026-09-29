@@ -3,6 +3,7 @@
 import type { ParsedMediaIdentity } from "./mediaParser";
 import { getDb } from "../core/db";
 import { createHash } from "node:crypto";
+import { clearManualIdentityOverride, manualOverrideFromReview, saveManualIdentityOverride } from "./manualIdentity";
 
 export type ReviewDecision = "pending" | "accepted" | "dismissed";
 
@@ -19,10 +20,15 @@ export interface OrganizerReviewEntry {
 
 export interface ReviewOverride {
   title?: string;
+  originalTitle?: string;
   year?: number;
   season?: number;
   episode?: number;
   kind?: "movie" | "episode";
+  tmdbId?: string;
+  imdbId?: string;
+  tvdbId?: string;
+  originalLanguage?: string;
 }
 
 export function validateReviewOverride(value: unknown): ReviewOverride | undefined {
@@ -35,6 +41,14 @@ export function validateReviewOverride(value: unknown): ReviewOverride | undefin
       throw new Error("override.title must be a non-empty string of at most 300 characters");
     }
     result.title = input.title.trim();
+  }
+  for (const key of ["originalTitle", "tmdbId", "imdbId", "tvdbId", "originalLanguage"] as const) {
+    if (input[key] !== undefined) {
+      if (typeof input[key] !== "string" || input[key].trim().length < 1 || input[key].length > 300) {
+        throw new Error(`override.${key} must be a non-empty string of at most 300 characters`);
+      }
+      result[key] = input[key].trim();
+    }
   }
   for (const [key, min, max] of [["year", 1800, 2200], ["season", 0, 99], ["episode", 0, 9999]] as const) {
     if (input[key] !== undefined) {
@@ -125,6 +139,10 @@ export function decideOrganizerReview(
   const effectiveOverride = override || parseStoredJson<ReviewOverride>(row.override_json);
   database.prepare("UPDATE organizer_reviews SET decision = ?, override_json = ?, updated_at = ? WHERE id = ?")
     .run(decision, effectiveOverride ? JSON.stringify(effectiveOverride) : null, updatedAt, id);
+  if (decision === "accepted" && effectiveOverride) {
+    const parsed = parseStoredJson<ParsedMediaIdentity>(row.parsed_json);
+    if (parsed) saveManualIdentityOverride(parsed, manualOverrideFromReview(effectiveOverride));
+  }
   database.prepare("INSERT INTO organizer_review_audit (review_id, action, payload_json, created_at) VALUES (?, ?, ?, ?)")
     .run(id, decision, effectiveOverride ? JSON.stringify(effectiveOverride) : null, updatedAt);
   const updated: OrganizerReviewEntry = {
@@ -148,6 +166,20 @@ export function retryOrganizerReview(id: string): OrganizerReviewEntry | undefin
   if (!parsed) return undefined;
   const override = parseStoredJson<ReviewOverride>(row.override_json);
   return { id, sourcePath: row.source_path, sourceBasename: row.source_basename, parsed, decision: "pending", createdAt: row.created_at, updatedAt: now, ...(override ? { override } : {}) };
+}
+
+/** Clears a manual identity match and returns the item to automatic review. */
+export function clearOrganizerReviewOverride(id: string): OrganizerReviewEntry | undefined {
+  const database = getDb();
+  const row = database.prepare("SELECT * FROM organizer_reviews WHERE id = ?").get(id) as any;
+  if (!row) return undefined;
+  const now = new Date().toISOString();
+  database.prepare("UPDATE organizer_reviews SET decision = 'pending', override_json = NULL, updated_at = ? WHERE id = ?").run(now, id);
+  const parsed = parseStoredJson<ParsedMediaIdentity>(row.parsed_json);
+  if (parsed) clearManualIdentityOverride(parsed);
+  database.prepare("INSERT INTO organizer_review_audit (review_id, action, payload_json, created_at) VALUES (?, ?, ?, ?)").run(id, "cleared_override", null, now);
+  if (!parsed) return undefined;
+  return { id, sourcePath: row.source_path, sourceBasename: row.source_basename, parsed, decision: "pending", createdAt: row.created_at, updatedAt: now };
 }
 
 export function clearOrganizerReviews(): void {
