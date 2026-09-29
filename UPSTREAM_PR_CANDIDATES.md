@@ -636,6 +636,7 @@ exclude the controlled E2E runtime configuration.
 | Seerr URL/API-root normalization | GENERIC_UPSTREAM_FIX | pending | yes | URL normalization unit test | needs upstream verification | HIGH |
 | Settings dotenv provenance | GENERIC_UPSTREAM_FIX | pending | yes | config provenance/persistence tests | present in fetched upstream develop | HIGH |
 | Seerr request duplicate detection | GENERIC_UPSTREAM_FIX | pending | yes | acquisition/Seerr unit tests | needs upstream verification | HIGH |
+| Docker context/layer caching | GENERIC_UPSTREAM_FIX + NEEDS_UPSTREAM_VERIFICATION | `ca2703c` | yes | local timed builds | verify against upstream HEAD | MEDIUM |
 
 ## Migration bulk importer must classify provider rate-limit messages as retryable
 
@@ -709,3 +710,65 @@ HTTP status, with bounded retry tests; exclude the live bulk run and secrets.
 
 No PR, upstream branch, existing PR, or commit history was modified by this
 tracking update.
+
+## 10. Optimize Docker build context and layer caching
+
+### Classification
+
+`GENERIC_UPSTREAM_FIX` + `NEEDS_UPSTREAM_VERIFICATION`
+
+### PR dependency
+
+`STANDALONE`
+
+### Component
+
+Docker build tooling: `.dockerignore` and Dockerfile layer ordering.
+
+### Problem
+
+The previous Docker context included large local artifacts such as
+`node_modules`, `.next`, `dist` and runtime/local output. Backend changes also
+invalidated expensive frontend dependency/build layers unnecessarily.
+
+### Root cause
+
+The context exclusion list was incomplete and frequently changing backend
+copies were placed too early relative to stable web dependency/build layers.
+
+### Fix
+
+Commit `ca2703c` extends `.dockerignore` and reorders Dockerfile stages so web
+dependency/build layers are established before frequently changing backend
+output, with backend `dist` copied as late as possible. The final runtime image
+and application semantics are unchanged. BuildKit/buildx, dev-mode and cache
+mounts are deliberately out of scope.
+
+### Files
+
+`.dockerignore`, `Dockerfile`.
+
+### Tests / validation
+
+Local measurements were: context ~775 MB → ~13.18 MB; warm no-change ~9.07 s
+→ ~1.05 s; backend-only ~146.45 s → ~1.59 s; web-only ~142.42 s → ~94.61 s;
+cold build ~354.73 s → ~257.20 s. These measurements are specific to the
+development environment and are not universal upstream performance claims.
+
+### Upstream applicability
+
+Generic and independent of Media Manager, Organizer, provider behavior,
+runtime paths and application semantics. Applicability against the current
+upstream HEAD still needs verification; upstream may already have changed its
+Dockerfile or ignore rules.
+
+### Isolation
+
+Standalone. The future PR scope is limited to `.dockerignore`, Dockerfile
+layer ordering and strictly necessary comments/documentation.
+
+### Proposed PR scope
+
+Only the context exclusions and layer reordering from `ca2703c`; do not include
+Media Manager, Organizer, Settings, Seerr, BuildKit installation, lockfile
+changes, dev-mode or source mounts.
