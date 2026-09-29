@@ -637,5 +637,75 @@ exclude the controlled E2E runtime configuration.
 | Settings dotenv provenance | GENERIC_UPSTREAM_FIX | pending | yes | config provenance/persistence tests | present in fetched upstream develop | HIGH |
 | Seerr request duplicate detection | GENERIC_UPSTREAM_FIX | pending | yes | acquisition/Seerr unit tests | needs upstream verification | HIGH |
 
+## Migration bulk importer must classify provider rate-limit messages as retryable
+
+### Classification
+
+`NEEDS_UPSTREAM_VERIFICATION`
+
+### PR dependency
+
+`STANDALONE`
+
+### Component
+
+MigrationImporter / DebridProvider error handling
+
+### Problem
+
+Some DebridProvider implementations surface an active rate limit as a plain
+error message such as `rate limited, retry in ...` after the HTTP response has
+already been consumed. The bulk importer classified that item as a permanent
+failure because no numeric HTTP status was available.
+
+### Root cause
+
+Retry classification relied on HTTP status fields and did not recognize the
+provider-neutral rate-limit message contract.
+
+### Previous behavior
+
+Rate-limited items without `response.status` were marked
+`FAILED_PERMANENT`, even though the provider supplied a backoff interval.
+
+### Expected behavior
+
+Rate-limit messages are retryable with bounded backoff and must not be
+classified as permanent item failures.
+
+### Fix
+
+Recognize standard rate-limit message forms in the generic importer classifier
+and use the existing bounded retry/backoff path.
+
+### Files changed
+
+`src/services/migrationImporter.ts`,
+`tests/unit/services/migrationImporter.test.ts`.
+
+### Commit
+
+`c38b75d`
+
+### Tests
+
+HTTP 429 retry, provider rate-limit message without HTTP status, legal 451
+classification, systemic auth/5xx stop behavior, and full suite.
+
+### Upstream applicability
+
+Likely provider-neutral, but current upstream applicability has not yet been
+verified against the relevant upstream revision.
+
+### Isolation
+
+Standalone importer classification and tests; no Version Manager policy
+dependency.
+
+### Proposed PR scope
+
+Provider-neutral retry classification for rate-limit errors without numeric
+HTTP status, with bounded retry tests; exclude the live bulk run and secrets.
+
 No PR, upstream branch, existing PR, or commit history was modified by this
 tracking update.
