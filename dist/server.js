@@ -1491,6 +1491,10 @@ function startServer() {
      */
     app.get("/api/files", async (req, res) => {
         try {
+            const mountReadiness = await (0, mount_1.getMountReadiness)();
+            if (!mountReadiness.ready) {
+                throw new filesystemBrowser_1.FilesystemBrowserError(503, `Mounted filesystem not ready (${mountReadiness.reason})`);
+            }
             const requestedPath = String(req.query.path || "/");
             const mountBase = config_1.config.mountBase || "/mnt/schrodrive";
             const listing = await (0, filesystemBrowser_1.browseMountedFilesystem)(mountBase, requestedPath);
