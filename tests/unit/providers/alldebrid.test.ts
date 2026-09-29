@@ -81,6 +81,28 @@ describe('AllDebrid current magnet API', () => {
     expect(String(calls[1].body)).toContain('id%5B%5D=789');
   });
 
+  test('exposes the provider file tree for migration manifests', async () => {
+    axiosIPv4.post = async (url: string, body: any) => {
+      calls.push({ url, body });
+      return response({ magnets: [{
+        id: 789,
+        files: [{ n: 'Fixture.Movie.2025.mkv', s: 100, l: 'https://alldebrid.test/file-mkv' }],
+      }] });
+    };
+
+    const files = await new AllDebridProvider().getTorrentFileTree('789');
+
+    expect(files).toEqual([{
+      id: 'Fixture.Movie.2025.mkv',
+      name: 'Fixture.Movie.2025.mkv',
+      path: 'Fixture.Movie.2025.mkv',
+      size: 100,
+      selected: true,
+    }]);
+    expect(calls[0].url).toContain('/v4/magnet/files');
+    expect(String(calls[0].body)).toContain('id%5B%5D=789');
+  });
+
   test('resolves a file link from magnet/files rather than status.links', async () => {
     axiosIPv4.post = async (url: string, body: any) => {
       calls.push({ url, body });

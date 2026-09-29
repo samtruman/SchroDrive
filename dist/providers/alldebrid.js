@@ -618,6 +618,22 @@ class AllDebridProvider {
         }
     }
     /**
+     * Exposes the provider file tree through the generic migration/export
+     * capability. The list endpoint's inline `links` are not authoritative for
+     * completed multifile magnets, so callers that need manifest mediaFiles must
+     * use this dedicated file-tree endpoint.
+     */
+    async getTorrentFileTree(torrentId) {
+        const trees = await this.fetchFileTrees([torrentId]);
+        return (trees.get(String(torrentId)) || []).map((file) => ({
+            id: file.path,
+            name: file.path,
+            path: file.path,
+            size: file.size,
+            selected: true,
+        }));
+    }
+    /**
      * Resolves a direct download URL for an AllDebrid file by reading the
      * current file tree from `/v4/magnet/files` and unlocking its `l` link via
      * `POST /v4/link/unlock`.

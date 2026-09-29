@@ -18,6 +18,7 @@ describe("migration exporter", () => {
     expect(result.manifest.readOnly).toBe(true);
     expect(result.manifest.items).toHaveLength(1);
     expect(result.magnetsText.trim()).toBe(`magnet:?xt=urn:btih:${"a".repeat(40)}`);
+    expect(result.manifest.items[0].mediaFiles).toEqual([{ id: "f", name: "Movie.2025.mkv", size: 100 }]);
   });
 
   test("FULL_LIBRARY keeps uncertain, conflicting, and un-fingerprinted provider items", () => {
@@ -41,6 +42,14 @@ describe("migration exporter", () => {
     expect(result.manifest.items[0].mediaFiles[0]).not.toHaveProperty("path");
     expect(result.manifest.items[0].fingerprints).toHaveLength(2);
     expect(result.magnetsText.trim().split("\n")).toHaveLength(1);
+  });
+
+  test("manifest mediaFiles preserve provider file-tree entries", () => {
+    const providerItem = item("tree-item", "Release folder", [
+      { id: "movie", name: "Release/Movie.2025.mkv", path: "Release/Movie.2025.mkv", size: 100, selected: true },
+    ], { infoHash: "f".repeat(40) });
+    const manifest = exportMigrationLibrary([providerItem]).manifest;
+    expect(manifest.items[0].mediaFiles).toEqual([{ id: "movie", name: "Release/Movie.2025.mkv", size: 100 }]);
   });
 
   test("duplicate magnets are deduplicated and export is independent of decisions", () => {
