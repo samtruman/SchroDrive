@@ -772,3 +772,42 @@ layer ordering and strictly necessary comments/documentation.
 Only the context exclusions and layer reordering from `ca2703c`; do not include
 Media Manager, Organizer, Settings, Seerr, BuildKit installation, lockfile
 changes, dev-mode or source mounts.
+
+## 11. FUSE mount readiness / startup precheck
+
+### Classification
+
+`DEPLOYMENT_VALIDATED` / `FUTURE_UPSTREAM_PR`
+
+### Component
+
+Startup sequencing for FUSE/provider mounts and mount-dependent operations.
+
+### Problem
+
+SchröDrive can start while the FUSE/provider filesystem is not yet genuinely
+ready. Mount-dependent components may then run against an unavailable or
+incomplete filesystem.
+
+### Validated deployment solution
+
+The CineCircle deployment uses a fail-closed startup precheck before the
+standard runtime:
+
+```text
+validationMountPrecheck → PASS → /docker-entrypoint.sh
+```
+
+### Future upstream principle
+
+- generic and not CineCircle-specific;
+- verify actual FUSE mount readiness before mount-dependent operations;
+- fail closed for Organizer and destructive or mount-dependent operations;
+- do not replace the standard backend/runtime;
+- ideally keep the app/backend available while mount-dependent functions wait
+  or fail safely.
+
+### Scope
+
+Deployment/runtime hardening only. Do not mix this candidate with the Media
+Manager MVP or its future PR. No implementation or refactor is included here.
