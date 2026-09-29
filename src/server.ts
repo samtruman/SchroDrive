@@ -40,7 +40,8 @@ import { SeerrAcquisitionAdapter } from "./services/seerrAcquisitionAdapter";
 import { getLatestVersionManagerScan, getVersionManagerPolicy, getVersionProfiles, saveVersionManagerPolicy, saveVersionManagerScan, saveVersionProfiles } from "./services/versionManagerStore";
 import { probeVersionRecords } from "./services/versionManagerProbe";
 import { enrichVersionMetadata } from "./services/versionManagerMetadata";
-import { exportMigrationLibrary, type MigrationExportMode } from "./services/migrationExporter";
+import { exportMigrationLibrary, normalizeMigrationExportMode } from "./services/migrationExporter";
+import { analyzeMigrationImport } from "./services/migrationImporter";
 import { recordAcquisitionAudit } from "./core/db";
 
 // ===========================================================================
@@ -246,9 +247,10 @@ export function startServer() {
   /** Read-only provider-inventory export for backup/migration. */
   app.get("/api/version-manager/export", async (req, res) => {
     try {
-      const mode = String(req.query.mode || "FULL_LIBRARY") as MigrationExportMode;
+      const mode = normalizeMigrationExportMode(String(req.query.mode || "FULL_LIBRARY"));
       const inventory = (await Promise.all(registry.configured().map((provider) => provider.listTorrents()))).flat();
-      const exported = exportMigrationLibrary(inventory, [], { mode });
+      const selectedProviderItemIds = typeof req.query.selected === "string" ? req.query.selected.split(",").map((value) => value.trim()).filter(Boolean) : undefined;
+      const exported = exportMigrationLibrary(inventory, [], { mode, selectedProviderItemIds });
       if (String(req.query.format || "preview") === "preview") {
         return res.json({ ok: true, readOnly: true, mode, providerItems: inventory.length, exportableItems: exported.manifest.exportableItemCount, magnetCount: exported.manifest.magnetCount, generatedAt: exported.manifest.generatedAt });
       }
@@ -259,6 +261,24 @@ export function startServer() {
       res.type("application/json").set("Content-Disposition", `attachment; filename=debrid-migration-manifest.json`).send(JSON.stringify(exported.manifest, null, 2));
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message || "Migration export failed" });
+    }
+  });
+
+  /** Read-only import analysis. It never calls addMagnet or any provider mutation API. */
+  app.post("/api/version-manager/import/preview", async (req, res) => {
+    try {
+      const body = req.body || {};
+      const targetId = typeof body.targetProvider === "string" ? body.targetProvider.trim().toLowerCase() : undefined;
+      const target = targetId ? registry.get(targetId) : undefined;
+      if (targetId && !target) return res.status(400).json({ ok: false, error: "Unknown target provider" });
+      if (targetId && !target!.isConfigured()) return res.status(503).json({ ok: false, error: "Target provider is not configured" });
+      const inventory = target
+        ? await target.listTorrents()
+        : (await Promise.all(registry.configured().map((provider) => provider.listTorrents()))).flat();
+      const plan = analyzeMigrationImport({ manifest: body.manifest, magnetsText: typeof body.magnetsText === "string" ? body.magnetsText : undefined }, inventory);
+      res.json({ ok: true, targetProvider: target?.id || "configured-providers", ...plan });
+    } catch (err: any) {
+      res.status(400).json({ ok: false, error: err?.message || "Migration import preview failed" });
     }
   });
 

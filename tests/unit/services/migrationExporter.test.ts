@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { TorrentInfo } from "../../../src/providers";
 import { fingerprintTorrent, evaluateVersionGroups, defaultVersionProfiles } from "../../../src/services/versionManager";
 import { exportMigrationLibrary } from "../../../src/services/migrationExporter";
+import { isRecoverable } from "../../../src/services/migrationExporter";
 
 function item(id: string, name: string, files: TorrentInfo["files"], extra: Partial<TorrentInfo> = {}): TorrentInfo {
   return { id, name, status: "finished", progress: 100, bytes: 100, files, ...extra };
@@ -9,11 +10,12 @@ function item(id: string, name: string, files: TorrentInfo["files"], extra: Part
 
 describe("migration exporter", () => {
   test("FULL_LIBRARY exports identity-certain items", () => {
-    const providerItem = item("one", "Movie", [{ id: "f", name: "Movie.2025.mkv", path: "Movie.2025.mkv", size: 100, selected: true }], { infoHash: "a".repeat(40) });
+    const providerItem = item("one", "Movie", [{ id: "f", name: "Movie.2025.mkv", path: "Movie.2025.mkv", size: 100, selected: true }], { infoHash: "a".repeat(40), raw: { provider: "alldebrid" } });
     const versions = fingerprintTorrent(providerItem, "alldebrid");
     const groups = evaluateVersionGroups(versions, defaultVersionProfiles);
     const result = exportMigrationLibrary([providerItem], groups);
     expect(result.manifest.schemaVersion).toBe("1.0");
+    expect(result.manifest.sourceProvider).toBe("alldebrid");
     expect(result.manifest.readOnly).toBe(true);
     expect(result.manifest.items).toHaveLength(1);
     expect(result.magnetsText.trim()).toBe(`magnet:?xt=urn:btih:${"a".repeat(40)}`);
@@ -37,6 +39,7 @@ describe("migration exporter", () => {
     const result = exportMigrationLibrary([pack], evaluateVersionGroups(versions, defaultVersionProfiles));
     expect(result.manifest.items).toHaveLength(1);
     expect(result.manifest.items[0].mediaFiles).toHaveLength(2);
+    expect(result.manifest.items[0].mediaFiles[0]).not.toHaveProperty("path");
     expect(result.manifest.items[0].fingerprints).toHaveLength(2);
     expect(result.magnetsText.trim().split("\n")).toHaveLength(1);
   });
@@ -48,6 +51,18 @@ describe("migration exporter", () => {
     expect(result.manifest.items).toHaveLength(2);
     expect(result.manifest.magnetCount).toBe(1);
     expect(result.magnetsText.trim().split("\n")).toHaveLength(1);
+  });
+
+  test("recoverability requires a canonical magnet or infohash", () => {
+    expect(isRecoverable(item("recoverable", "x", [], { infoHash: "1".repeat(40) }))).toBe(true);
+    expect(isRecoverable(item("not-recoverable", "x", []))).toBe(false);
+  });
+
+  test("manifest output contains no local file path or credential fields", () => {
+    const result = exportMigrationLibrary([item("safe", "Title", [{ id: "f", name: "Title.mkv", path: "/mnt/private/Title.mkv", size: 1, selected: true }], { infoHash: "2".repeat(40) })]);
+    const serialized = JSON.stringify(result.manifest);
+    expect(serialized).not.toContain("/mnt/private");
+    expect(serialized).not.toMatch(/api[_-]?key|password|token|cookie|passkey/i);
   });
 
   test("filtered modes use slots without changing the provider inventory", () => {

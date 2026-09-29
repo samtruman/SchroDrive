@@ -1,5 +1,6 @@
 import type { TorrentInfo } from "../providers";
 import type { VersionGroup, VersionRecord } from "./versionManager";
+import { base32ToHex } from "../core/utils";
 
 export type MigrationExportMode = "FULL_LIBRARY" | "KEEP_ONLY" | "PRIMARY_ONLY" | "REMOTE_ONLY" | "PRIMARY_REMOTE" | "SELECTED";
 
@@ -8,18 +9,32 @@ export interface MigrationExportOptions {
   selectedProviderItemIds?: string[];
 }
 
+export function normalizeMigrationExportMode(value?: string): MigrationExportMode {
+  switch (String(value || "FULL").toUpperCase()) {
+    case "FULL": case "FULL_LIBRARY": return "FULL_LIBRARY";
+    case "KEEP": case "KEEP_ONLY": return "KEEP_ONLY";
+    case "PRIMARY": case "PRIMARY_ONLY": return "PRIMARY_ONLY";
+    case "REMOTE": case "REMOTE_ONLY": return "REMOTE_ONLY";
+    case "PRIMARY+REMOTE": case "PRIMARY_REMOTE": case "PRIMARY_REMOTE_ONLY": return "PRIMARY_REMOTE";
+    case "SELECTED": return "SELECTED";
+    default: return "FULL_LIBRARY";
+  }
+}
+
 export interface MigrationExportItem {
   provider: string;
   providerItemId: string;
   exportable: boolean;
   exportReason?: "MAGNET_AVAILABLE" | "INFOHASH_AVAILABLE" | "MAGNET_OR_INFOHASH_MISSING";
+  recoverability: { recoverable: boolean; basis: "MAGNET" | "INFOHASH" | "NONE" };
   magnetUri?: string;
   infoHash?: string;
   originalName: string;
   status: string;
   completed: boolean;
   addedAt?: string;
-  mediaFiles: Array<{ id?: string; path: string; name: string; size: number }>;
+  /** Provider-relative media metadata only; local mount paths are intentionally omitted. */
+  mediaFiles: Array<{ id?: string; name: string; size: number }>;
   fingerprints: Array<{
     id: string;
     contentIdentity?: VersionRecord["fingerprint"]["identity"];
@@ -37,11 +52,17 @@ export interface MigrationManifest {
   items: MigrationExportItem[];
   exportableItemCount: number;
   magnetCount: number;
+  sourceProvider: string;
 }
 
 export interface MigrationExportResult {
   magnetsText: string;
   manifest: MigrationManifest;
+}
+
+export function canonicalInfoHash(value?: string): string | undefined {
+  const hash = value?.trim().replace(/^0x/i, "");
+  return hash && /^[a-f0-9]{40}$/i.test(hash) ? hash.toLowerCase() : undefined;
 }
 
 function rawString(item: TorrentInfo, keys: string[]): string | undefined {
@@ -53,14 +74,15 @@ function rawString(item: TorrentInfo, keys: string[]): string | undefined {
   return undefined;
 }
 
-function normalizeHash(value?: string): string | undefined {
-  const hash = value?.trim().replace(/^0x/i, "");
-  return hash && /^[a-f0-9]{32,64}$/i.test(hash) ? hash.toLowerCase() : undefined;
-}
+function normalizeHash(value?: string): string | undefined { return canonicalInfoHash(value); }
 
 function extractMagnet(item: TorrentInfo): { magnetUri?: string; infoHash?: string; reason: MigrationExportItem["exportReason"] } {
   const magnetUri = item.magnetUri || rawString(item, ["magnet", "magnetUri", "uri", "url"]);
-  if (magnetUri?.startsWith("magnet:?")) return { magnetUri, infoHash: normalizeHash(magnetUri.match(/btih:([^&]+)/i)?.[1]), reason: "MAGNET_AVAILABLE" };
+  if (magnetUri?.startsWith("magnet:?")) {
+    const rawHash = magnetUri.match(/btih:([^&]+)/i)?.[1];
+    const infoHash = normalizeHash(rawHash) || canonicalInfoHash(base32ToHex(rawHash || "") || undefined);
+    return infoHash ? { magnetUri: `magnet:?xt=urn:btih:${infoHash}`, infoHash, reason: "MAGNET_AVAILABLE" } : { magnetUri, reason: "MAGNET_AVAILABLE" };
+  }
   const infoHash = normalizeHash(item.infoHash || rawString(item, ["infoHash", "infohash", "hash", "hashString"]));
   return infoHash ? { magnetUri: `magnet:?xt=urn:btih:${infoHash}`, infoHash, reason: "INFOHASH_AVAILABLE" } : { reason: "MAGNET_OR_INFOHASH_MISSING" };
 }
@@ -109,17 +131,23 @@ export function exportMigrationLibrary(inventory: TorrentInfo[], groups: Version
       providerItemId: String(item.id),
       exportable: Boolean(extracted.magnetUri),
       exportReason: extracted.reason,
+      recoverability: { recoverable: Boolean(extracted.magnetUri), basis: extracted.infoHash ? "INFOHASH" : extracted.magnetUri ? "MAGNET" : "NONE" },
       magnetUri: extracted.magnetUri,
       infoHash: extracted.infoHash,
       originalName: item.filename || item.name,
       status: item.status,
       completed: item.status === "finished" && item.progress === 100,
       addedAt: item.addedAt?.toISOString(),
-      mediaFiles: (item.files || []).map((file) => ({ id: file.id, path: file.path, name: file.name, size: file.size })),
+      mediaFiles: (item.files || []).map((file) => ({ id: file.id, name: file.name, size: file.size })),
       fingerprints: linked.map(({ version, group }) => safeFingerprint(version, group, slots)),
     };
   });
   const uniqueMagnets = [...new Map(manifests.filter((item) => item.magnetUri).map((item) => [item.infoHash || item.magnetUri, item.magnetUri!])).values()];
-  const manifest: MigrationManifest = { schemaVersion: "1.0", exportMode: mode, generatedAt: new Date().toISOString(), readOnly: true, items: manifests, exportableItemCount: manifests.filter((item) => item.exportable).length, magnetCount: uniqueMagnets.length };
+  const providers = [...new Set(manifests.map((item) => item.provider).filter(Boolean))];
+  const manifest: MigrationManifest = { schemaVersion: "1.0", exportMode: mode, generatedAt: new Date().toISOString(), sourceProvider: providers.length === 1 ? providers[0] : "multi-provider", readOnly: true, items: manifests, exportableItemCount: manifests.filter((item) => item.exportable).length, magnetCount: uniqueMagnets.length };
   return { magnetsText: uniqueMagnets.length ? `${uniqueMagnets.join("\n")}\n` : "", manifest };
+}
+
+export function isRecoverable(providerItem: TorrentInfo): boolean {
+  return Boolean(extractMagnet(providerItem).magnetUri);
 }

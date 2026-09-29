@@ -1425,3 +1425,75 @@ roots, and traversal errors without requiring unused category directories to
 be pre-created. An empty discovery still performs no pruning. The regression
 tests cover missing/non-directory roots, an unused missing category, a
 category created only when needed, and dry-run zero mutation.
+
+### Backup and Migration status
+
+Assessment of the current branch:
+
+| Component | Status | Finding |
+|---|---|---|
+| MigrationExporter | COMPLETE | ProviderItem-based FULL and filtered export, deterministic magnet deduplication, no provider mutation |
+| magnets.txt | COMPLETE | Canonical infohash magnets, one line per unique hash |
+| manifest.json | COMPLETE | Read-only schema `1.0`, source provider, provider items, media metadata, fingerprints/evidence and profile slots |
+| Export API/UI | COMPLETE | Preview/download modes FULL, KEEP, PRIMARY, REMOTE and PRIMARY+REMOTE |
+| MigrationImporter | COMPLETE (preview only) | Provider-neutral parser/analyzer for manifest and generic magnets |
+| ImportPlan | COMPLETE (preview only) | Hash-based idempotent classification; no Execute path exists |
+| Import history | MISSING | No import execution/history is persisted, intentionally out of scope |
+
+The export unit is always `ProviderItem`, not `MediaFingerprint`. A season
+pack or multifile item therefore appears once in the manifest even when it has
+multiple associated media files/fingerprints. FULL export remains independent
+of identity, grouping and decisions, so uncertain, conflicting and
+unfingerprinted items are included when a recoverable infohash/magnet exists.
+Local filesystem paths are not written to the manifest; media file names and
+sizes are retained as portable evidence.
+
+Manifest fields are classified as follows:
+
+- `PORTABLE`: schema version, infohash, canonical magnet, original name,
+  media-file names/sizes, canonical external IDs and normalized identity
+  evidence.
+- `PROVIDER_SPECIFIC_OPTIONAL`: provider item ID, provider name, provider
+  status, provider timestamps and provider-side file IDs.
+- `NON_PORTABLE`: local mount paths, credentials, API keys, tokens, cookies and
+  private tracker/passkey data. These are excluded from export.
+
+The preview importer accepts either the SchröDrive manifest or generic
+`magnets.txt`. It compares canonical infohashes against a target
+`DebridProvider` inventory and produces only:
+`ALREADY_PRESENT`, `ALREADY_PRESENT_EQUIVALENT_HASH`, `READY_TO_IMPORT`,
+`INVALID_MAGNET`, `MISSING_HASH`, `UNSUPPORTED`, `CONFLICT` and `REVIEW`.
+Metadata from a manifest is treated as evidence and is not trusted to replace
+future identity/fingerprint resolution. There is deliberately no `addMagnet`
+or other Execute operation.
+
+### Cross-provider portability
+
+The repository already contains a reusable `RealDebridProvider` implementing
+the shared `DebridProvider` contract. No `AllDebridImporter` or
+Real-Debrid-specific importer was introduced. The same ImportPlan can target
+AllDebrid, Real-Debrid or another provider by passing that provider's
+read-only inventory to the generic analyzer.
+
+The next permitted validation is a read-only AllDebrid export versus
+Real-Debrid inventory comparison, reporting hashes already present and hashes
+classified `READY_TO_IMPORT`. It must not call `addMagnet`. The future
+controlled test is explicitly recorded as:
+
+`CROSS_PROVIDER_RESTORE_E2E`: AllDebrid export → one selected recoverable
+ProviderItem → Real-Debrid import → acquisition verification → rebuilt
+inventory/fingerprint → identity comparison with the original manifest.
+
+That test requires separate explicit authorization. Import preview is not a
+restore and does not authorize it. Delete recovery should consume the same
+`isRecoverable(providerItem)` contract before any future Delete Executor is
+considered.
+
+The current runtime read-only check found AllDebrid configured and reachable
+with 417 inventory items and 417 recoverable infohashes. Real-Debrid is
+registered in the repository through the existing adapter but is not
+configured in the current SchröDrive runtime, so no authenticated
+cross-provider comparison was performed and no credentials were copied or
+changed. The cross-provider code path is covered by the provider-neutral
+ImportPlan tests and is ready for a later read-only comparison once the
+provider is configured.

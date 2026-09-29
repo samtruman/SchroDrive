@@ -36,6 +36,7 @@ type Preview = {
 type Profile = { id: string; name: string; enabled: boolean; target: string; preferredResolution: string }
 type Policy = { enableRemote: boolean; acquireMissingRemote: boolean }
 type ExportPreview = { providerItems: number; exportableItems: number; magnetCount: number; generatedAt: string }
+type ImportPlan = { sourceFormat: string; schemaVersion?: string; counts: Record<string, number>; errors: string[]; items: Array<{ status: string; reason: string }> }
 type AcquisitionPreview = {
   needId: string
   status: string
@@ -55,6 +56,10 @@ export default function VersionManagerPage() {
   const [saving, setSaving] = useState(false)
   const [exportPreview, setExportPreview] = useState<ExportPreview | null>(null)
   const [exportLoading, setExportLoading] = useState(false)
+  const [exportMode, setExportMode] = useState("FULL")
+  const [selectedExportIds, setSelectedExportIds] = useState("")
+  const [importPlan, setImportPlan] = useState<ImportPlan | null>(null)
+  const [importLoading, setImportLoading] = useState(false)
   const [missing, setMissing] = useState<{ needs: AcquisitionPreview[]; adapter: { enabled: boolean; canRequest: boolean; tvScope: string } } | null>(null)
   const [missingLoading, setMissingLoading] = useState(false)
 
@@ -92,7 +97,8 @@ export default function VersionManagerPage() {
   async function loadExportPreview() {
     setExportLoading(true)
     try {
-      const response = await fetch("/api/version-manager/export?mode=FULL_LIBRARY&format=preview")
+      const selected = selectedExportIds.trim() ? `&selected=${encodeURIComponent(selectedExportIds)}` : ""
+      const response = await fetch(`/api/version-manager/export?mode=${encodeURIComponent(exportMode)}&format=preview${selected}`)
       const data = await response.json()
       if (!response.ok || !data.ok) throw new Error(data.error || "Export preview failed")
       setExportPreview(data)
@@ -112,7 +118,29 @@ export default function VersionManagerPage() {
   }
 
   function downloadExport(format: "magnets" | "manifest") {
-    window.location.href = `/api/version-manager/export?mode=FULL_LIBRARY&format=${format}`
+    const selected = selectedExportIds.trim() ? `&selected=${encodeURIComponent(selectedExportIds)}` : ""
+    window.location.href = `/api/version-manager/export?mode=${encodeURIComponent(exportMode)}&format=${format}${selected}`
+  }
+
+  async function previewImport(event: React.ChangeEvent<HTMLInputElement>) {
+    const files = [...(event.target.files || [])]
+    if (!files.length) return
+    setImportLoading(true)
+    setError(null)
+    try {
+      let manifest: unknown
+      let magnetsText: string | undefined
+      for (const file of files) {
+        const text = await file.text()
+        if (file.name.toLowerCase().endsWith(".json")) manifest = JSON.parse(text)
+        else if (file.name.toLowerCase().includes("magnet")) magnetsText = text
+      }
+      const response = await fetch("/api/version-manager/import/preview", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ manifest, magnetsText }) })
+      const data = await response.json()
+      if (!response.ok || !data.ok) throw new Error(data.error || "Import preview failed")
+      setImportPlan(data)
+    } catch (err) { setError(err instanceof Error ? err.message : "Import preview failed") }
+    finally { setImportLoading(false); event.target.value = "" }
   }
 
   return (
@@ -145,9 +173,12 @@ export default function VersionManagerPage() {
       <Card>
         <CardHeader><CardTitle>Export / Migration</CardTitle><CardDescription>Read-only FULL LIBRARY export. It uses provider inventory directly and includes uncertain or un-fingerprinted items when an infohash is available.</CardDescription></CardHeader>
         <CardContent className="space-y-3">
+          <label className="text-sm">Export mode <select className="ml-2 rounded border bg-background px-2 py-1 text-foreground" value={exportMode} onChange={(event) => { setExportMode(event.target.value); setExportPreview(null) }}><option value="FULL">FULL</option><option value="KEEP">KEEP</option><option value="PRIMARY">PRIMARY</option><option value="REMOTE">REMOTE</option><option value="PRIMARY+REMOTE">PRIMARY + REMOTE</option><option value="SELECTED">SELECTED</option></select></label>
+          {exportMode === "SELECTED" && <input className="rounded border bg-background px-2 py-1 text-sm text-foreground" placeholder="Provider item IDs, comma-separated" value={selectedExportIds} onChange={(event) => { setSelectedExportIds(event.target.value); setExportPreview(null) }} />}
           <Button variant="outline" onClick={loadExportPreview} disabled={exportLoading}>{exportLoading ? "Loading…" : "Preview Full Library"}</Button>
           {exportPreview && <div className="rounded border p-3 text-sm">Provider items: <strong>{exportPreview.providerItems}</strong> · Exportable: <strong>{exportPreview.exportableItems}</strong> · Unique magnets: <strong>{exportPreview.magnetCount}</strong><div className="mt-1 text-muted-foreground">Snapshot: {new Date(exportPreview.generatedAt).toLocaleString()}</div></div>}
           <div className="flex flex-wrap gap-2"><Button onClick={() => downloadExport("magnets")} disabled={!exportPreview}>Download magnets.txt</Button><Button variant="outline" onClick={() => downloadExport("manifest")} disabled={!exportPreview}>Download manifest.json</Button></div>
+          <div className="border-t pt-3"><div className="text-sm font-medium">Import preview</div><div className="text-xs text-muted-foreground">Select manifest.json, magnets.txt, or both. Analyze only; no import is available.</div><input className="mt-2 text-sm" type="file" accept=".json,.txt" multiple onChange={previewImport} disabled={importLoading} />{importPlan && <div className="mt-2 rounded border p-3 text-sm"><div>Format: <strong>{importPlan.sourceFormat}</strong> · Schema: <strong>{importPlan.schemaVersion || "generic magnets"}</strong></div><div className="mt-1 grid grid-cols-2 gap-1 md:grid-cols-4">{Object.entries(importPlan.counts).map(([status, count]) => <span key={status}>{status}: <strong>{count}</strong></span>)}</div>{importPlan.errors.length > 0 && <div className="mt-2 text-amber-600">{importPlan.errors.join("; ")}</div>}</div>}</div>
         </CardContent>
       </Card>
       <Card>
