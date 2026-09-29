@@ -82,4 +82,42 @@ describe("migration importer preview", () => {
     expect(added).toEqual(["b".repeat(40)]);
     expect(progress.at(-1).remaining).toBe(0);
   });
+
+  test("classifies HTTP 451 as legal rejection without retry", async () => {
+    let calls = 0;
+    const provider: any = { isConfigured: () => true, listTorrents: async () => [], addMagnet: async () => { calls++; const error: any = new Error("legal"); error.response = { status: 451 }; throw error; } };
+    const result = await executeMigrationImportBulk([{ source: "MANIFEST", index: 0, status: "READY_TO_IMPORT", infoHash: "c".repeat(40), reason: "ready" }], provider, { targetInventory: () => provider.listTorrents(), sleep: async () => { throw new Error("must not sleep"); } });
+    expect(calls).toBe(1);
+    expect(result.rejectedLegal).toBe(1);
+    expect(result.results[0]).toMatchObject({ status: "REJECTED_LEGAL", reason: "LEGAL_RESTRICTION", retryCount: 0, importExecuted: true });
+  });
+
+  test("continues after seven legal rejections and imports a later valid item", async () => {
+    const calls: string[] = [];
+    const provider: any = { isConfigured: () => true, listTorrents: async () => [], addMagnet: async (magnet: string) => { const hash = magnet.split(":").pop()!; calls.push(hash); if (hash !== "2".repeat(40)) { const error: any = new Error("legal"); error.response = { status: 451 }; throw error; } return { id: "valid-target" }; } };
+    const itemHashes = ["a", "b", "c", "d", "e", "f", "1", "2"];
+    const items = itemHashes.map((value, index) => ({ source: "MANIFEST" as const, index, status: "READY_TO_IMPORT" as const, infoHash: value.repeat(40), reason: "ready" }));
+    const result = await executeMigrationImportBulk(items, provider, { targetInventory: () => provider.listTorrents() });
+    expect(result.rejectedLegal).toBe(7);
+    expect(result.imported).toBe(1);
+    expect(result.systemicFailure).toBeUndefined();
+    expect(calls).toHaveLength(8);
+  });
+
+  test("retries 429, but stops on systemic 401 and persistent 5xx", async () => {
+    let rateCalls = 0;
+    const rateProvider: any = { isConfigured: () => true, listTorrents: async () => [], addMagnet: async () => { rateCalls++; if (rateCalls === 1) { const error: any = new Error("rate limit"); error.response = { status: 429, headers: { "retry-after": "1" } }; throw error; } return { id: "rate-ok" }; } };
+    const rateResult = await executeMigrationImportBulk([{ source: "MANIFEST", index: 0, status: "READY_TO_IMPORT", infoHash: "1".repeat(40), reason: "ready" }], rateProvider, { targetInventory: () => rateProvider.listTorrents(), sleep: async () => undefined });
+    expect(rateCalls).toBe(2);
+    expect(rateResult.imported).toBe(1);
+
+    const authProvider: any = { isConfigured: () => true, listTorrents: async () => [], addMagnet: async () => { const error: any = new Error("auth"); error.response = { status: 401 }; throw error; } };
+    const authResult = await executeMigrationImportBulk([{ source: "MANIFEST", index: 0, status: "READY_TO_IMPORT", infoHash: "2".repeat(40), reason: "ready" }], authProvider, { targetInventory: () => authProvider.listTorrents() });
+    expect(authResult.systemicFailure?.status).toBe(401);
+    expect(authResult.results).toHaveLength(0);
+
+    const serverProvider: any = { isConfigured: () => true, listTorrents: async () => [], addMagnet: async () => { const error: any = new Error("server"); error.response = { status: 503 }; throw error; } };
+    const serverResult = await executeMigrationImportBulk([{ source: "MANIFEST", index: 0, status: "READY_TO_IMPORT", infoHash: "3".repeat(40), reason: "ready" }], serverProvider, { targetInventory: () => serverProvider.listTorrents(), sleep: async () => undefined });
+    expect(serverResult.systemicFailure?.status).toBe(503);
+  });
 });

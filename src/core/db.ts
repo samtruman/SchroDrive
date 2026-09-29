@@ -273,13 +273,18 @@ function runMigrations(database: Database): void {
       target_provider_item_id TEXT,
       created_at TEXT NOT NULL
     )`,
+    `ALTER TABLE migration_audit ADD COLUMN reason TEXT`,
+    `ALTER TABLE migration_audit ADD COLUMN retry_count INTEGER DEFAULT 0`,
+    `ALTER TABLE migration_audit ADD COLUMN import_executed INTEGER DEFAULT 0`,
   ];
 
   for (const sql of migrations) {
     try {
       database.exec(sql);
     } catch (err: any) {
-      console.error(`[${new Date().toISOString()}][db] Migration failed: ${err?.message}`);
+      if (!/duplicate column name/i.test(String(err?.message || ""))) {
+        console.error(`[${new Date().toISOString()}][db] Migration failed: ${err?.message}`);
+      }
     }
   }
 }
@@ -324,16 +329,20 @@ export interface MigrationAuditRecord {
   revalidationStatus: string;
   executionStatus: string;
   targetProviderItemId?: string;
+  reason?: string;
+  retryCount?: number;
+  importExecuted?: boolean;
   createdAt?: string;
 }
 
 export function recordMigrationAudit(record: MigrationAuditRecord): void {
   try {
-    getDb().prepare(`INSERT INTO migration_audit (source_provider, target_provider, source_provider_item_id, infohash, initial_status, revalidation_status, execution_status, target_provider_item_id, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    getDb().prepare(`INSERT INTO migration_audit (source_provider, target_provider, source_provider_item_id, infohash, initial_status, revalidation_status, execution_status, target_provider_item_id, reason, retry_count, import_executed, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       record.sourceProvider, record.targetProvider, record.sourceProviderItemId ?? null,
       record.infoHash, record.initialStatus, record.revalidationStatus,
       record.executionStatus, record.targetProviderItemId ?? null,
+      record.reason ?? null, record.retryCount ?? 0, record.importExecuted ? 1 : 0,
       record.createdAt || new Date().toISOString(),
     );
   } catch (error: any) {

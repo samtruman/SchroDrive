@@ -334,7 +334,7 @@ export function startServer() {
       const finalPlan = analyzeMigrationImport({ manifest: exported.manifest }, finalTargetInventory);
       for (const item of execution.results) {
         if (!item.infoHash) continue;
-        recordMigrationAudit({ sourceProvider: source.id, targetProvider: target.id, infoHash: item.infoHash, initialStatus: "READY_TO_IMPORT", revalidationStatus: item.status === "SKIPPED_ALREADY_PRESENT" ? "ALREADY_PRESENT" : "READY_TO_IMPORT", executionStatus: item.status, targetProviderItemId: item.providerItemId });
+        recordMigrationAudit({ sourceProvider: source.id, targetProvider: target.id, infoHash: item.infoHash, initialStatus: "READY_TO_IMPORT", revalidationStatus: item.status === "SKIPPED_ALREADY_PRESENT" ? "ALREADY_PRESENT" : "READY_TO_IMPORT", executionStatus: item.status, targetProviderItemId: item.providerItemId, reason: item.reason, retryCount: item.retryCount, importExecuted: item.importExecuted });
       }
       return res.json({ ok: true, readOnly: false, sourceProvider: source.id, targetProvider: target.id, initial: { providerItems: sourceInventory.length, targetItems: initialTargetInventory.length, plan: initialPlan.counts }, execution, final: { targetItems: finalTargetInventory.length, plan: finalPlan.counts } });
     } catch (err: any) {

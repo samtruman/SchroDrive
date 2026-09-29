@@ -42,6 +42,9 @@ export interface BulkImportProgress {
   imported: number;
   skipped: number;
   failed: number;
+  rejectedLegal: number;
+  failedPermanent: number;
+  retryExhausted: number;
   retrying: number;
   remaining: number;
   elapsedMs: number;
@@ -53,7 +56,11 @@ export interface BulkImportResult {
   imported: number;
   skipped: number;
   failed: number;
-  results: Array<{ infoHash?: string; status: "IMPORTED" | "SKIPPED_ALREADY_PRESENT" | "SKIPPED_NOT_READY" | "FAILED"; providerItemId?: string; reason?: string; attempts?: number }>;
+  rejectedLegal: number;
+  failedPermanent: number;
+  retryExhausted: number;
+  systemicFailure?: { status?: number; reason: string };
+  results: Array<{ infoHash?: string; status: "IMPORTED" | "SKIPPED_ALREADY_PRESENT" | "SKIPPED_NOT_READY" | "REJECTED_LEGAL" | "FAILED_PERMANENT" | "FAILED_RETRYABLE_EXHAUSTED"; providerItemId?: string; reason?: string; attempts?: number; retryCount?: number; importExecuted?: boolean }>;
 }
 
 function emptyCounts(): Record<ImportPlanStatus, number> {
@@ -96,8 +103,21 @@ export async function executeMigrationImportItem(item: unknown, provider: Debrid
 }
 
 function retryableImportError(error: unknown): boolean {
+  const status = Number((error as any)?.response?.status ?? (error as any)?.status);
+  if ([400, 401, 403, 451].includes(status)) return false;
   const message = String((error as any)?.message || error || "").toLowerCase();
-  return /429|rate.?limit|timeout|timed out|network|econn|5\d\d|temporar/.test(message);
+  return status === 408 || status === 429 || status >= 500 || /timeout|timed out|network|econn|temporar/.test(message);
+}
+
+function importErrorStatus(error: unknown): number | undefined {
+  const status = Number((error as any)?.response?.status ?? (error as any)?.status);
+  return Number.isFinite(status) && status > 0 ? status : undefined;
+}
+
+function systemicImportError(error: unknown, status?: number): boolean {
+  if (status === 401 || status === 403 || (status !== undefined && status >= 500)) return true;
+  const message = String((error as any)?.message || error || "").toLowerCase();
+  return /econnrefused|enotfound|econnreset|network unavailable/.test(message);
 }
 
 function retryDelayMs(error: unknown, attempt: number): number {
@@ -119,14 +139,15 @@ export async function executeMigrationImportBulk(
     targetInventory: () => Promise<TorrentInfo[]>;
     onProgress?: (progress: BulkImportProgress) => void;
     maxAttempts?: number;
+    sleep?: (ms: number) => Promise<void>;
   },
 ): Promise<BulkImportResult> {
   const started = Date.now();
   const ready = items.filter((item) => item.status === "READY_TO_IMPORT");
-  const result: BulkImportResult = { total: ready.length, imported: 0, skipped: 0, failed: 0, results: [] };
+  const result: BulkImportResult = { total: ready.length, imported: 0, skipped: 0, failed: 0, rejectedLegal: 0, failedPermanent: 0, retryExhausted: 0, results: [] };
   let processed = 0;
   let retrying = 0;
-  const emit = (currentInfoHash?: string) => options.onProgress?.({ total: result.total, processed, imported: result.imported, skipped: result.skipped, failed: result.failed, retrying, remaining: result.total - processed, elapsedMs: Date.now() - started, currentInfoHash });
+  const emit = (currentInfoHash?: string) => options.onProgress?.({ total: result.total, processed, imported: result.imported, skipped: result.skipped, failed: result.failed, rejectedLegal: result.rejectedLegal, failedPermanent: result.failedPermanent, retryExhausted: result.retryExhausted, retrying, remaining: result.total - processed, elapsedMs: Date.now() - started, currentInfoHash });
 
   for (const item of ready) {
     const currentInfoHash = item.infoHash;
@@ -154,16 +175,36 @@ export async function executeMigrationImportBulk(
         break;
       } catch (error: any) {
         lastError = error?.message || String(error);
-        if (!retryableImportError(error) || attempt >= maxAttempts) break;
+        const status = importErrorStatus(error);
+        if (status === 451) {
+          result.failed++;
+          result.rejectedLegal++;
+          result.results.push({ infoHash: currentInfoHash, status: "REJECTED_LEGAL", reason: "LEGAL_RESTRICTION", attempts: attempt, retryCount: 0, importExecuted: true });
+          succeeded = true;
+          break;
+        }
+        if (!retryableImportError(error) || attempt >= maxAttempts) {
+          if (systemicImportError(error, status)) {
+            result.systemicFailure = { status, reason: lastError };
+            break;
+          }
+          result.failed++;
+          result.failedPermanent++;
+          result.results.push({ infoHash: currentInfoHash, status: "FAILED_PERMANENT", reason: lastError, attempts: attempt, retryCount: Math.max(0, attempt - 1), importExecuted: true });
+          succeeded = true;
+          break;
+        }
         retrying++;
         emit(currentInfoHash);
-        await new Promise((resolve) => setTimeout(resolve, retryDelayMs(error, attempt)));
+        await (options.sleep || ((ms: number) => new Promise((resolve) => setTimeout(resolve, ms))))(retryDelayMs(error, attempt));
         retrying--;
       }
     }
+    if (result.systemicFailure) break;
     if (!succeeded) {
       result.failed++;
-      result.results.push({ infoHash: currentInfoHash, status: "FAILED", reason: lastError, attempts: maxAttempts });
+      result.retryExhausted++;
+      result.results.push({ infoHash: currentInfoHash, status: "FAILED_RETRYABLE_EXHAUSTED", reason: lastError, attempts: maxAttempts, retryCount: Math.max(0, maxAttempts - 1), importExecuted: true });
     }
     processed++;
     emit(currentInfoHash);
