@@ -41,8 +41,8 @@ import { getLatestVersionManagerScan, getVersionManagerPolicy, getVersionProfile
 import { probeVersionRecords } from "./services/versionManagerProbe";
 import { enrichVersionMetadata } from "./services/versionManagerMetadata";
 import { exportMigrationLibrary, normalizeMigrationExportMode } from "./services/migrationExporter";
-import { analyzeMigrationImport } from "./services/migrationImporter";
-import { recordAcquisitionAudit } from "./core/db";
+import { analyzeMigrationImport, executeMigrationImportItem, getRecoverableManifestItem } from "./services/migrationImporter";
+import { recordAcquisitionAudit, recordMigrationAudit } from "./core/db";
 
 // ===========================================================================
 // Server Initialisation
@@ -248,7 +248,13 @@ export function startServer() {
   app.get("/api/version-manager/export", async (req, res) => {
     try {
       const mode = normalizeMigrationExportMode(String(req.query.mode || "FULL_LIBRARY"));
-      const inventory = (await Promise.all(registry.configured().map((provider) => provider.listTorrents()))).flat();
+      const sourceId = typeof req.query.provider === "string" ? req.query.provider.trim().toLowerCase() : undefined;
+      const source = sourceId ? registry.get(sourceId) : undefined;
+      if (sourceId && !source) return res.status(400).json({ ok: false, error: "Unknown source provider" });
+      if (sourceId && !source!.isConfigured()) return res.status(503).json({ ok: false, error: "Source provider is not configured" });
+      const inventory = source
+        ? await source.listTorrents()
+        : (await Promise.all(registry.configured().map((provider) => provider.listTorrents()))).flat();
       const selectedProviderItemIds = typeof req.query.selected === "string" ? req.query.selected.split(",").map((value) => value.trim()).filter(Boolean) : undefined;
       const exported = exportMigrationLibrary(inventory, [], { mode, selectedProviderItemIds });
       if (String(req.query.format || "preview") === "preview") {
@@ -279,6 +285,29 @@ export function startServer() {
       res.json({ ok: true, targetProvider: target?.id || "configured-providers", ...plan });
     } catch (err: any) {
       res.status(400).json({ ok: false, error: err?.message || "Migration import preview failed" });
+    }
+  });
+
+  /** Explicit one-item migration execution; no bulk or UI execution path. */
+  app.post("/api/version-manager/import/execute", async (req, res) => {
+    try {
+      if (req.body?.confirm !== "IMPORT_ONE") return res.status(400).json({ ok: false, error: "Explicit IMPORT_ONE confirmation is required" });
+      const targetId = typeof req.body?.targetProvider === "string" ? req.body.targetProvider.trim().toLowerCase() : "";
+      const target = registry.get(targetId);
+      if (!target) return res.status(400).json({ ok: false, error: "Unknown target provider" });
+      if (!target.isConfigured()) return res.status(503).json({ ok: false, error: "Target provider is not configured" });
+      const sourceItem = req.body?.manifestItem;
+      const recoverable = getRecoverableManifestItem(sourceItem);
+      if (!recoverable) return res.status(400).json({ ok: false, error: "Manifest item is not recoverable" });
+      const before = analyzeMigrationImport({ manifest: { schemaVersion: "1.0", items: [sourceItem] } }, await target.listTorrents());
+      const initial = before.items[0];
+      if (!initial || initial.status !== "READY_TO_IMPORT") return res.status(409).json({ ok: false, error: "Revalidation blocked the import", plan: before });
+      const result = await executeMigrationImportItem(sourceItem, target);
+      const after = analyzeMigrationImport({ manifest: { schemaVersion: "1.0", items: [sourceItem] } }, await target.listTorrents());
+      recordMigrationAudit({ sourceProvider: String(sourceItem?.provider || "unknown"), targetProvider: target.id, sourceProviderItemId: String(sourceItem?.providerItemId || ""), infoHash: recoverable.infoHash, initialStatus: initial.status, revalidationStatus: "READY_TO_IMPORT", executionStatus: after.items[0]?.status || "EXECUTED", targetProviderItemId: result.providerItemId });
+      res.json({ ok: true, readOnly: false, sourceProvider: String(sourceItem?.provider || "unknown"), targetProvider: target.id, result, postImportPlan: after });
+    } catch (err: any) {
+      res.status(502).json({ ok: false, error: err?.message || "Migration execution failed" });
     }
   });
 

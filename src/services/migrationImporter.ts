@@ -1,4 +1,4 @@
-import type { TorrentInfo } from "../providers";
+import type { DebridProvider, TorrentInfo } from "../providers";
 import { canonicalInfoHash } from "./migrationExporter";
 import { base32ToHex } from "../core/utils";
 
@@ -60,6 +60,19 @@ function manifestHash(item: any): { hash?: string; invalid: boolean } {
   const magnet = item?.canonicalMagnet ?? item?.magnetUri;
   if (magnet === undefined) return { invalid: false };
   return { hash: hashFromMagnet(magnet), invalid: true };
+}
+
+export function getRecoverableManifestItem(item: unknown): { infoHash: string; magnetUri: string } | undefined {
+  const extracted = manifestHash(item as any);
+  if (!extracted.hash) return undefined;
+  return { infoHash: extracted.hash, magnetUri: `magnet:?xt=urn:btih:${extracted.hash}` };
+}
+
+export async function executeMigrationImportItem(item: unknown, provider: DebridProvider): Promise<{ providerItemId: string; infoHash: string; magnetUri: string }> {
+  const recoverable = getRecoverableManifestItem(item);
+  if (!recoverable) throw new Error("Migration item is not recoverable");
+  const result = await provider.addMagnet(recoverable.magnetUri, typeof (item as any)?.originalName === "string" ? (item as any).originalName : undefined);
+  return { providerItemId: String(result.id || ""), ...recoverable };
 }
 
 function inventoryHashes(inventory: TorrentInfo[]): Map<string, TorrentInfo[]> {

@@ -261,6 +261,18 @@ function runMigrations(database: Database): void {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_acquisition_audit_need
       ON acquisition_audit (need_id, created_at)`,
+    `CREATE TABLE IF NOT EXISTS migration_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_provider TEXT NOT NULL,
+      target_provider TEXT NOT NULL,
+      source_provider_item_id TEXT,
+      infohash TEXT NOT NULL,
+      initial_status TEXT NOT NULL,
+      revalidation_status TEXT NOT NULL,
+      execution_status TEXT NOT NULL,
+      target_provider_item_id TEXT,
+      created_at TEXT NOT NULL
+    )`,
   ];
 
   for (const sql of migrations) {
@@ -300,6 +312,32 @@ export function recordAcquisitionAudit(record: AcquisitionAuditRecord): void {
     );
   } catch (error: any) {
     console.error(`[${new Date().toISOString()}][db] acquisition audit error: ${error?.message}`);
+  }
+}
+
+export interface MigrationAuditRecord {
+  sourceProvider: string;
+  targetProvider: string;
+  sourceProviderItemId?: string;
+  infoHash: string;
+  initialStatus: string;
+  revalidationStatus: string;
+  executionStatus: string;
+  targetProviderItemId?: string;
+  createdAt?: string;
+}
+
+export function recordMigrationAudit(record: MigrationAuditRecord): void {
+  try {
+    getDb().prepare(`INSERT INTO migration_audit (source_provider, target_provider, source_provider_item_id, infohash, initial_status, revalidation_status, execution_status, target_provider_item_id, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      record.sourceProvider, record.targetProvider, record.sourceProviderItemId ?? null,
+      record.infoHash, record.initialStatus, record.revalidationStatus,
+      record.executionStatus, record.targetProviderItemId ?? null,
+      record.createdAt || new Date().toISOString(),
+    );
+  } catch (error: any) {
+    console.error(`[${new Date().toISOString()}][db] migration audit error: ${error?.message}`);
   }
 }
 

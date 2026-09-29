@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TorrentInfo } from "../../../src/providers";
-import { analyzeMigrationImport } from "../../../src/services/migrationImporter";
+import { analyzeMigrationImport, executeMigrationImportItem } from "../../../src/services/migrationImporter";
 import { exportMigrationLibrary } from "../../../src/services/migrationExporter";
 
 const torrent = (id: string, hash?: string): TorrentInfo => ({
@@ -46,5 +46,13 @@ describe("migration importer preview", () => {
     const plan = analyzeMigrationImport({ manifest: { schemaVersion: "9.9", items: [] } });
     expect(plan.errors).toContain("Unsupported manifest schema version");
     expect(plan.items).toHaveLength(0);
+  });
+
+  test("executes only the supplied recoverable item through DebridProvider", async () => {
+    const calls: string[] = [];
+    const provider: any = { addMagnet: async (magnet: string) => { calls.push(magnet); return { id: "target-1" }; } };
+    const result = await executeMigrationImportItem({ canonicalInfohash: "d".repeat(40), originalName: "Movie.mkv" }, provider);
+    expect(result.providerItemId).toBe("target-1");
+    expect(calls).toEqual([`magnet:?xt=urn:btih:${"d".repeat(40)}`]);
   });
 });
