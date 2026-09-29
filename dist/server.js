@@ -24,8 +24,6 @@ exports.startServer = startServer;
 exports.buildQueryFromPayload = buildQueryFromPayload;
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
-const fs_1 = __importDefault(require("fs"));
-const path_1 = __importDefault(require("path"));
 const config_1 = require("./core/config");
 const index_1 = require("./indexers/index");
 const providers_1 = require("./providers");
@@ -38,9 +36,29 @@ const mount_1 = require("./services/mount");
 const bridge_1 = require("./services/cloudLinks/bridge");
 const blacklist_1 = require("./core/blacklist");
 const tokenRotator_1 = require("./core/tokenRotator");
+const organizerReview_1 = require("./services/organizerReview");
+const filesystemBrowser_1 = require("./core/filesystemBrowser");
+const versionManager_1 = require("./services/versionManager");
+const mediaManagerInventory_1 = require("./services/mediaManagerInventory");
+const acquisition_1 = require("./services/acquisition");
+const seerrAcquisitionAdapter_1 = require("./services/seerrAcquisitionAdapter");
+const versionManagerStore_1 = require("./services/versionManagerStore");
+const versionManagerProbe_1 = require("./services/versionManagerProbe");
+const versionManagerMetadata_1 = require("./services/versionManagerMetadata");
+const tmdbService_1 = require("./services/tmdbService");
+const manualIdentity_1 = require("./services/manualIdentity");
+const migrationExporter_1 = require("./services/migrationExporter");
+const migrationImporter_1 = require("./services/migrationImporter");
+const migrationState_1 = require("./services/migrationState");
+const providerMigrationCapabilities_1 = require("./services/providerMigrationCapabilities");
+const db_1 = require("./core/db");
+const unifiedReview_1 = require("./services/unifiedReview");
 // ===========================================================================
 // Server Initialisation
 // ===========================================================================
+async function loadVersionManagerInventory(stats) {
+    return (0, mediaManagerInventory_1.loadMediaManagerInventory)(undefined, stats);
+}
 /**
  * Initialises and starts the Express HTTP server with all API routes,
  * SSE streaming endpoints, and optional background services (Overseerr poller,
@@ -163,6 +181,376 @@ function startServer() {
         });
     });
     // ===========================================================================
+    // Version Manager (read-only preview)
+    // ===========================================================================
+    /**
+     * GET /api/version-manager/status — Reports the safe initial state.
+     * The first milestone is deliberately read-only and never calls a provider
+     * delete operation.
+     */
+    app.get("/api/version-manager/status", (_req, res) => {
+        const profiles = (0, versionManagerStore_1.getVersionProfiles)();
+        const policy = (0, versionManagerStore_1.getVersionManagerPolicy)();
+        res.json({
+            ok: true,
+            enabled: false,
+            mode: "dry-run",
+            deleteExecutor: "not_implemented",
+            policy,
+            policyHash: (0, versionManager_1.versionManagerPolicyHash)(policy, profiles),
+            profiles,
+            latestScan: (0, versionManagerStore_1.getLatestVersionManagerScan)() || null,
+        });
+    });
+    /**
+     * GET /api/version-manager/preview — Builds a live, read-only inventory
+     * projection and evaluates configured profiles in memory.
+     */
+    app.get("/api/version-manager/preview", async (_req, res) => {
+        try {
+            const versions = await loadVersionManagerInventory();
+            const evaluatedVersions = (0, manualIdentity_1.applyManualIdentityOverrides)(versions);
+            const probe = await (0, versionManagerProbe_1.probeVersionRecords)(evaluatedVersions);
+            const metadata = await (0, versionManagerMetadata_1.enrichVersionMetadata)(evaluatedVersions);
+            const profiles = (0, versionManagerStore_1.getVersionProfiles)();
+            const policy = (0, versionManagerStore_1.getVersionManagerPolicy)();
+            const groups = (0, versionManager_1.evaluateVersionGroups)(evaluatedVersions, profiles, policy);
+            const scanId = (0, versionManagerStore_1.saveVersionManagerScan)(groups, profiles);
+            res.json({ ok: true, mode: "dry-run", scanId, policyHash: (0, versionManager_1.versionManagerPolicyHash)(policy, profiles), inventoryCount: versions.length, groupCount: groups.length, probe, metadata, groups });
+        }
+        catch (err) {
+            res.status(500).json({ ok: false, error: err?.message || "Version Manager preview failed" });
+        }
+    });
+    /** Read-only policy evaluation intended for cleanup review. It never calls provider delete. */
+    app.get("/api/version-manager/delete-preview", async (_req, res) => {
+        try {
+            const startedAt = Date.now();
+            const inventoryStats = { durationMs: 0, providers: 0, providerListCalls: 0, fileTreeFetches: 0, providerItems: 0, fileTreeItems: 0, inlineFileItems: 0, nameFallbackItems: 0, mediaFiles: 0, versions: 0, recoverability: { requested: 0, cacheHits: 0, providerLookups: 0, resolved: 0, unknown: 0 } };
+            const inventoryStartedAt = Date.now();
+            const versions = await loadVersionManagerInventory(inventoryStats);
+            const inventoryMs = Date.now() - inventoryStartedAt;
+            const evaluatedVersions = (0, manualIdentity_1.applyManualIdentityOverrides)(versions);
+            const probeStartedAt = Date.now();
+            const probe = await (0, versionManagerProbe_1.probeVersionRecords)(evaluatedVersions);
+            const probeMs = Date.now() - probeStartedAt;
+            const metadataStartedAt = Date.now();
+            const metadata = await (0, versionManagerMetadata_1.enrichVersionMetadata)(evaluatedVersions);
+            const metadataMs = Date.now() - metadataStartedAt;
+            const profiles = (0, versionManagerStore_1.getVersionProfiles)();
+            const policy = (0, versionManagerStore_1.getVersionManagerPolicy)();
+            const policyStartedAt = Date.now();
+            const groups = (0, versionManager_1.evaluateVersionGroups)(evaluatedVersions, profiles, policy);
+            const policyMs = Date.now() - policyStartedAt;
+            const versionsFlat = groups.flatMap((group) => group.versions);
+            const counts = {
+                contents: groups.length,
+                versionGroups: groups.length,
+                versions: versionsFlat.length,
+                KEEP: versionsFlat.filter((version) => version.decision === "KEEP").length,
+                DELETE_CANDIDATE: versionsFlat.filter((version) => version.decision === "DELETE_CANDIDATE").length,
+                REVIEW: versionsFlat.filter((version) => version.decision === "REVIEW").length,
+                primaryMissing: groups.filter((group) => group.profileStatuses?.some((status) => status.profileId === "primary" && !status.satisfied)).length,
+                remoteMissing: policy.enableRemote ? groups.filter((group) => group.remote?.status === "REMOTE_MISSING").length : 0,
+            };
+            const evaluatedAt = new Date().toISOString();
+            const policyHash = (0, versionManager_1.versionManagerPolicyHash)(policy, profiles);
+            (0, versionManagerStore_1.saveVersionManagerPreviewAudit)({ policyHash, evaluatedAt, contentCount: counts.contents, versionGroupCount: counts.versionGroups, versionCount: counts.versions, keepCount: counts.KEEP, deleteCandidateCount: counts.DELETE_CANDIDATE, reviewCount: counts.REVIEW, primaryMissing: counts.primaryMissing, remoteMissing: counts.remoteMissing });
+            res.json({ ok: true, readOnly: true, mode: "dry-run", deleteExecutor: "not_implemented", evaluatedAt, policyVersion: policy.policyVersion || "1", policyHash, counts, groups, performance: { totalMs: Date.now() - startedAt, inventoryMs, probeMs, metadataMs, policyMs, inventory: inventoryStats, probe, metadata } });
+        }
+        catch (err) {
+            res.status(500).json({ ok: false, error: err?.message || "Delete preview failed" });
+        }
+    });
+    /** Read-only operator queue combining Organizer and policy/recoverability review. */
+    app.get("/api/version-manager/review", async (req, res) => {
+        try {
+            const requestedStatus = String(req.query.status || "pending");
+            const status = requestedStatus === "dismissed" || requestedStatus === "all" ? requestedStatus : "pending";
+            const versions = await loadVersionManagerInventory();
+            const evaluatedVersions = (0, manualIdentity_1.applyManualIdentityOverrides)(versions);
+            await (0, versionManagerProbe_1.probeVersionRecords)(evaluatedVersions);
+            await (0, versionManagerMetadata_1.enrichVersionMetadata)(evaluatedVersions);
+            const groups = (0, versionManager_1.evaluateVersionGroups)(evaluatedVersions, (0, versionManagerStore_1.getVersionProfiles)(), (0, versionManagerStore_1.getVersionManagerPolicy)());
+            const organizerStatus = status === "all" ? undefined : status;
+            const organizers = (0, organizerReview_1.listOrganizerReviews)(true, organizerStatus);
+            res.json({ ok: true, readOnly: true, ...(0, unifiedReview_1.buildUnifiedReviewQueue)(groups, organizers, status) });
+        }
+        catch (err) {
+            res.status(500).json({ ok: false, error: err?.message || "Unified review queue failed" });
+        }
+    });
+    /**
+     * GET /api/version-manager/missing — read-only missing-profile and Seerr
+     * status projection. This endpoint never sends an acquisition request.
+     */
+    app.get("/api/version-manager/missing", async (_req, res) => {
+        try {
+            const versions = await loadVersionManagerInventory();
+            const evaluatedVersions = (0, manualIdentity_1.applyManualIdentityOverrides)(versions);
+            const probe = await (0, versionManagerProbe_1.probeVersionRecords)(evaluatedVersions);
+            await (0, versionManagerMetadata_1.enrichVersionMetadata)(evaluatedVersions);
+            const profiles = (0, versionManagerStore_1.getVersionProfiles)();
+            const policy = (0, versionManagerStore_1.getVersionManagerPolicy)();
+            const groups = (0, versionManager_1.evaluateVersionGroups)(evaluatedVersions, profiles, policy);
+            const needs = policy.enableRemote ? (0, acquisition_1.deriveAcquisitionNeeds)(groups, profiles, { adapterId: "seerr", acquisitionEnabled: policy.acquireMissingRemote }) : [];
+            const adapter = new seerrAcquisitionAdapter_1.SeerrAcquisitionAdapter();
+            const previews = await Promise.all(needs.map(async (need) => {
+                const preview = await adapter.preview(need);
+                (0, db_1.recordAcquisitionAudit)({ needId: need.id, identity: need.contentIdentity, profileId: need.missingProfileId, adapterId: preview.adapterId, phase: "PREVIEW", status: preview.status, providerRequestId: preview.providerRequestId, detail: [preview.providerStatusSource, preview.mappingWarning].filter(Boolean).join("; ") });
+                return preview;
+            }));
+            return res.json({ ok: true, readOnly: true, mode: "dry-run", inventoryCount: versions.length, groupCount: groups.length, probe, needs, previews, adapter: await adapter.capabilities() });
+        }
+        catch (err) {
+            return res.status(500).json({ ok: false, error: err?.message || "Missing profile preview failed" });
+        }
+    });
+    /** Read-only provider-inventory export for backup/migration. */
+    app.get("/api/version-manager/export", async (req, res) => {
+        try {
+            const mode = (0, migrationExporter_1.normalizeMigrationExportMode)(String(req.query.mode || "FULL_LIBRARY"));
+            const sourceId = typeof req.query.provider === "string" ? req.query.provider.trim().toLowerCase() : undefined;
+            const source = sourceId ? providers_1.registry.get(sourceId) : undefined;
+            if (sourceId && !source)
+                return res.status(400).json({ ok: false, error: "Unknown source provider" });
+            if (sourceId && !source.isConfigured())
+                return res.status(503).json({ ok: false, error: "Source provider is not configured" });
+            const inventory = source
+                ? await source.listTorrents()
+                : (await Promise.all(providers_1.registry.configured().map((provider) => provider.listTorrents()))).flat();
+            if (source) {
+                const recoverabilityCache = new Map();
+                for (const item of inventory)
+                    await (0, migrationExporter_1.resolveProviderItemRecoverability)(item, source, recoverabilityCache);
+            }
+            const selectedProviderItemIds = typeof req.query.selected === "string" ? req.query.selected.split(",").map((value) => value.trim()).filter(Boolean) : undefined;
+            const selectedInventory = selectedProviderItemIds ? inventory.filter((item) => selectedProviderItemIds.includes(String(item.id))) : inventory;
+            const exportInventory = source?.getTorrentFileTree
+                ? await Promise.all(selectedInventory.map(async (item) => ({ ...item, files: await source.getTorrentFileTree(item.id) })))
+                : selectedInventory;
+            const exported = (0, migrationExporter_1.exportMigrationLibrary)(exportInventory, [], { mode, selectedProviderItemIds, sourceProvider: source?.id });
+            if (String(req.query.format || "preview") === "preview") {
+                return res.json({ ok: true, readOnly: true, mode, providerItems: inventory.length, exportableItems: exported.manifest.exportableItemCount, magnetCount: exported.manifest.magnetCount, generatedAt: exported.manifest.generatedAt });
+            }
+            if (String(req.query.format) === "magnets") {
+                res.type("text/plain").set("Content-Disposition", `attachment; filename=debrid-magnets.txt`).send(exported.magnetsText);
+                return;
+            }
+            res.type("application/json").set("Content-Disposition", `attachment; filename=debrid-migration-manifest.json`).send(JSON.stringify(exported.manifest, null, 2));
+        }
+        catch (err) {
+            res.status(500).json({ ok: false, error: err?.message || "Migration export failed" });
+        }
+    });
+    /**
+     * Read-only effective migration state. Provider inventory alone cannot
+     * remember permanent outcomes such as Real-Debrid legal rejections, so the
+     * UI reconciles the current plan with the migration audit trail here.
+     */
+    app.get("/api/version-manager/migration/state", async (req, res) => {
+        try {
+            const sourceId = typeof req.query.source === "string" ? req.query.source.trim().toLowerCase() : "alldebrid";
+            const targetId = typeof req.query.target === "string" ? req.query.target.trim().toLowerCase() : "realdebrid";
+            const source = providers_1.registry.get(sourceId);
+            const target = providers_1.registry.get(targetId);
+            if (!source || !source.isConfigured())
+                return res.status(503).json({ ok: false, error: "Source provider is not configured" });
+            if (!target || !target.isConfigured())
+                return res.status(503).json({ ok: false, error: "Target provider is not configured" });
+            const routeCapabilities = (0, providerMigrationCapabilities_1.migrationRouteLevel)((0, providerMigrationCapabilities_1.providerMigrationCapabilities)(source), (0, providerMigrationCapabilities_1.providerMigrationCapabilities)(target));
+            if (!routeCapabilities.supported)
+                return res.status(422).json({ ok: false, error: "Migration route is not supported by the declared provider capabilities", route: routeCapabilities });
+            const [sourceInventory, targetInventory] = await Promise.all([source.listTorrents(), target.listTorrents()]);
+            const exportInventory = source.getTorrentFileTree
+                ? await Promise.all(sourceInventory.map(async (item) => ({ ...item, files: await source.getTorrentFileTree(item.id) })))
+                : sourceInventory;
+            const exported = (0, migrationExporter_1.exportMigrationLibrary)(exportInventory, [], { mode: "FULL_LIBRARY", sourceProvider: source.id });
+            const rawPlan = (0, migrationImporter_1.analyzeMigrationImport)({ manifest: exported.manifest }, targetInventory);
+            const audit = (0, db_1.listMigrationAudit)(10000).filter((entry) => entry.sourceProvider === source.id && entry.targetProvider === target.id);
+            const latest = new Map();
+            for (const entry of audit)
+                if (!latest.has(entry.infoHash))
+                    latest.set(entry.infoHash, entry);
+            const effectiveItems = rawPlan.items.map((item) => {
+                const entry = item.infoHash ? latest.get(item.infoHash) : undefined;
+                const effective = (0, migrationState_1.effectiveMigrationStatus)(item.status, entry);
+                return { ...item, effectiveStatus: effective.status, reason: effective.reason || item.reason, lastAttempt: effective.lastAttempt, targetProviderItemId: effective.targetProviderItemId };
+            });
+            const count = (status) => effectiveItems.filter((item) => item.effectiveStatus === status).length;
+            const importedHistory = new Set(audit.filter((entry) => entry.executionStatus === "IMPORTED").map((entry) => entry.infoHash)).size;
+            const alreadyPresent = count("ALREADY_PRESENT") + count("ALREADY_PRESENT_EQUIVALENT_HASH") + count("IMPORTED");
+            const jobs = (0, migrationState_1.aggregateMigrationJobs)(audit.map((entry) => ({ id: entry.id, sourceProvider: entry.sourceProvider, targetProvider: entry.targetProvider, infoHash: entry.infoHash, executionStatus: entry.executionStatus, reason: entry.reason, createdAt: entry.createdAt })));
+            const effectiveByProviderItemId = Object.fromEntries(effectiveItems
+                .filter((item) => item.providerItemId)
+                .map((item) => [String(item.providerItemId), item.effectiveStatus]));
+            res.json({
+                ok: true, readOnly: true, sourceProvider: source.id, targetProvider: target.id,
+                generatedAt: new Date().toISOString(), sourceItems: sourceInventory.length, targetItems: targetInventory.length,
+                raw: { ...rawPlan.counts },
+                effective: { alreadyPresent, importedHistory, readyToImport: count("READY_TO_IMPORT"), rejectedLegal: count("REJECTED_LEGAL"), failedPermanent: count("FAILED_PERMANENT"), retryExhausted: count("RETRY_EXHAUSTED"), residualTentableReady: count("READY_TO_IMPORT") },
+                effectiveByProviderItemId,
+                jobs,
+                items: effectiveItems.map((item) => ({ ...item, infoHash: item.infoHash ? `${item.infoHash.slice(0, 8)}…${item.infoHash.slice(-6)}` : undefined })),
+                audit: audit.slice(0, 250).map((entry) => ({ ...entry, infoHash: `${entry.infoHash.slice(0, 8)}…${entry.infoHash.slice(-6)}` })),
+            });
+        }
+        catch (err) {
+            res.status(500).json({ ok: false, error: err?.message || "Migration state unavailable" });
+        }
+    });
+    /** Declared provider migration capabilities and derived source/target routes. */
+    app.get("/api/version-manager/migration/capabilities", (_req, res) => {
+        const providers = providers_1.registry.all().map(providerMigrationCapabilities_1.providerMigrationCapabilities);
+        const routes = providers.flatMap((source) => providers.map((target) => {
+            const route = (0, providerMigrationCapabilities_1.migrationRouteLevel)(source, target);
+            return { sourceProvider: source.providerId, targetProvider: target.providerId, ...route };
+        }));
+        res.json({ ok: true, readOnly: true, providers, routes });
+    });
+    /** Read-only import analysis. It never calls addMagnet or any provider mutation API. */
+    app.post("/api/version-manager/import/preview", async (req, res) => {
+        try {
+            const body = req.body || {};
+            const targetId = typeof body.targetProvider === "string" ? body.targetProvider.trim().toLowerCase() : undefined;
+            const target = targetId ? providers_1.registry.get(targetId) : undefined;
+            if (targetId && !target)
+                return res.status(400).json({ ok: false, error: "Unknown target provider" });
+            if (targetId && !target.isConfigured())
+                return res.status(503).json({ ok: false, error: "Target provider is not configured" });
+            if (target) {
+                const targetCapabilities = (0, providerMigrationCapabilities_1.providerMigrationCapabilities)(target);
+                const importCapability = targetCapabilities.capabilities.find((item) => item.capability === "importMagnet");
+                if (!importCapability || importCapability.support === "UNSUPPORTED" || importCapability.support === "UNKNOWN") {
+                    return res.status(422).json({ ok: false, error: "Target provider does not declare a usable magnet import capability", capability: importCapability });
+                }
+            }
+            const inventory = target
+                ? await target.listTorrents()
+                : (await Promise.all(providers_1.registry.configured().map((provider) => provider.listTorrents()))).flat();
+            const plan = (0, migrationImporter_1.analyzeMigrationImport)({ manifest: body.manifest, magnetsText: typeof body.magnetsText === "string" ? body.magnetsText : undefined }, inventory);
+            res.json({ ok: true, targetProvider: target?.id || "configured-providers", ...plan });
+        }
+        catch (err) {
+            res.status(400).json({ ok: false, error: err?.message || "Migration import preview failed" });
+        }
+    });
+    /** Explicit one-item migration execution; no bulk or UI execution path. */
+    app.post("/api/version-manager/import/execute", async (req, res) => {
+        try {
+            if (req.body?.confirm !== "IMPORT_ONE")
+                return res.status(400).json({ ok: false, error: "Explicit IMPORT_ONE confirmation is required" });
+            const targetId = typeof req.body?.targetProvider === "string" ? req.body.targetProvider.trim().toLowerCase() : "";
+            const target = providers_1.registry.get(targetId);
+            if (!target)
+                return res.status(400).json({ ok: false, error: "Unknown target provider" });
+            if (!target.isConfigured())
+                return res.status(503).json({ ok: false, error: "Target provider is not configured" });
+            const sourceItem = req.body?.manifestItem;
+            const recoverable = (0, migrationImporter_1.getRecoverableManifestItem)(sourceItem);
+            if (!recoverable)
+                return res.status(400).json({ ok: false, error: "Manifest item is not recoverable" });
+            const before = (0, migrationImporter_1.analyzeMigrationImport)({ manifest: { schemaVersion: "1.0", items: [sourceItem] } }, await target.listTorrents());
+            const initial = before.items[0];
+            if (!initial || initial.status !== "READY_TO_IMPORT")
+                return res.status(409).json({ ok: false, error: "Revalidation blocked the import", plan: before });
+            const result = await (0, migrationImporter_1.executeMigrationImportItem)(sourceItem, target);
+            const after = (0, migrationImporter_1.analyzeMigrationImport)({ manifest: { schemaVersion: "1.0", items: [sourceItem] } }, await target.listTorrents());
+            const sourceProvider = String(sourceItem?.provider || req.body?.sourceProvider || "unknown");
+            const auditOutcome = (0, migrationImporter_1.migrationAuditOutcome)(after.items[0]?.status || "ALREADY_PRESENT_EQUIVALENT_HASH", result.providerItemId);
+            (0, db_1.recordMigrationAudit)({ sourceProvider, targetProvider: target.id, sourceProviderItemId: String(sourceItem?.providerItemId || ""), infoHash: recoverable.infoHash, initialStatus: initial.status, revalidationStatus: auditOutcome.reconciliationStatus, executionStatus: auditOutcome.executionStatus, targetProviderItemId: auditOutcome.targetProviderItemId, importExecuted: auditOutcome.importExecuted });
+            res.json({ ok: true, readOnly: false, sourceProvider, targetProvider: target.id, result, postImportPlan: after });
+        }
+        catch (err) {
+            res.status(502).json({ ok: false, error: err?.message || "Migration execution failed" });
+        }
+    });
+    /** Explicit full-import executor. The caller must opt into the complete current READY plan. */
+    app.post("/api/version-manager/import/execute-bulk", async (req, res) => {
+        try {
+            if (req.body?.confirm !== "IMPORT_ALL_READY")
+                return res.status(400).json({ ok: false, error: "Explicit IMPORT_ALL_READY confirmation is required" });
+            const source = providers_1.registry.get("alldebrid");
+            const target = providers_1.registry.get("realdebrid");
+            if (!source || !source.isConfigured())
+                return res.status(503).json({ ok: false, error: "AllDebrid source provider is unavailable" });
+            if (!target || !target.isConfigured())
+                return res.status(503).json({ ok: false, error: "Real-Debrid target provider is unavailable" });
+            const sourceInventory = await source.listTorrents();
+            const exported = (0, migrationExporter_1.exportMigrationLibrary)(sourceInventory, [], { mode: "FULL_LIBRARY", sourceProvider: source.id });
+            const initialTargetInventory = await target.listTorrents();
+            const initialPlan = (0, migrationImporter_1.analyzeMigrationImport)({ manifest: exported.manifest }, initialTargetInventory);
+            const skipLegal = new Set(Array.isArray(req.body?.skipLegalInfoHashes) ? req.body.skipLegalInfoHashes.map((value) => String(value).toLowerCase()) : []);
+            const knownRejectedLegal = initialPlan.items.filter((item) => item.status === "READY_TO_IMPORT" && item.infoHash && skipLegal.has(item.infoHash.toLowerCase()));
+            const ready = initialPlan.items.filter((item) => item.status === "READY_TO_IMPORT" && (!item.infoHash || !skipLegal.has(item.infoHash.toLowerCase())));
+            console.log(`[${new Date().toISOString()}][migration-bulk] start total=${ready.length} sourceItems=${sourceInventory.length} targetItems=${initialTargetInventory.length}`);
+            const execution = await (0, migrationImporter_1.executeMigrationImportBulk)(ready, target, {
+                targetInventory: () => target.listTorrents(),
+                onProgress: (progress) => console.log(`[${new Date().toISOString()}][migration-bulk] progress`, { ...progress, etaMs: progress.processed > 0 ? Math.round((progress.elapsedMs / progress.processed) * progress.remaining) : undefined }),
+            });
+            const finalTargetInventory = await target.listTorrents();
+            const finalPlan = (0, migrationImporter_1.analyzeMigrationImport)({ manifest: exported.manifest }, finalTargetInventory);
+            for (const item of execution.results) {
+                if (!item.infoHash)
+                    continue;
+                (0, db_1.recordMigrationAudit)({ sourceProvider: source.id, targetProvider: target.id, infoHash: item.infoHash, initialStatus: "READY_TO_IMPORT", revalidationStatus: item.status === "SKIPPED_ALREADY_PRESENT" ? "ALREADY_PRESENT" : "READY_TO_IMPORT", executionStatus: item.status, targetProviderItemId: item.providerItemId, reason: item.reason, retryCount: item.retryCount, importExecuted: item.importExecuted });
+            }
+            for (const item of knownRejectedLegal) {
+                (0, db_1.recordMigrationAudit)({ sourceProvider: source.id, targetProvider: target.id, infoHash: item.infoHash, initialStatus: "READY_TO_IMPORT", revalidationStatus: "REJECTED_LEGAL", executionStatus: "REJECTED_LEGAL", reason: "LEGAL_RESTRICTION (previously recorded)", retryCount: 0, importExecuted: true });
+            }
+            return res.json({ ok: true, readOnly: false, sourceProvider: source.id, targetProvider: target.id, initial: { providerItems: sourceInventory.length, targetItems: initialTargetInventory.length, plan: initialPlan.counts }, knownRejectedLegal: knownRejectedLegal.length, execution, final: { targetItems: finalTargetInventory.length, plan: finalPlan.counts, residualTentableReady: Math.max(0, finalPlan.counts.READY_TO_IMPORT - knownRejectedLegal.length) } });
+        }
+        catch (err) {
+            return res.status(502).json({ ok: false, error: err?.message || "Migration bulk execution failed" });
+        }
+    });
+    /** Explicit single Seerr request. Bulk acquisition has no route. */
+    app.post("/api/version-manager/acquisition/request", async (req, res) => {
+        try {
+            if (req.body?.confirm !== "REQUEST_ONE")
+                return res.status(400).json({ ok: false, error: "Explicit REQUEST_ONE confirmation is required" });
+            if (!config_1.config.acquisitionRequestsEnabled)
+                return res.status(403).json({ ok: false, error: "Acquisition requests are disabled" });
+            const need = req.body?.need;
+            if (!need || typeof need !== "object")
+                return res.status(400).json({ ok: false, error: "A single acquisition need is required" });
+            const adapter = new seerrAcquisitionAdapter_1.SeerrAcquisitionAdapter();
+            (0, db_1.recordAcquisitionAudit)({ needId: String(need.id || "unknown"), identity: need.contentIdentity, profileId: String(need.missingProfileId || ""), adapterId: "seerr", phase: "REVALIDATION", status: "REVALIDATED", detail: "Immediate status check performed by adapter" });
+            const result = await adapter.request(need);
+            (0, db_1.recordAcquisitionAudit)({ needId: String(need.id || "unknown"), identity: need.contentIdentity, profileId: String(need.missingProfileId || ""), adapterId: "seerr", phase: "REQUEST", status: result.status, providerRequestId: result.providerRequestId, detail: result.detail });
+            return res.json({ ok: true, requestExecuted: true, result });
+        }
+        catch (err) {
+            const need = req.body?.need;
+            if (need && typeof need === "object")
+                (0, db_1.recordAcquisitionAudit)({ needId: String(need.id || "unknown"), identity: need.contentIdentity, profileId: String(need.missingProfileId || ""), adapterId: "seerr", phase: "REQUEST", status: "FAILED", detail: err?.message || "Seerr request failed" });
+            return res.status(502).json({ ok: false, requestExecuted: false, error: err?.message || "Seerr request failed" });
+        }
+    });
+    app.put("/api/version-manager/profiles", (req, res) => {
+        try {
+            if (!Array.isArray(req.body?.profiles) || req.body.profiles.length === 0)
+                return res.status(400).json({ ok: false, error: "profiles must be a non-empty array" });
+            const profiles = req.body.profiles.map((profile) => ({ ...profile, hardRequirements: profile.hardRequirements ? (0, versionManager_1.validateRule)(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? (0, versionManager_1.validateScoringRules)(profile.scoringRules) : undefined }));
+            const policy = {
+                enableRemote: req.body.policy?.enableRemote === true,
+                acquireMissingRemote: req.body.policy?.acquireMissingRemote === true,
+                policyVersion: typeof req.body.policy?.policyVersion === "string" ? req.body.policy.policyVersion : "1",
+                safety: {
+                    requireRecoverableBeforeDelete: req.body.policy?.safety?.requireRecoverableBeforeDelete !== false,
+                    allowDeleteWhenIdentityUncertain: req.body.policy?.safety?.allowDeleteWhenIdentityUncertain === true,
+                    allowDeleteWhenMetadataIncomplete: req.body.policy?.safety?.allowDeleteWhenMetadataIncomplete === true,
+                },
+            };
+            (0, versionManagerStore_1.saveVersionProfiles)(profiles);
+            (0, versionManagerStore_1.saveVersionManagerPolicy)(policy);
+            res.json({ ok: true, profiles: (0, versionManagerStore_1.getVersionProfiles)(), policy });
+        }
+        catch (err) {
+            res.status(400).json({ ok: false, error: err?.message || "Invalid profiles" });
+        }
+    });
+    // ===========================================================================
     // Infringement List (Blacklist) API
     // ===========================================================================
     /** GET /api/infringement-list — Returns all blacklisted torrent entries. */
@@ -176,6 +564,116 @@ function startServer() {
             createdAt: e.blacklistedAt,
         }));
         res.json({ ok: true, entries });
+    });
+    // ===========================================================================
+    // Organizer Review API
+    // ===========================================================================
+    /** GET /api/organizer/review — Lists pending identity decisions. */
+    app.get('/api/organizer/review', (req, res) => {
+        const includeResolved = String(req.query.includeResolved || '') === 'true';
+        const status = req.query.status === 'pending' || req.query.status === 'accepted' || req.query.status === 'dismissed'
+            ? req.query.status : undefined;
+        const parserStatus = req.query.parserStatus === 'matched' || req.query.parserStatus === 'ambiguous' || req.query.parserStatus === 'unmatched'
+            ? req.query.parserStatus : undefined;
+        const limit = Math.min(200, Math.max(1, Number(req.query.limit) || 50));
+        const offset = Math.max(0, Number(req.query.offset) || 0);
+        const all = (0, organizerReview_1.filterOrganizerReviewsByParserStatus)((0, organizerReview_1.listOrganizerReviews)(includeResolved, status), parserStatus);
+        res.json({ ok: true, entries: all.slice(offset, offset + limit), total: all.length, limit, offset });
+    });
+    /** GET /api/organizer/review/:id — Returns one review entry. */
+    app.get('/api/organizer/review/:id', (req, res) => {
+        const entry = (0, organizerReview_1.listOrganizerReviews)(true).find((item) => item.id === String(req.params.id));
+        if (!entry)
+            return res.status(404).json({ ok: false, error: 'Review entry not found' });
+        res.json({ ok: true, entry });
+    });
+    /** POST /api/organizer/review/:id — Records a manual review decision or safe retry. */
+    app.post('/api/organizer/review/:id', (req, res) => {
+        if (req.body?.action === 'clear-match') {
+            const entry = (0, organizerReview_1.clearOrganizerReviewOverride)(String(req.params.id));
+            if (!entry)
+                return res.status(404).json({ ok: false, error: 'Review entry not found' });
+            return res.json({ ok: true, entry });
+        }
+        if (req.body?.action === 'retry') {
+            const entry = (0, organizerReview_1.retryOrganizerReview)(String(req.params.id));
+            if (!entry)
+                return res.status(404).json({ ok: false, error: 'Review entry not found' });
+            return res.json({ ok: true, entry });
+        }
+        const decision = req.body?.decision;
+        if (decision !== 'accepted' && decision !== 'dismissed') {
+            return res.status(400).json({ ok: false, error: 'decision must be accepted or dismissed' });
+        }
+        let override;
+        try {
+            override = (0, organizerReview_1.validateReviewOverride)(req.body?.override);
+        }
+        catch (err) {
+            return res.status(400).json({ ok: false, error: err?.message || 'Invalid override' });
+        }
+        const entry = (0, organizerReview_1.decideOrganizerReview)(String(req.params.id), decision, override);
+        if (!entry)
+            return res.status(404).json({ ok: false, error: 'Review entry not found' });
+        res.json({ ok: true, entry });
+    });
+    /** GET /api/organizer/review/:id/audit — Returns the decision history. */
+    app.get('/api/organizer/review/:id/audit', (req, res) => {
+        res.json({ ok: true, audit: (0, organizerReview_1.listOrganizerReviewAudit)(String(req.params.id)) });
+    });
+    // Persists a canonical manual identity for Content Detail records that do
+    // not have an Organizer Review, then reevaluates the latest cached scan.
+    // This is deliberately cache-only: it never starts a provider rescan.
+    app.post('/api/version-manager/identity/override', (req, res) => {
+        const identity = req.body?.identity;
+        if (!identity || typeof identity !== 'object')
+            return res.status(400).json({ ok: false, error: 'identity is required' });
+        const identityValue = {
+            title: typeof identity.title === 'string' ? identity.title : undefined,
+            year: typeof identity.year === 'number' ? identity.year : undefined,
+            kind: identity.kind === 'episode' || identity.mediaType === 'tv' ? 'episode' : identity.kind === 'movie' || identity.mediaType === 'movie' ? 'movie' : undefined,
+            season: typeof identity.season === 'number' ? identity.season : undefined,
+            episode: typeof identity.episode === 'number' ? identity.episode : undefined,
+            tmdbId: typeof identity.tmdbId === 'string' ? identity.tmdbId : undefined,
+        };
+        let override;
+        try {
+            override = (0, organizerReview_1.validateReviewOverride)(req.body?.override);
+        }
+        catch (err) {
+            return res.status(400).json({ ok: false, error: err?.message || 'Invalid manual identity' });
+        }
+        if (req.body?.action === 'clear')
+            (0, manualIdentity_1.clearManualIdentityOverride)(identityValue);
+        else {
+            if (!override)
+                return res.status(400).json({ ok: false, error: 'override is required' });
+            (0, manualIdentity_1.saveManualIdentityOverride)(identityValue, override);
+        }
+        const records = (0, manualIdentity_1.applyManualIdentityOverrides)((0, versionManagerStore_1.getLatestVersionManagerRecords)());
+        const groups = (0, versionManager_1.evaluateVersionGroups)(records, (0, versionManagerStore_1.getVersionProfiles)(), (0, versionManagerStore_1.getVersionManagerPolicy)());
+        const key = (0, manualIdentity_1.identityOverrideKey)(identityValue);
+        const affectedGroups = groups.filter((group) => (0, manualIdentity_1.identityOverrideKey)(group.identity) === key || (override?.tmdbId && group.identity.tmdbId === override.tmdbId));
+        res.json({ ok: true, identity: affectedGroups[0]?.identity || identityValue, groups: affectedGroups, reevaluated: records.length > 0, readOnlyEvaluation: true });
+    });
+    // Read-only TMDb candidate search used by the Media Manager identity picker.
+    app.get('/api/version-manager/identity/search', async (req, res) => {
+        const query = String(req.query.query || '').trim();
+        const mediaType = req.query.type === 'tv' ? 'tv' : req.query.type === 'movie' ? 'movie' : undefined;
+        const yearValue = req.query.year === undefined || req.query.year === '' ? undefined : Number(req.query.year);
+        if (!query || query.length > 200)
+            return res.status(400).json({ ok: false, error: 'query is required and must be at most 200 characters' });
+        if (!mediaType)
+            return res.status(400).json({ ok: false, error: 'type must be movie or tv' });
+        if (yearValue !== undefined && (!Number.isInteger(yearValue) || yearValue < 1800 || yearValue > 2200))
+            return res.status(400).json({ ok: false, error: 'year is invalid' });
+        try {
+            const results = await (0, tmdbService_1.searchTmdbCandidates)(query, mediaType, yearValue);
+            res.json({ ok: true, query, mediaType, year: yearValue, results });
+        }
+        catch (error) {
+            res.status(502).json({ ok: false, error: error?.message || 'TMDb search failed' });
+        }
     });
     /** GET /api/infringement-list/check — Checks if a name matches the blacklist. */
     app.get('/api/infringement-list/check', (req, res) => {
@@ -995,68 +1493,13 @@ function startServer() {
         try {
             const requestedPath = String(req.query.path || "/");
             const mountBase = config_1.config.mountBase || "/mnt/schrodrive";
-            // Sanitise path to prevent directory traversal attacks
-            const safePath = path_1.default.normalize(requestedPath).replace(/^(\.\.[\/\\])+/, "");
-            const fullPath = path_1.default.join(mountBase, safePath);
-            // Ensure the resolved path hasn't escaped the mount base
-            if (!fullPath.startsWith(mountBase)) {
-                return res.status(403).json({ ok: false, error: "Access denied" });
-            }
-            // Check if path exists
-            if (!fs_1.default.existsSync(fullPath)) {
-                return res.status(404).json({ ok: false, error: "Path not found", path: safePath });
-            }
-            const stat = fs_1.default.statSync(fullPath);
-            if (stat.isFile()) {
-                // Return file metadata (not the file contents)
-                return res.json({
-                    ok: true,
-                    type: "file",
-                    path: safePath,
-                    name: path_1.default.basename(fullPath),
-                    size: stat.size,
-                    modified: stat.mtime,
-                });
-            }
-            // List directory contents
-            const entries = fs_1.default.readdirSync(fullPath, { withFileTypes: true });
-            const items = entries.map((entry) => {
-                const itemPath = path_1.default.join(fullPath, entry.name);
-                try {
-                    const itemStat = fs_1.default.statSync(itemPath);
-                    return {
-                        name: entry.name,
-                        path: path_1.default.join(safePath, entry.name),
-                        type: entry.isDirectory() ? "directory" : "file",
-                        size: entry.isFile() ? itemStat.size : undefined,
-                        modified: itemStat.mtime,
-                    };
-                }
-                catch {
-                    return {
-                        name: entry.name,
-                        path: path_1.default.join(safePath, entry.name),
-                        type: entry.isDirectory() ? "directory" : "file",
-                    };
-                }
-            });
-            // Sort: directories first, then alphabetically by name
-            items.sort((a, b) => {
-                if (a.type !== b.type)
-                    return a.type === "directory" ? -1 : 1;
-                return a.name.localeCompare(b.name);
-            });
-            res.json({
-                ok: true,
-                type: "directory",
-                path: safePath,
-                items,
-                mountBase,
-            });
+            const listing = await (0, filesystemBrowser_1.browseMountedFilesystem)(mountBase, requestedPath);
+            res.json({ ok: true, ...listing, mountBase });
         }
         catch (err) {
             console.error("[api/files] Error:", err.message);
-            res.status(500).json({ ok: false, error: err.message });
+            const status = err instanceof filesystemBrowser_1.FilesystemBrowserError ? err.status : 500;
+            res.status(status).json({ ok: false, error: err.message });
         }
     });
     // ===========================================================================

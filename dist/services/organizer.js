@@ -52,14 +52,25 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.applyOrganizerReviewOverride = applyOrganizerReviewOverride;
+exports.shouldDeferToReview = shouldDeferToReview;
+exports.selectOrganizerFilename = selectOrganizerFilename;
+exports.computeTarget = computeTarget;
+exports.makeSymlink = makeSymlink;
+exports.resolveCollisionTarget = resolveCollisionTarget;
 exports.organizeOnce = organizeOnce;
 exports.startOrganizerWatch = startOrganizerWatch;
+const fs = __importStar(require("fs"));
 const fsp = __importStar(require("fs/promises"));
 const path = __importStar(require("path"));
+const crypto_1 = require("crypto");
 const axios_1 = __importDefault(require("axios"));
 const config_1 = require("../core/config");
 const mediaClassifier_1 = require("../core/mediaClassifier");
 const mount_1 = require("./mount");
+const mediaParser_1 = require("./mediaParser");
+const organizerReview_1 = require("./organizerReview");
+const tmdbService_1 = require("./tmdbService");
 // ===========================================================================
 // Types & Constants
 // ===========================================================================
@@ -186,6 +197,39 @@ function pad2(n) { return n < 10 ? `0${n}` : String(n); }
  * @returns The zero-padded string.
  */
 function pad4(n) { return `${n}`.padStart(4, "0"); }
+/** Apply a persisted manual identity decision without changing release names. */
+function applyOrganizerReviewOverride(parsed, override, sourceBasename) {
+    const type = override.kind === "movie"
+        ? "movie"
+        : override.kind === "episode"
+            ? "tv"
+            : parsed.type;
+    const title = override.title?.trim();
+    const year = override.year ?? parsed.year;
+    const ext = parsed.ext || path.extname(sourceBasename);
+    if (type === "movie") {
+        return { type: "movie", title: title || parsed.title, year, ext };
+    }
+    if (type === "tv") {
+        return {
+            type: "tv",
+            show: title || parsed.show,
+            year,
+            season: override.season ?? parsed.season,
+            episode: override.episode ?? parsed.episode,
+            absolute: parsed.absolute,
+            ext,
+        };
+    }
+    return parsed;
+}
+/**
+ * Keeps uncertain identities out of the organised library until an operator
+ * explicitly accepts an override. A dismissed item is handled by the caller.
+ */
+function shouldDeferToReview(identity, decision) {
+    return identity.status !== "matched" && decision !== "accepted";
+}
 /**
  * Extracts hints from parent directory names, looking for patterns like
  * "Show Name (1997)" to determine show name and premiere year.
@@ -377,6 +421,49 @@ function parseFilename(fileName, fullPath) {
     }
     return { type: "unknown", ext };
 }
+/**
+ * Applies the pure structured parser only where it adds identity information
+ * without changing provider classification or Arr naming. The legacy parser
+ * remains the fallback for unsupported/ambiguous releases.
+ */
+function enrichWithStructuredIdentity(parsed, fileName, fullPath) {
+    const structured = (0, mediaParser_1.parseMediaFilename)(fileName, fullPath);
+    if (structured.status !== "matched" || !structured.title || structured.confidence < 0.8) {
+        return parsed;
+    }
+    if (structured.kind === "episode") {
+        return {
+            type: "tv",
+            show: structured.title,
+            season: structured.season,
+            episode: structured.episode,
+            absolute: undefined,
+            year: structured.year ?? parsed.year,
+            ext: parsed.ext,
+        };
+    }
+    if (structured.kind === "anime-episode") {
+        return {
+            type: "tv",
+            show: structured.title,
+            absolute: structured.absoluteEpisode,
+            year: structured.year ?? parsed.year,
+            ext: parsed.ext,
+        };
+    }
+    // An explicit movie year is allowed to correct a false TV/absolute parse.
+    if (structured.kind === "movie" && structured.year) {
+        return {
+            type: "movie",
+            title: structured.title,
+            year: structured.year,
+            ext: parsed.ext,
+        };
+    }
+    return parsed.type === "unknown"
+        ? { type: "movie", title: structured.title, year: structured.year, ext: parsed.ext }
+        : parsed;
+}
 // ===========================================================================
 // Metadata Lookup
 // ===========================================================================
@@ -390,41 +477,10 @@ function parseFilename(fileName, fullPath) {
  * @returns An object with confirmed type, canonical title, and canonical year.
  */
 async function tmdbSearch(title, prefer, year) {
-    if (!config_1.config.tmdbApiKey)
+    const result = await (0, tmdbService_1.searchTmdb)(title, prefer, year);
+    if (result.status !== "matched" || !result.metadata)
         return {};
-    try {
-        const params = { api_key: config_1.config.tmdbApiKey, query: title, include_adult: false };
-        if (year) {
-            // TMDB uses different year parameters for movies vs TV
-            if (prefer === "movie")
-                params.year = year;
-            else
-                params.first_air_date_year = year;
-        }
-        const url = prefer === "movie" ? "https://api.themoviedb.org/3/search/movie" : "https://api.themoviedb.org/3/search/tv";
-        const { data } = await axios_1.default.get(url, { params, timeout: 10000 });
-        const results = Array.isArray(data?.results) ? data.results : [];
-        const best = results[0];
-        if (!best)
-            return {};
-        if (prefer === "movie") {
-            return {
-                confirmedType: "movie",
-                canonicalTitle: best.title || best.original_title || title,
-                canonicalYear: best.release_date ? Number(String(best.release_date).slice(0, 4)) : year,
-            };
-        }
-        else {
-            return {
-                confirmedType: "tv",
-                canonicalTitle: best.name || best.original_name || title,
-                canonicalYear: best.first_air_date ? Number(String(best.first_air_date).slice(0, 4)) : year,
-            };
-        }
-    }
-    catch (_e) {
-        return {};
-    }
+    return { confirmedType: prefer === "movie" ? "movie" : "tv", canonicalTitle: result.metadata.title, canonicalYear: result.metadata.year };
 }
 /**
  * Searches TVMaze for a TV show title to retrieve canonical naming
@@ -439,7 +495,15 @@ async function tvmazeSearch(title, year) {
         const url = "https://api.tvmaze.com/search/shows";
         const { data } = await axios_1.default.get(url, { params: { q: title }, timeout: 10000 });
         const arr = Array.isArray(data) ? data : [];
-        const best = arr[0]?.show;
+        const selection = (0, mediaParser_1.selectMediaCandidate)({ title, year, kind: "episode" }, arr.map((item) => ({
+            id: String(item?.show?.id ?? ""),
+            title: item?.show?.name || "",
+            kind: "show",
+            year: Number(String(item?.show?.premiered || "").slice(0, 4)) || undefined,
+        })));
+        if (selection.status !== "matched" || !selection.candidate)
+            return {};
+        const best = arr.find((item) => String(item?.show?.id ?? "") === String(selection.candidate?.id))?.show;
         if (!best)
             return {};
         const name = best.name || title;
@@ -463,7 +527,15 @@ async function itunesMovieSearch(title, year) {
         const url = "https://itunes.apple.com/search";
         const { data } = await axios_1.default.get(url, { params: { term: title, media: "movie", limit: 5 }, timeout: 10000 });
         const results = Array.isArray(data?.results) ? data.results : [];
-        const best = results[0];
+        const selection = (0, mediaParser_1.selectMediaCandidate)({ title, year, kind: "movie" }, results.map((item, index) => ({
+            id: String(item?.trackId ?? index),
+            title: item?.trackName || "",
+            kind: "movie",
+            year: item?.releaseDate ? new Date(item.releaseDate).getFullYear() : undefined,
+        })));
+        if (selection.status !== "matched" || !selection.candidate)
+            return {};
+        const best = results.find((item, index) => String(item?.trackId ?? index) === String(selection.candidate?.id));
         if (!best)
             return {};
         const name = best.trackName || title;
@@ -474,32 +546,16 @@ async function itunesMovieSearch(title, year) {
         return {};
     }
 }
-// ===========================================================================
-// File Operations
-// ===========================================================================
-/**
- * Computes the target symlink path for an organised media file based on
- * its parsed metadata.
- *
- * Output structure:
- * - Movies: `<organizedBase>/Movies/<Title> (<Year>)/<Title> (<Year>).ext`
- * - Anime (TV): `<organizedBase>/Anime/<Show> (<Year>)/Season <SS>/<Show> S<SS>E<EE>.ext`
- * - TV (S/E): `<organizedBase>/TV/<Show> (<Year>)/Season <SS>/<Show> S<SS>E<EE>.ext`
- * - TV (absolute): `<organizedBase>/TV/<Show> (<Year>)/<Show> - <NNNN>.ext`
- * - TV (no episode): `<organizedBase>/TV/<Show> (<Year>)/<Show>.ext`
- *
- * @param p - The parsed metadata from {@link parseFilename}.
- * @param srcBaseName - The original filename (used as fallback for titles).
- * @param srcFullPath - The full path to the source file (used for torrent dir classification).
- * @returns The absolute target path, or `null` if type is unknown.
- */
-function computeTarget(p, srcBaseName, srcFullPath) {
+function selectOrganizerFilename(mode, canonicalFilename, sourceFilename) {
+    return mode === "original" ? path.basename(sourceFilename) : canonicalFilename;
+}
+function computeTarget(p, srcBaseName, srcFullPath, filenameMode = config_1.config.organizerFilenameMode) {
     const orgBase = config_1.config.organizedBase;
     if (p.type === "movie") {
         const title = p.title ? sanitize(p.title) : sanitize(path.parse(srcBaseName).name);
         const folder = p.year ? `${title} (${p.year})` : title;
         const dstDir = path.join(orgBase, "Movies", folder);
-        const dstName = `${folder}${p.ext}`;
+        const dstName = selectOrganizerFilename(filenameMode, `${folder}${p.ext}`, srcBaseName);
         return path.join(dstDir, dstName);
     }
     if (p.type === "tv") {
@@ -524,27 +580,27 @@ function computeTarget(p, srcBaseName, srcFullPath) {
             if (typeof p.season === "number" && typeof p.episode === "number") {
                 const seasonDir = `Season ${pad2(p.season)}`;
                 const epStr = `${show} S${pad2(p.season)}E${pad2(p.episode)}`;
-                return path.join(orgBase, "Anime", showDir, seasonDir, `${epStr}${p.ext}`);
+                return path.join(orgBase, "Anime", showDir, seasonDir, selectOrganizerFilename(filenameMode, `${epStr}${p.ext}`, srcBaseName));
             }
             if (typeof p.absolute === "number") {
-                return path.join(orgBase, "Anime", showDir, `${show} - ${pad4(p.absolute)}${p.ext}`);
+                return path.join(orgBase, "Anime", showDir, selectOrganizerFilename(filenameMode, `${show} - ${pad4(p.absolute)}${p.ext}`, srcBaseName));
             }
-            return path.join(orgBase, "Anime", showDir, `${show}${p.ext}`);
+            return path.join(orgBase, "Anime", showDir, selectOrganizerFilename(filenameMode, `${show}${p.ext}`, srcBaseName));
         }
         if (typeof p.season === "number" && typeof p.episode === "number") {
             const seasonDir = `Season ${pad2(p.season)}`;
             const dstDir = path.join(orgBase, "TV", showDir, seasonDir);
-            const fileName = `${show} S${pad2(p.season)}E${pad2(p.episode)}${p.ext}`;
+            const fileName = selectOrganizerFilename(filenameMode, `${show} S${pad2(p.season)}E${pad2(p.episode)}${p.ext}`, srcBaseName);
             return path.join(dstDir, fileName);
         }
         if (typeof p.absolute === "number") {
             const dstDir = path.join(orgBase, "TV", showDir);
-            const fileName = `${show} - ${pad4(p.absolute)}${p.ext}`;
+            const fileName = selectOrganizerFilename(filenameMode, `${show} - ${pad4(p.absolute)}${p.ext}`, srcBaseName);
             return path.join(dstDir, fileName);
         }
         // TV with no episode info — place directly in the show directory
         const dstDir = path.join(orgBase, "TV", showDir);
-        const fileName = `${show}${p.ext}`;
+        const fileName = selectOrganizerFilename(filenameMode, `${show}${p.ext}`, srcBaseName);
         return path.join(dstDir, fileName);
     }
     return null;
@@ -567,9 +623,10 @@ async function ensureDir(p) {
  * @param dst - The absolute path where the symlink should be created.
  * @param dryRun - If `true`, log but do not actually create the symlink.
  */
-async function makeSymlink(src, dst, dryRun) {
+async function makeSymlink(src, dst, dryRun, avoidCollision = false) {
     const dstDir = path.dirname(dst);
-    await ensureDir(dstDir);
+    if (!dryRun)
+        await ensureDir(dstDir);
     const relTarget = path.relative(dstDir, src);
     try {
         const st = await fsp.lstat(dst).catch(() => null);
@@ -580,6 +637,8 @@ async function makeSymlink(src, dst, dryRun) {
                 const resolved = path.resolve(dstDir, cur);
                 if (resolved === src)
                     return; // Already correct — skip
+                if (avoidCollision)
+                    return;
                 await fsp.unlink(dst);
             }
             else {
@@ -596,6 +655,32 @@ async function makeSymlink(src, dst, dryRun) {
     }
 }
 /**
+ * Allocates a stable alternate target when the canonical destination already
+ * belongs to another source. Existing symlinks are never removed by this
+ * function; the source path is part of the deterministic suffix so discovery
+ * order cannot change the result.
+ */
+async function resolveCollisionTarget(src, dst) {
+    const dstDir = path.dirname(dst);
+    const ext = path.extname(dst);
+    const stem = path.basename(dst, ext);
+    const fingerprint = (0, crypto_1.createHash)("sha1").update(src).digest("hex").slice(0, 8);
+    let candidate = dst;
+    for (let index = 0; index < 100; index += 1) {
+        const st = await fsp.lstat(candidate).catch(() => null);
+        if (!st)
+            return candidate;
+        if (st.isSymbolicLink()) {
+            const current = await fsp.readlink(candidate).catch(() => "");
+            if (path.resolve(path.dirname(candidate), current) === src)
+                return candidate;
+        }
+        const suffix = index === 0 ? ` - ${fingerprint}` : ` - ${fingerprint}-${index}`;
+        candidate = path.join(dstDir, `${stem}${suffix}${ext}`);
+    }
+    throw new Error(`unable to allocate collision-safe organizer target for ${dst}`);
+}
+/**
  * Recursively walks a directory tree, collecting absolute paths of video files.
  * Handles symlinks by falling back to `stat` when `withFileTypes` doesn't resolve.
  *
@@ -609,8 +694,9 @@ async function walkDir(root, acc, limit) {
         entries = await fsp.readdir(root, { withFileTypes: true });
     }
     catch (err) {
-        console.error(`[${new Date().toISOString()}][organize] failed to read directory ${root}`, { err: err?.message || String(err) });
-        return;
+        const message = `failed to read directory ${root}: ${err?.message || String(err)}`;
+        console.error(`[${new Date().toISOString()}][organize] ${message}`);
+        throw new Error(message);
     }
     for (const ent of entries) {
         const full = path.join(root, ent.name);
@@ -704,10 +790,10 @@ async function pruneStaleSymlinks(dir) {
 /**
  * Runs a single pass of the media organiser.
  *
- * First prunes any stale/broken symlinks from the organised library,
- * then scans all mounted provider directories for video files, parses their
+ * Scans all mounted provider directories for video files, parses their
  * filenames to determine type (movie/TV), looks up canonical metadata
- * from external APIs, and creates symlinks in the organised library.
+ * from external APIs, then safely prunes stale links and creates symlinks in
+ * the organised library.
  *
  * For unknown files, attempts multiple fallback strategies:
  * 1. Guess title from filename, then search TMDB/iTunes
@@ -723,29 +809,24 @@ async function pruneStaleSymlinks(dir) {
 async function organizeOnce(opts) {
     const dryRun = !!opts?.dryRun;
     const limit = opts?.limit ?? 10000;
-    // --- Prune stale symlinks before scanning ---
     const orgBase = config_1.config.organizedBase;
     const movieDir = path.join(orgBase, "Movies");
     const tvDir = path.join(orgBase, "TV");
     const animeDir = path.join(orgBase, "Anime");
     let totalRemovedLinks = 0;
     let totalRemovedDirs = 0;
-    for (const dir of [movieDir, tvDir, animeDir]) {
-        try {
-            const st = await fsp.stat(dir);
-            if (st.isDirectory()) {
-                const { removedLinks, removedDirs } = await pruneStaleSymlinks(dir);
-                totalRemovedLinks += removedLinks;
-                totalRemovedDirs += removedDirs;
-            }
+    // The organized root is required for every mode. Category directories are
+    // deliberately optional: they are created lazily by makeSymlink only when
+    // a discovered item actually needs that destination.
+    try {
+        const rootStat = await fsp.stat(orgBase);
+        if (!rootStat.isDirectory()) {
+            throw new Error(`organized root is not a directory: ${orgBase}`);
         }
-        catch { /* directory may not exist yet */ }
+        await fsp.access(orgBase, dryRun ? fs.constants.R_OK | fs.constants.X_OK : fs.constants.R_OK | fs.constants.W_OK | fs.constants.X_OK);
     }
-    if (totalRemovedLinks > 0 || totalRemovedDirs > 0) {
-        console.log(`[${new Date().toISOString()}][organize] pruned stale content`, {
-            removedSymlinks: totalRemovedLinks,
-            removedEmptyDirs: totalRemovedDirs,
-        });
+    catch (err) {
+        throw new Error(`organized root unavailable: ${orgBase}: ${err?.message || String(err)}`);
     }
     // --- Scan mounted providers for video files ---
     const providerBases = config_1.config.providers.map((p) => path.join(config_1.config.mountBase, p));
@@ -782,13 +863,45 @@ async function organizeOnce(opts) {
     for (const r of roots) {
         try {
             const st = await fsp.stat(r);
-            if (st.isDirectory()) {
-                await walkDir(r, files, limit);
-            }
+            if (!st.isDirectory())
+                throw new Error(`organizer source is not a directory: ${r}`);
+            await walkDir(r, files, limit);
         }
-        catch (_) { /* ignore — directory may not exist yet */ }
+        catch (err) {
+            throw new Error(`organizer source unavailable: ${r}: ${err?.message || String(err)}`);
+        }
     }
     console.log(`[${new Date().toISOString()}][organize] scan`, { roots, files: files.length });
+    // Filesystem traversal order is not stable across providers/filesystems.
+    // Sorting makes canonical-vs-collision assignment deterministic for a
+    // given source set without ever replacing an existing valid symlink.
+    files.sort((a, b) => a.localeCompare(b));
+    // An empty discovery is ambiguous: it can mean an empty library, but it can
+    // also mean that a provider mount is temporarily unavailable. Never prune
+    // existing organized links in that state.
+    if (!dryRun && files.length > 0) {
+        for (const dir of [movieDir, tvDir, animeDir]) {
+            try {
+                const st = await fsp.stat(dir);
+                if (!st.isDirectory())
+                    throw new Error(`organized category is not a directory: ${dir}`);
+                const { removedLinks, removedDirs } = await pruneStaleSymlinks(dir);
+                totalRemovedLinks += removedLinks;
+                totalRemovedDirs += removedDirs;
+            }
+            catch (err) {
+                if (err?.code === "ENOENT")
+                    continue;
+                throw new Error(`organized library unavailable: ${dir}: ${err?.message || String(err)}`);
+            }
+        }
+    }
+    if (totalRemovedLinks > 0 || totalRemovedDirs > 0) {
+        console.log(`[${new Date().toISOString()}][organize] pruned stale content`, {
+            removedSymlinks: totalRemovedLinks,
+            removedEmptyDirs: totalRemovedDirs,
+        });
+    }
     let processed = 0;
     let movieCount = 0;
     let tvCount = 0;
@@ -796,7 +909,13 @@ async function organizeOnce(opts) {
     const unknownSamples = [];
     for (const src of files) {
         const base = path.basename(src);
-        let parsed = parseFilename(base, src);
+        const structuredIdentity = (0, mediaParser_1.parseMediaFilename)(base, src);
+        const persistedReview = (0, organizerReview_1.getOrganizerReview)(src);
+        if (persistedReview?.decision === "dismissed") {
+            unknownCount++;
+            continue;
+        }
+        let parsed = enrichWithStructuredIdentity(parseFilename(base, src), base, src);
         // Enrich parsed results with metadata from external APIs
         if (parsed.type === "movie" && parsed.title) {
             const meta = config_1.config.tmdbApiKey
@@ -858,6 +977,16 @@ async function organizeOnce(opts) {
                 catch { }
             }
         }
+        if (persistedReview?.decision === "accepted" && persistedReview.override) {
+            parsed = applyOrganizerReviewOverride(parsed, persistedReview.override, base);
+        }
+        if (shouldDeferToReview(structuredIdentity, persistedReview?.decision)) {
+            (0, organizerReview_1.recordOrganizerReview)(src, structuredIdentity);
+            unknownCount++;
+            if (unknownSamples.length < 10)
+                unknownSamples.push(src);
+            continue;
+        }
         if (parsed.type === "movie")
             movieCount++;
         else if (parsed.type === "tv")
@@ -870,7 +999,11 @@ async function organizeOnce(opts) {
         const dst = computeTarget(parsed, base, src);
         if (!dst)
             continue;
-        await makeSymlink(src, dst, dryRun);
+        const safeDst = dryRun ? dst : await resolveCollisionTarget(src, dst);
+        if (dryRun && !(await fsp.stat(path.dirname(safeDst)).catch(() => null))) {
+            console.log(`[${new Date().toISOString()}][organize] would create directory`, { path: path.dirname(safeDst) });
+        }
+        await makeSymlink(src, safeDst, dryRun, true);
         processed++;
     }
     console.log(`[${new Date().toISOString()}][organize] complete`, { count: processed, movies: movieCount, tv: tvCount, unknown: unknownCount, dryRun, organizedBase: config_1.config.organizedBase, unknownSamples });

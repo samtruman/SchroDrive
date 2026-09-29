@@ -7,6 +7,8 @@ import type { Provenance, VersionRecord } from "./versionManager";
 type ProbeStream = Record<string, unknown>;
 export interface ProbeStats { requested: number; probed: number; cacheHits: number; cacheMisses: number; unavailable: number; errors: number; }
 
+const DEFAULT_PROBE_CONCURRENCY = 4;
+
 function number(value: unknown): number | undefined {
   const result = Number(value);
   return Number.isFinite(result) ? result : undefined;
@@ -129,33 +131,41 @@ async function resolvePath(version: VersionRecord): Promise<string | undefined> 
   return undefined;
 }
 
-export async function probeVersionRecords(versions: VersionRecord[]): Promise<ProbeStats> {
+export async function probeVersionRecords(versions: VersionRecord[], options: { concurrency?: number } = {}): Promise<ProbeStats> {
   const stats: ProbeStats = { requested: versions.length, probed: 0, cacheHits: 0, cacheMisses: 0, unavailable: 0, errors: 0 };
   const database = getDb();
-  for (const version of versions) {
+  const memo = new Map<string, Promise<{ status: "complete" | "error"; fingerprint?: VersionRecord["fingerprint"]; error?: string; cacheHit?: boolean }>>();
+  const probeOne = async (version: VersionRecord): Promise<void> => {
     const filePath = await resolvePath(version);
-    if (!filePath) { version.fingerprint.probe = { status: "unavailable", tool: "filename", error: "media path not accessible from configured mount" }; stats.unavailable++; continue; }
+    if (!filePath) { version.fingerprint.probe = { status: "unavailable", tool: "filename", error: "media path not accessible from configured mount" }; stats.unavailable++; return; }
     const fileStat = await stat(filePath);
     // Remote/VFS mounts can report a fresh mtime on every metadata read even
     // when the provider object and byte size are unchanged. Size + canonical
     // path is therefore the stable identity for this read-only probe cache.
     const cacheKey = `${filePath}:${fileStat.size}`;
-    const cached = database.prepare("SELECT fingerprint_json, ffprobe_version, status FROM version_manager_probe_cache WHERE cache_key = ?").get(cacheKey) as { fingerprint_json: string; ffprobe_version?: string; status: string } | undefined;
-    if (cached?.status === "complete") {
-      version.fingerprint = JSON.parse(cached.fingerprint_json);
-      stats.cacheHits++;
-      continue;
+    let work = memo.get(cacheKey);
+    if (!work) {
+      work = (async () => {
+        const cached = database.prepare("SELECT fingerprint_json, ffprobe_version, status FROM version_manager_probe_cache WHERE cache_key = ?").get(cacheKey) as { fingerprint_json: string; ffprobe_version?: string; status: string } | undefined;
+        if (cached?.status === "complete") return { status: "complete" as const, fingerprint: JSON.parse(cached.fingerprint_json) as VersionRecord["fingerprint"], cacheHit: true };
+        stats.cacheMisses++;
+        const result = await runProbe(filePath);
+        if (!result.payload) return { status: "error" as const, error: result.error };
+        const fingerprint = structuredClone(version.fingerprint);
+        applyProbe({ ...version, fingerprint }, result.payload, result.version);
+        database.prepare("INSERT OR REPLACE INTO version_manager_probe_cache (cache_key, path, fingerprint_json, ffprobe_version, probed_at, status) VALUES (?, ?, ?, ?, ?, ?)").run(cacheKey, filePath, JSON.stringify(fingerprint), result.version || null, new Date().toISOString(), "complete");
+        stats.probed++;
+        return { status: "complete" as const, fingerprint };
+      })();
+      memo.set(cacheKey, work);
     }
-    stats.cacheMisses++;
-    const result = await runProbe(filePath);
-    if (!result.payload) {
-      version.fingerprint.probe = { status: "error", tool: "ffprobe", error: result.error };
-      stats.errors++;
-      continue;
-    }
-    applyProbe(version, result.payload, result.version);
-    database.prepare("INSERT OR REPLACE INTO version_manager_probe_cache (cache_key, path, fingerprint_json, ffprobe_version, probed_at, status) VALUES (?, ?, ?, ?, ?, ?)").run(cacheKey, filePath, JSON.stringify(version.fingerprint), result.version || null, new Date().toISOString(), "complete");
-    stats.probed++;
-  }
+    const result = await work;
+    if (result.cacheHit) stats.cacheHits++;
+    if (result.status === "complete" && result.fingerprint) version.fingerprint = structuredClone(result.fingerprint);
+    else { version.fingerprint.probe = { status: "error", tool: "ffprobe", error: result.error }; stats.errors++; }
+  };
+  let next = 0;
+  const worker = async () => { while (true) { const index = next++; if (index >= versions.length) return; await probeOne(versions[index]); } };
+  await Promise.all(Array.from({ length: Math.min(Math.max(1, options.concurrency || DEFAULT_PROBE_CONCURRENCY), versions.length || 1) }, worker));
   return stats;
 }

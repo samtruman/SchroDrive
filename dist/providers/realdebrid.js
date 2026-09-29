@@ -422,6 +422,27 @@ class RealDebridProvider {
             return null;
         }
     }
+    /** Fetches complete file metadata from the RD detail endpoint. */
+    async getTorrentFileTree(torrentId) {
+        await rateLimiter_1.rateLimiter.throttle(PROVIDER_NAME);
+        try {
+            const base = getBaseUrl();
+            const res = await httpClient_1.axiosIPv4.get(`${base}/torrents/info/${encodeURIComponent(torrentId)}`, { headers: rdHeaders(), timeout: 30000 });
+            rateLimiter_1.rateLimiter.recordSuccess(PROVIDER_NAME);
+            const files = Array.isArray(res?.data?.files) ? res.data.files : [];
+            return files.map((file) => ({
+                id: String(file.id || ""),
+                name: String(file.path || file.name || "").split("/").pop() || String(file.id || ""),
+                path: String(file.path || file.name || ""),
+                size: typeof file.bytes === "number" ? file.bytes : 0,
+                selected: file.selected === 1,
+            }));
+        }
+        catch (err) {
+            this.handleError(err, `get file tree ${torrentId}`);
+            return [];
+        }
+    }
     /**
      * Attempts to repair a dead torrent by re-adding the same magnet.
      *

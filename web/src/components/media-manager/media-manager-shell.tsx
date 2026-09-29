@@ -24,7 +24,8 @@ import { normalizeIdentitySearchPrefill } from "./identity-search-prefill";
 import { ConfirmationDialog } from "./confirmation-dialog";
 
 type View = "overview" | "library" | "migration" | "settings";
-type Profile = { id: string; name: string; enabled: boolean; priority?: number; description?: string; preferredResolution?: string; languagePolicy?: any; hardRequirements?: any; scoring?: Record<string, number>; acquisitionBehavior?: string };
+type Profile = { id: string; name: string; enabled: boolean; priority?: number; description?: string; preferredResolution?: string; languagePolicy?: any; hardRequirements?: any; scoring?: Record<string, number>; scoringRules?: ScoringRule[]; acquisitionBehavior?: string };
+type ScoringRule = { op?: "COMPARE" | "IN" | "HAS"; field: string; operator?: string; value?: unknown; values?: unknown[]; weight: number };
 type PendingConfirmation = { title: string; description: string; context?: ReactNode; confirmLabel: string; variant?: "default" | "secondary" | "outline" | "destructive"; onConfirm: () => Promise<void> };
 
 const tone: Record<
@@ -1406,19 +1407,95 @@ function Migration({ section = "export" }: { section?: string }) {
   );
 }
 
-const RULE_FIELDS = ["resolution", "source", "codec", "audioLanguage", "subtitleLanguage", "hdr", "dolbyVision", "bitrate", "fileSize", "container", "identityConfidence"];
-const RULE_OPERATORS = ["equals", "not_equals", "contains", "not_contains", "greater_than", "greater_or_equal", "less_than", "less_or_equal", "exists", "not_exists"];
+const RULE_FIELD_CONFIG: Record<string, { label: string; type: "enum" | "text" | "number" | "boolean"; values?: string[] }> = {
+  resolution: { label: "Resolution", type: "enum", values: ["4320p", "2160p", "1440p", "1080p", "720p", "576p", "480p"] },
+  source: { label: "Source", type: "enum", values: ["REMUX", "BLURAY", "WEB-DL", "WEBRIP", "HDTV"] },
+  codec: { label: "Video codec", type: "enum", values: ["HEVC", "AV1", "H264", "AVC"] },
+  audioCodec: { label: "Audio codec", type: "enum", values: ["TRUEHD", "DTS-HD MA", "DTS-HD", "DDP", "EAC3", "AAC"] },
+  audioLanguage: { label: "Audio language", type: "enum", values: ["ita", "eng", "fra", "deu", "spa", "jpn", "original"] },
+  subtitleLanguage: { label: "Subtitle language", type: "enum", values: ["ita", "eng", "fra", "deu", "spa", "jpn", "original"] },
+  hdr: { label: "HDR", type: "boolean" },
+  dolbyVision: { label: "Dolby Vision", type: "boolean" },
+  atmos: { label: "Atmos", type: "boolean" },
+  bitrate: { label: "Bitrate", type: "number" },
+  fileSize: { label: "File size (bytes)", type: "number" },
+  channels: { label: "Audio channels", type: "number" },
+  container: { label: "Container", type: "enum", values: ["mkv", "mp4", "m4v", "avi", "ts", "m2ts", "webm"] },
+  originalLanguage: { label: "Original language", type: "enum", values: ["ita", "eng", "fra", "deu", "spa", "heb", "jpn"] },
+  identityConfidence: { label: "Identity confidence", type: "number" },
+  mediaType: { label: "Media type", type: "enum", values: ["movie", "episode", "unknown"] },
+  profileEligible: { label: "Profile eligible", type: "boolean" },
+};
+const RULE_FIELDS = Object.keys(RULE_FIELD_CONFIG);
+const TEXT_OPERATORS = ["equals", "not_equals", "contains", "not_contains", "exists", "not_exists"];
+const NUMBER_OPERATORS = ["equals", "not_equals", "greater_than", "greater_or_equal", "less_than", "less_or_equal", "exists", "not_exists"];
+const BOOLEAN_OPERATORS = ["equals", "not_equals", "exists", "not_exists"];
+
+function operatorsForField(field: string) {
+  const type = RULE_FIELD_CONFIG[field]?.type || "text";
+  return type === "number" ? NUMBER_OPERATORS : type === "boolean" ? BOOLEAN_OPERATORS : TEXT_OPERATORS;
+}
+
+function defaultRuleValue(field: string) {
+  const config = RULE_FIELD_CONFIG[field];
+  if (config?.type === "boolean") return false;
+  if (config?.type === "number") return 0;
+  return config?.values?.[0] || "";
+}
+
+function RuleValueEditor({ field, value, onChange }: { field: string; value: unknown; onChange: (value: unknown) => void }) {
+  const config = RULE_FIELD_CONFIG[field] || { label: field, type: "text" as const };
+  if (config.type === "boolean") return <select className="rounded border bg-background p-1 text-sm" value={String(value === true)} onChange={(event) => onChange(event.target.value === "true")}><option value="true">true</option><option value="false">false</option></select>;
+  if (config.type === "number") return <input className="w-32 rounded border bg-background p-1 text-sm" type="number" value={String(value ?? "")} onChange={(event) => onChange(event.target.value === "" ? "" : Number(event.target.value))} />;
+  if (config.type === "enum") return <select className="rounded border bg-background p-1 text-sm" value={String(value ?? "")} onChange={(event) => onChange(event.target.value)}>{config.values?.map((item) => <option key={item}>{item}</option>)}</select>;
+  return <input className="min-w-28 rounded border bg-background p-1 text-sm" value={String(value ?? "")} onChange={(event) => onChange(event.target.value)} />;
+}
 
 function RuleBuilder({ node, onChange, onRemove, root = false }: { node: any; onChange: (node: any) => void; onRemove?: () => void; root?: boolean }) {
   const addCondition = () => onChange({ ...(node?.op === "AND" || node?.op === "OR" ? node : { op: "AND", children: [] }), children: [...(node?.children || []), { op: "COMPARE", field: "resolution", operator: "equals", value: "2160p" }] });
   const addGroup = () => onChange({ ...(node?.op === "AND" || node?.op === "OR" ? node : { op: "AND", children: [] }), children: [...(node?.children || []), { op: "AND", children: [{ op: "COMPARE", field: "resolution", operator: "equals", value: "1080p" }] }] });
   if (node?.op === "NOT") return <div className="rounded border border-dashed p-2"><div className="flex items-center justify-between"><b>NOT</b>{!root && <Button size="sm" variant="ghost" onClick={onRemove}>Remove</Button>}</div><RuleBuilder node={node.child} root onChange={(child) => onChange({ ...node, child })} /></div>;
   if (node?.op === "AND" || node?.op === "OR") return <div className="space-y-2 rounded border p-2"><div className="flex flex-wrap items-center gap-2"><select className="rounded border bg-background p-1 text-sm" value={node.op} onChange={(event) => onChange({ ...node, op: event.target.value })}><option>AND</option><option>OR</option></select>{!root && <Button size="sm" variant="ghost" onClick={onRemove}>Remove group</Button>}<Button size="sm" variant="outline" onClick={addCondition}>Add condition</Button><Button size="sm" variant="outline" onClick={addGroup}>Add group</Button><Button size="sm" variant="outline" onClick={() => onChange({ op: "NOT", child: { op: "COMPARE", field: "resolution", operator: "equals", value: "2160p" } })}>Add NOT</Button></div>{(node.children || []).map((child: any, index: number) => <RuleBuilder key={index} node={child} onChange={(next) => onChange({ ...node, children: node.children.map((item: any, itemIndex: number) => itemIndex === index ? next : item) })} onRemove={() => onChange({ ...node, children: node.children.filter((_: any, itemIndex: number) => itemIndex !== index) })} />)}</div>;
-  return <div className="flex flex-wrap items-center gap-2 rounded border bg-muted/20 p-2"><select className="rounded border bg-background p-1 text-sm" value={node?.field || "resolution"} onChange={(event) => onChange({ ...node, field: event.target.value })}>{RULE_FIELDS.map((field) => <option key={field}>{field}</option>)}</select><select className="rounded border bg-background p-1 text-sm" value={node?.operator || "equals"} onChange={(event) => onChange({ ...node, operator: event.target.value })}>{RULE_OPERATORS.map((operator) => <option key={operator}>{operator}</option>)}</select>{!["exists", "not_exists"].includes(node?.operator) && <input className="min-w-28 rounded border bg-background p-1 text-sm" value={String(node?.value ?? "")} onChange={(event) => onChange({ ...node, value: event.target.value })} placeholder="value" />} {!root && <Button size="sm" variant="ghost" onClick={onRemove}>Remove</Button>}</div>;
+  const field = node?.field || "resolution";
+  const operator = node?.operator || "equals";
+  const changeField = (nextField: string) => onChange({ op: "COMPARE", field: nextField, operator: operatorsForField(nextField)[0], value: defaultRuleValue(nextField) });
+  if (node?.op === "IN") return <div className="flex flex-wrap items-center gap-2 rounded border bg-muted/20 p-2"><span className="text-xs text-muted-foreground">{RULE_FIELD_CONFIG[field]?.label || field}</span><b>in</b><input className="min-w-48 rounded border bg-background p-1 text-sm" value={(node.values || []).join(", ")} onChange={(event) => onChange({ ...node, values: event.target.value.split(",").map((item: string) => item.trim()).filter(Boolean) })} />{!root && <Button size="sm" variant="ghost" onClick={onRemove}>Remove</Button>}</div>;
+  if (node?.op === "HAS") return <div className="flex flex-wrap items-center gap-2 rounded border bg-muted/20 p-2"><select className="rounded border bg-background p-1 text-sm" value={field} onChange={(event) => changeField(event.target.value)}>{RULE_FIELDS.map((item) => <option key={item} value={item}>{RULE_FIELD_CONFIG[item].label}</option>)}</select><b>has</b><RuleValueEditor field={field} value={node.value} onChange={(value) => onChange({ ...node, value })} />{!root && <Button size="sm" variant="ghost" onClick={onRemove}>Remove</Button>}</div>;
+  return <div className="flex flex-wrap items-center gap-2 rounded border bg-muted/20 p-2"><select className="rounded border bg-background p-1 text-sm" value={field} onChange={(event) => changeField(event.target.value)}>{RULE_FIELDS.map((item) => <option key={item} value={item}>{RULE_FIELD_CONFIG[item].label}</option>)}</select><select className="rounded border bg-background p-1 text-sm" value={operator} onChange={(event) => onChange({ ...node, operator: event.target.value })}>{operatorsForField(field).map((item) => <option key={item}>{item}</option>)}</select>{!["exists", "not_exists"].includes(operator) && <RuleValueEditor field={field} value={node?.value} onChange={(value) => onChange({ ...node, value })} />}{!root && <Button size="sm" variant="ghost" onClick={onRemove}>Remove</Button>}</div>;
+}
+
+function ScoringRuleEditor({ rule, onChange, onRemove }: { rule: ScoringRule; onChange: (rule: ScoringRule) => void; onRemove: () => void }) {
+  const field = rule.field || "resolution";
+  const mode = rule.op || "COMPARE";
+  const operator = rule.operator || "equals";
+  const changeField = (nextField: string) => onChange({ ...rule, field: nextField, operator: operatorsForField(nextField)[0], value: defaultRuleValue(nextField), values: undefined });
+  const changeMode = (nextMode: string) => onChange(nextMode === "IN" ? { op: "IN", field, values: [String(defaultRuleValue(field))], weight: rule.weight } : nextMode === "HAS" ? { op: "HAS", field, value: defaultRuleValue(field), weight: rule.weight } : { op: "COMPARE", field, operator: operatorsForField(field)[0], value: defaultRuleValue(field), weight: rule.weight });
+  return <div className="flex flex-wrap items-center gap-2 rounded border bg-muted/20 p-2"><select className="rounded border bg-background p-1 text-sm" value={field} onChange={(event) => changeField(event.target.value)} aria-label="Scoring field">{RULE_FIELDS.map((item) => <option key={item} value={item}>{RULE_FIELD_CONFIG[item].label}</option>)}</select><select className="rounded border bg-background p-1 text-sm" value={mode} onChange={(event) => changeMode(event.target.value)} aria-label="Scoring match mode"><option value="COMPARE">compare</option><option value="IN">in</option><option value="HAS">has</option></select>{mode === "COMPARE" && <><select className="rounded border bg-background p-1 text-sm" value={operator} onChange={(event) => onChange({ ...rule, op: "COMPARE", operator: event.target.value })} aria-label="Scoring operator">{operatorsForField(field).map((item) => <option key={item}>{item}</option>)}</select>{!["exists", "not_exists"].includes(operator) && <RuleValueEditor field={field} value={rule.value} onChange={(value) => onChange({ ...rule, op: "COMPARE", value })} />}</>}{mode === "IN" && <input className="min-w-48 rounded border bg-background p-1 text-sm" value={(rule.values || []).join(", ")} onChange={(event) => onChange({ ...rule, op: "IN", values: event.target.value.split(",").map((item) => item.trim()).filter(Boolean) })} aria-label="Scoring values" />}{mode === "HAS" && <RuleValueEditor field={field} value={rule.value} onChange={(value) => onChange({ ...rule, op: "HAS", value })} />}<input className="w-24 rounded border bg-background p-1 text-sm" type="number" value={String(rule.weight ?? 0)} onChange={(event) => onChange({ ...rule, weight: Number(event.target.value) })} aria-label="Scoring weight" /><Button size="sm" variant="ghost" onClick={onRemove}>Remove</Button></div>;
+}
+
+function validateUiRule(node: any): string | undefined {
+  if (!node || typeof node !== "object") return "Rule is incomplete";
+  if (node.op === "AND" || node.op === "OR") {
+    if (!Array.isArray(node.children) || (node.op === "OR" && node.children.length === 0)) return `${node.op} group must contain at least one condition`;
+    for (const child of node.children) { const error = validateUiRule(child); if (error) return error; }
+    return undefined;
+  }
+  if (node.op === "NOT") return validateUiRule(node.child);
+  if (!["COMPARE", "IN", "HAS"].includes(node.op) || !RULE_FIELD_CONFIG[node.field]) return "Select a supported rule field";
+  const config = RULE_FIELD_CONFIG[node.field];
+  if (node.op === "IN") return Array.isArray(node.values) && node.values.length > 0 ? undefined : "IN requires at least one value";
+  if (["exists", "not_exists"].includes(node.operator)) return undefined;
+  if (node.value === undefined || node.value === null || node.value === "") return "This operator requires a value";
+  if (config.type === "number" && (typeof node.value !== "number" || !Number.isFinite(node.value))) return `${config.label} requires a numeric value`;
+  if (config.type === "boolean" && typeof node.value !== "boolean") return `${config.label} requires true or false`;
+  return undefined;
 }
 
 function SettingsView({ section = "profiles" }: { section?: string }) {
   const status = useJson<any>("/api/version-manager/status");
+  const pathname = usePathname();
+  const sectionIds = ["profiles", "languages", "rules", "acquisition", "safety"];
+  const [activeSection, setActiveSection] = useState(sectionIds.includes(section) ? section : "profiles");
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [policy, setPolicy] = useState<any>({ enableRemote: false, acquireMissingRemote: false, safety: { requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false } });
   const [saving, setSaving] = useState(false);
@@ -1427,10 +1504,35 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
     if (status.data?.profiles) setProfiles(status.data.profiles);
     if (status.data?.policy) setPolicy(status.data.policy);
   }, [status.data]);
+  useEffect(() => {
+    const applyHash = () => {
+      const hash = window.location.hash.slice(1);
+      const next = sectionIds.includes(hash) ? hash : section;
+      setActiveSection(next);
+      requestAnimationFrame(() => document.getElementById(`media-manager-${next}`)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+    };
+    applyHash();
+    window.addEventListener("hashchange", applyHash);
+    return () => window.removeEventListener("hashchange", applyHash);
+  }, [section]);
+  function navigateSection(next: string) {
+    setActiveSection(next);
+    window.history.replaceState(null, "", `${pathname}#${next}`);
+    requestAnimationFrame(() => document.getElementById(`media-manager-${next}`)?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  }
   async function save() {
     setSaving(true);
     setSaved("");
     try {
+      for (const profile of profiles) {
+        const ruleError = validateUiRule(profile.hardRequirements || { op: "AND", children: [] });
+        if (ruleError) throw new Error(`${profile.name || profile.id}: ${ruleError}`);
+        for (const rule of profile.scoringRules || []) {
+          const scoringError = validateUiRule({ ...rule, op: rule.op || "COMPARE" });
+          if (scoringError) throw new Error(`${profile.name || profile.id}: scoring rule is invalid — ${scoringError}`);
+          if (!Number.isFinite(Number(rule.weight))) throw new Error(`${profile.name || profile.id}: scoring weight must be numeric`);
+        }
+      }
       const response = await fetch("/api/version-manager/profiles", {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -1453,10 +1555,10 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
         title="Media Manager Settings"
         description="Configure profiles, acquisition behavior and safety without duplicating global provider credentials."
       />
-      <div className="flex flex-wrap gap-2">
-        {[["Profiles", "profiles"], ["Languages", "languages"], ["Rules", "rules"], ["Acquisition", "acquisition"], ["Safety", "safety"]].map(([label, id]) => <Button key={id} asChild variant={section === id ? "default" : "outline"}><Link href={`/media-manager/settings/${id}`}>{label}</Link></Button>)}
+      <div className="sticky top-2 z-10 flex flex-wrap gap-2 rounded-md bg-background/95 p-1 backdrop-blur">
+        {[["Profiles", "profiles"], ["Languages", "languages"], ["Rules", "rules"], ["Acquisition", "acquisition"], ["Safety", "safety"]].map(([label, id]) => <Button key={id} type="button" variant={activeSection === id ? "default" : "outline"} onClick={() => navigateSection(id)}>{label}</Button>)}
       </div>
-      <Card>
+      <Card id="media-manager-profiles" className="scroll-mt-20">
         <CardHeader>
           <CardTitle className="text-base">Profiles</CardTitle>
         </CardHeader>
@@ -1498,10 +1600,10 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
               <span className="text-sm text-muted-foreground">{saved}</span>
             )}
           </div>
-          <div className="space-y-2 rounded border p-3"><p className="font-medium">Scoring</p><p className="text-xs text-muted-foreground">Weights are profile-specific and only apply after hard requirements pass.</p>{profiles.map((profile, index) => <details key={`score-${profile.id}`} className="rounded border p-2"><summary className="cursor-pointer text-sm">{profile.name || profile.id}</summary><div className="mt-2 space-y-2">{Object.entries(profile.scoring || {}).map(([field, weight]) => <div className="flex gap-2" key={field}><input className="flex-1 rounded border bg-background p-1 text-sm" value={field} onChange={(event) => { const scoring = { ...(profile.scoring || {}) }; delete scoring[field]; scoring[event.target.value] = Number(weight); updateProfile(index, { scoring }); }} /><input className="w-24 rounded border bg-background p-1 text-sm" type="number" value={String(weight)} onChange={(event) => updateProfile(index, { scoring: { ...(profile.scoring || {}), [field]: Number(event.target.value) } })} /><Button size="sm" variant="ghost" onClick={() => { const scoring = { ...(profile.scoring || {}) }; delete scoring[field]; updateProfile(index, { scoring }); }}>Remove</Button></div>)}<Button size="sm" variant="outline" onClick={() => updateProfile(index, { scoring: { ...(profile.scoring || {}), resolution: 0 } })}>Add scoring rule</Button></div></details>)}</div>
+          <div className="space-y-2 rounded border p-3"><p className="font-medium">Scoring</p><p className="text-xs text-muted-foreground">Scoring runs only after hard requirements pass. Field, operator, value and weight are persisted per profile.</p>{profiles.map((profile, index) => <details key={`score-${profile.id}`} className="rounded border p-2"><summary className="cursor-pointer text-sm">{profile.name || profile.id}</summary><div className="mt-2 space-y-2">{(profile.scoringRules || []).map((rule, ruleIndex) => <ScoringRuleEditor key={ruleIndex} rule={rule} onChange={(next) => updateProfile(index, { scoringRules: (profile.scoringRules || []).map((item, itemIndex) => itemIndex === ruleIndex ? next : item) })} onRemove={() => updateProfile(index, { scoringRules: (profile.scoringRules || []).filter((_, itemIndex) => itemIndex !== ruleIndex) })} />)}<Button size="sm" variant="outline" onClick={() => updateProfile(index, { scoringRules: [...(profile.scoringRules || []), { op: "COMPARE", field: "resolution", operator: "equals", value: "2160p", weight: 0 }] })}>Add scoring rule</Button>{Object.keys(profile.scoring || {}).length > 0 && <p className="text-xs text-muted-foreground">Legacy field weights are preserved for compatibility; new rules use the structured editor above.</p>}</div></details>)}</div>
         </CardContent>
       </Card>
-      <Card id="media-manager-languages">
+      <Card id="media-manager-languages" className="scroll-mt-20">
         <CardHeader><CardTitle className="text-base">Languages</CardTitle></CardHeader>
         <CardContent className="space-y-3 text-sm">
           <p className="text-muted-foreground">Language rules are profile-scoped. Audio and subtitles remain distinct; ORIGINAL is resolved from identity metadata.</p>
@@ -1513,16 +1615,16 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
           </div>)}
         </CardContent>
       </Card>
-      <Card id="media-manager-rules">
+      <Card id="media-manager-rules" className="scroll-mt-20">
         <CardHeader><CardTitle className="text-base">Rules</CardTitle></CardHeader>
         <CardContent className="space-y-2 text-sm"><p className="text-muted-foreground">Hard requirements are evaluated before scoring. The builder keeps field/operator combinations within the supported rule model.</p>{profiles.map((profile, index) => <details key={profile.id} className="rounded border p-3"><summary className="cursor-pointer font-medium">{profile.name || profile.id} hard requirements</summary><div className="mt-2"><RuleBuilder node={profile.hardRequirements || { op: "AND", children: [] }} root onChange={(hardRequirements) => updateProfile(index, { hardRequirements } as any)} /></div></details>)}</CardContent>
       </Card>
-      <Card id="media-manager-acquisition">
+      <Card id="media-manager-acquisition" className="scroll-mt-20">
         <CardHeader><CardTitle className="text-base">Acquisition</CardTitle></CardHeader>
         <CardContent className="space-y-2 text-sm"><p>Acquisition execution remains disabled for this policy milestone.</p><p className="text-muted-foreground">Seerr credentials stay in global Settings and are not duplicated here.</p><Link className="text-primary" href="/settings">Open global provider settings <ChevronRight className="inline h-4 w-4" /></Link></CardContent>
       </Card>
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card id="media-manager-safety">
+        <Card id="media-manager-safety" className="scroll-mt-20">
           <CardHeader>
             <CardTitle className="text-base">Safety</CardTitle>
           </CardHeader>

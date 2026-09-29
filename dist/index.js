@@ -14,6 +14,7 @@ const db_1 = require("./core/db");
 const strmService_1 = require("./services/strmService");
 const bridge_1 = require("./services/cloudLinks/bridge");
 const arrBridge_1 = require("./services/arrBridge");
+const providerReconciliationRuntime_1 = require("./services/providerReconciliationRuntime");
 const program = new commander_1.Command();
 program
     .name("schrodrive")
@@ -31,6 +32,7 @@ program
         console.error(`[${new Date().toISOString()}][serve] Database initialisation failed (non-fatal): ${err?.message}`);
     }
     // Register graceful shutdown handlers
+    let providerReconciliationWorker;
     const shutdown = () => {
         console.log(`[${new Date().toISOString()}][serve] Shutting down — unmounting FUSE drives...`);
         try {
@@ -43,6 +45,7 @@ program
         (0, strmService_1.stopStrmServer)().catch(() => { });
         (0, bridge_1.stopCloudLinksBridge)().catch(() => { });
         (0, arrBridge_1.stopArrBridge)().catch(() => { });
+        providerReconciliationWorker?.stop();
         setTimeout(() => {
             console.log(`[${new Date().toISOString()}][serve] Closing database and exiting...`);
             (0, db_1.closeDb)();
@@ -73,7 +76,13 @@ program
                 console.error(`[serve] Cloud Links bridge failed to start (non-fatal): ${err?.message}`);
             });
         }
-        promises.push((0, mount_1.mountVirtualDrive)());
+        // The provider reconciliation worker submits Arr rescans against this
+        // mount. Wait until mountVirtualDrive has established the visible paths
+        // before starting the worker below; otherwise Arr can reject the first
+        // scan as a missing file during FUSE startup.
+        await (0, mount_1.mountVirtualDrive)().catch((err) => {
+            console.error(`[${new Date().toISOString()}][serve] Virtual drive mount failed (non-fatal): ${err?.message}`);
+        });
     }
     if (config_1.config.runDeadScannerWatch) {
         console.log("[serve] Starting dead scanner watch (RUN_DEAD_SCANNER_WATCH=true)");
@@ -91,6 +100,7 @@ program
         console.log("[serve] Starting media server watchlist poller (RUN_WATCHLIST_POLLER=true)");
         (0, mediaServerWatchlist_1.startWatchlistPoller)();
     }
+    providerReconciliationWorker = (0, providerReconciliationRuntime_1.startProviderReconciliation)();
     // Start the main server
     (0, server_1.startServer)();
     // Start Stremio addon server (separate port)

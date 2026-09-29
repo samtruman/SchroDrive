@@ -8,6 +8,18 @@ exports.requireEnv = requireEnv;
 exports.providersSet = providersSet;
 const path_1 = __importDefault(require("path"));
 const utils_1 = require("./utils");
+const configApi_1 = require("./configApi");
+const persistedTmdbApiKey = (0, configApi_1.getPersistedEnvValue)("TMDB_API_KEY");
+const persistedSeerrUrl = (0, configApi_1.getPersistedEnvValue)("SEERR_URL");
+const persistedSeerrApiKey = (0, configApi_1.getPersistedEnvValue)("SEERR_API_KEY");
+const persistedSeerrAuth = (0, configApi_1.getPersistedEnvValue)("SEERR_AUTH");
+const persistedPlexUrl = (0, configApi_1.getPersistedEnvValue)("PLEX_URL");
+const persistedPlexToken = (0, configApi_1.getPersistedEnvValue)("PLEX_TOKEN");
+const persistedPlexMountDir = (0, configApi_1.getPersistedEnvValue)("PLEX_MOUNT_DIR");
+const persistedJellyfinUrl = (0, configApi_1.getPersistedEnvValue)("JELLYFIN_URL");
+const persistedJellyfinApiKey = (0, configApi_1.getPersistedEnvValue)("JELLYFIN_API_KEY");
+const persistedJellyfinUserId = (0, configApi_1.getPersistedEnvValue)("JELLYFIN_USER_ID");
+const persistedOrganizerFilenameMode = (0, configApi_1.getPersistedEnvValue)("ORGANIZER_FILENAME_MODE");
 const defaultMountBase = (process.env.MOUNT_BASE || (process.platform === 'darwin' ? "/Volumes/SchroDrive" : "/mnt/schrodrive"));
 exports.config = {
     port: (0, utils_1.asNumber)(process.env.PORT, 8978),
@@ -30,12 +42,14 @@ exports.config = {
     indexerProvider: (process.env.INDEXER_PROVIDER || "auto"),
     torboxApiKey: process.env.TORBOX_API_KEY || "",
     torboxBaseUrl: process.env.TORBOX_BASE_URL || "https://api.torbox.app",
-    overseerrAuth: process.env.SEERR_AUTH || process.env.OVERSEERR_AUTH || process.env.JELLYSEERR_AUTH || "",
+    overseerrAuth: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.SEERR_AUTH || process.env.OVERSEERR_AUTH || process.env.JELLYSEERR_AUTH, persistedSeerrAuth),
     // Seerr / Overseerr / Jellyseerr API (poller) configuration
     // Seerr is the merged successor to Overseerr + Jellyseerr — all three share the same API.
     // Priority: SEERR_* > OVERSEERR_* > JELLYSEERR_* (all are supported for backward compatibility)
-    overseerrUrl: process.env.SEERR_URL || process.env.OVERSEERR_URL || process.env.JELLYSEERR_URL || "",
-    overseerrApiKey: process.env.SEERR_API_KEY || process.env.OVERSEERR_API_KEY || process.env.JELLYSEERR_API_KEY || "",
+    overseerrUrl: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.SEERR_URL || process.env.OVERSEERR_URL || process.env.JELLYSEERR_URL, persistedSeerrUrl),
+    overseerrApiKey: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.SEERR_API_KEY || process.env.OVERSEERR_API_KEY || process.env.JELLYSEERR_API_KEY, persistedSeerrApiKey),
+    // Real requests remain disabled until an explicitly controlled future milestone.
+    acquisitionRequestsEnabled: (0, utils_1.asBool)(process.env.ACQUISITION_REQUESTS_ENABLED, false),
     pollIntervalSeconds: (0, utils_1.asNumber)(process.env.POLL_INTERVAL_S, 30),
     // Runtime toggles
     runWebhook: (0, utils_1.asBool)(process.env.RUN_WEBHOOK, true),
@@ -65,6 +79,20 @@ exports.config = {
     alldebridApiKey: process.env.ALLDEBRID_API_KEY || "",
     alldebridApiBase: process.env.ALLDEBRID_API_BASE || "https://api.alldebrid.com/v4",
     alldebridAgent: process.env.ALLDEBRID_AGENT || "schrodrive",
+    // Provider reconciliation is opt-in and disabled by default.
+    providerReconciliationEnabled: String(process.env.PROVIDER_RECONCILIATION_ENABLED ?? "false").toLowerCase() === "true",
+    providerReconciliationRecentIntervalMs: Number(process.env.PROVIDER_RECONCILIATION_RECENT_INTERVAL_MS || 900000),
+    providerReconciliationFullIntervalMs: Number(process.env.PROVIDER_RECONCILIATION_FULL_INTERVAL_MS || 21600000),
+    providerReconciliationRecentLimit: Number(process.env.PROVIDER_RECONCILIATION_RECENT_LIMIT || 30),
+    providerReconciliationRunFullOnStart: String(process.env.PROVIDER_RECONCILIATION_RUN_FULL_ON_START ?? "true").toLowerCase() !== "false",
+    providerReconciliationDryRun: String(process.env.PROVIDER_RECONCILIATION_DRY_RUN ?? "false").toLowerCase() === "true",
+    providerReconciliationRadarrUrl: process.env.PROVIDER_RECONCILIATION_RADARR_URL || "",
+    providerReconciliationRadarrApiKey: process.env.PROVIDER_RECONCILIATION_RADARR_API_KEY || "",
+    providerReconciliationSonarrUrl: process.env.PROVIDER_RECONCILIATION_SONARR_URL || "",
+    providerReconciliationSonarrApiKey: process.env.PROVIDER_RECONCILIATION_SONARR_API_KEY || "",
+    providerReconciliationMountBase: process.env.PROVIDER_RECONCILIATION_MOUNT_BASE || "/mnt/schrodrive",
+    providerReconciliationMoviesLibraryPath: process.env.PROVIDER_RECONCILIATION_MOVIES_LIBRARY_PATH || "",
+    providerReconciliationShowsLibraryPath: process.env.PROVIDER_RECONCILIATION_SHOWS_LIBRARY_PATH || "",
     // AllDebrid WebDAV (if supported)
     alldebridWebdavUrl: process.env.ALLDEBRID_WEBDAV_URL || "",
     alldebridWebdavUsername: process.env.ALLDEBRID_WEBDAV_USERNAME || "",
@@ -134,7 +162,9 @@ exports.config = {
     // Mount settings
     mountBase: defaultMountBase,
     rclonePath: process.env.RCLONE_PATH || "rclone",
-    mountOptions: process.env.MOUNT_OPTIONS || "--vfs-cache-mode=full --dir-cache-time=12h --poll-interval=0 --buffer-size=64M",
+    // An explicit MOUNT_OPTIONS value is a complete rclone override. When it is
+    // absent, mount.ts composes its arguments from the individual MOUNT_* values.
+    mountOptions: process.env.MOUNT_OPTIONS || "",
     // Mount permissions/ownership
     mountAllowOther: (0, utils_1.asBool)(process.env.MOUNT_ALLOW_OTHER, true),
     mountUid: (() => {
@@ -164,20 +194,24 @@ exports.config = {
     runDeadScanner: (0, utils_1.asBool)(process.env.RUN_DEAD_SCANNER),
     runDeadScannerWatch: (0, utils_1.asBool)(process.env.RUN_DEAD_SCANNER_WATCH),
     // Organiser (symlinked view)
-    tmdbApiKey: process.env.TMDB_API_KEY || "",
+    // The Settings UI persists this value in .env. Docker may still provide an
+    // empty TMDB_API_KEY placeholder, so use the persisted value only when the
+    // runtime environment does not contain a non-empty value.
+    tmdbApiKey: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.TMDB_API_KEY, persistedTmdbApiKey),
     organizedBase: process.env.ORGANIZED_BASE || `${defaultMountBase}/organized`,
     organizerMode: (process.env.ORGANIZER_MODE || "symlink"),
+    organizerFilenameMode: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.ORGANIZER_FILENAME_MODE, persistedOrganizerFilenameMode),
     runOrganizerWatch: (0, utils_1.asBool)(process.env.RUN_ORGANIZER_WATCH),
     orgScanIntervalSeconds: (0, utils_1.asNumber)(process.env.ORG_SCAN_INTERVAL_S, 300),
     // --- Media Server Integration ---
     // Plex
-    plexUrl: process.env.PLEX_URL || process.env.PLEX_ADDRESS || "",
-    plexToken: process.env.PLEX_TOKEN || "",
-    plexMountDir: process.env.PLEX_MOUNT_DIR || "",
+    plexUrl: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.PLEX_URL || process.env.PLEX_ADDRESS, persistedPlexUrl),
+    plexToken: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.PLEX_TOKEN, persistedPlexToken),
+    plexMountDir: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.PLEX_MOUNT_DIR, persistedPlexMountDir),
     // Jellyfin
-    jellyfinUrl: process.env.JELLYFIN_URL || process.env.JF_ADDRESS || "",
-    jellyfinApiKey: process.env.JELLYFIN_API_KEY || process.env.JF_API_KEY || "",
-    jellyfinUserId: process.env.JELLYFIN_USER_ID || "",
+    jellyfinUrl: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.JELLYFIN_URL || process.env.JF_ADDRESS, persistedJellyfinUrl),
+    jellyfinApiKey: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.JELLYFIN_API_KEY || process.env.JF_API_KEY, persistedJellyfinApiKey),
+    jellyfinUserId: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.JELLYFIN_USER_ID, persistedJellyfinUserId),
     // Emby
     embyUrl: process.env.EMBY_URL || "",
     embyApiKey: process.env.EMBY_API_KEY || "",

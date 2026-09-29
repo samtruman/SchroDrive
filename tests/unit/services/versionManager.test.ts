@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TorrentInfo } from "../../../src/providers";
-import { evaluateRule, evaluateVersionGroups, fingerprintTorrent, validateRule, type VersionManagerPolicy, type VersionProfile } from "../../../src/services/versionManager";
+import { evaluateRule, evaluateVersionGroups, fingerprintTorrent, validateRule, validateScoringRules, versionManagerPolicyHash, type VersionManagerPolicy, type VersionProfile } from "../../../src/services/versionManager";
 import { applyManualIdentityOverrides, clearManualIdentityOverride, saveManualIdentityOverride } from "../../../src/services/manualIdentity";
 
 const profile = (overrides: Partial<VersionProfile> = {}): VersionProfile => ({
@@ -15,6 +15,31 @@ function torrent(name: string, size: number): TorrentInfo {
 }
 
 describe("version manager", () => {
+  test("hashes the complete decision configuration deterministically", () => {
+    const base = profile({
+      priority: 10,
+      hardRequirements: { op: "AND", children: [
+        { op: "COMPARE", field: "resolution", operator: "eq", value: "2160p" },
+        { op: "IN", field: "source", values: ["REMUX", "WEB-DL"] },
+      ] },
+      scoringRules: [{ op: "COMPARE", field: "resolution", operator: "equals", value: "2160p", weight: 100 }],
+      languagePolicy: { required: { values: ["ENG", "ITA"], mode: "ALL" }, preferred: ["ita"], original: true, scope: "AUDIO" },
+    });
+    const policy: VersionManagerPolicy = { enableRemote: false, acquireMissingRemote: false, policyVersion: "1" };
+    const sameSemantics = { ...base, name: "Renamed", description: "UI-only" };
+    expect(versionManagerPolicyHash(policy, [base])).toBe(versionManagerPolicyHash(policy, [sameSemantics]));
+    expect(versionManagerPolicyHash(policy, [base])).toBe(versionManagerPolicyHash(policy, [{ ...base, hardRequirements: { op: "AND", children: [...(base.hardRequirements as any).children].reverse() } as any, scoringRules: [...base.scoringRules!].reverse(), languagePolicy: { ...base.languagePolicy, required: { ...base.languagePolicy.required, values: ["ita", "eng"] } } }]));
+    expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash(policy, [{ ...base, scoringRules: [{ ...base.scoringRules![0], weight: 1 }] }]));
+    expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash(policy, [{ ...base, scoringRules: [{ ...base.scoringRules![0], field: "source" }] }]));
+    expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash(policy, [{ ...base, enabled: false }]));
+    expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash(policy, [{ ...base, priority: 11 }]));
+    expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash(policy, [{ ...base, hardRequirements: { op: "COMPARE", field: "hdr", operator: "equals", value: true } }]));
+    expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash(policy, [{ ...base, languagePolicy: { ...base.languagePolicy, required: { values: ["ita"], mode: "ANY" } } }]));
+    expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash({ ...policy, enableRemote: true }, [base]));
+    expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash({ ...policy, safety: { ...policy.safety, requireRecoverableBeforeDelete: false } }, [base]));
+    expect(versionManagerPolicyHash(policy, [base])).toBe(versionManagerPolicyHash({ ...policy, policyVersion: "999" }, [base]));
+  });
+
   test("normalizes provider/file data into a fingerprint without probing or deleting", () => {
     const [version] = fingerprintTorrent(torrent("Example.Movie.2025.2160p.REMUX.ITA.ENG.TRUEHD.Atmos.mkv", 75_000_000_000), "alldebrid");
     expect(version.id).toBe("alldebrid:Example.Movie.2025.2160p.REMUX.ITA.ENG.TRUEHD.Atmos.mkv:0");
@@ -151,6 +176,18 @@ describe("version manager", () => {
     const evaluation = evaluateVersionGroups([version], [configured])[0].versions[0];
     expect(evaluation.decision).toBe("REVIEW");
     expect(evaluation.evaluations[0].score).toBeUndefined();
+  });
+
+  test("validates and evaluates structured scoring field/operator/value/weight rules", () => {
+    const [version] = fingerprintTorrent(torrent("Example.Movie.2025.2160p.WEB-DL.ITA.mkv", 10_000), "alldebrid");
+    const scoringRules = validateScoringRules([
+      { op: "COMPARE", field: "resolution", operator: "equals", value: "2160p", weight: 100 },
+      { op: "HAS", field: "hdr", value: false, weight: -10 },
+    ]);
+    const evaluation = evaluateVersionGroups([version], [profile({ scoringRules })])[0].versions[0].evaluations[0];
+    expect(evaluation.breakdown["rule:0"]).toBe(100);
+    expect(evaluation.breakdown["rule:1"]).toBe(-10);
+    expect(() => validateScoringRules([{ field: "resolution", operator: "equals", value: "2160p", weight: "not-a-number" }])).toThrow();
   });
 
   test("requires recoverability before DELETE_CANDIDATE", () => {

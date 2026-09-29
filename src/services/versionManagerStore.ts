@@ -1,5 +1,5 @@
 import { getDb } from "../core/db";
-import { defaultVersionManagerPolicy, defaultVersionProfiles, validateRule, versionManagerPolicyHash, type VersionGroup, type VersionManagerPolicy, type VersionProfile, type VersionRecord } from "./versionManager";
+import { defaultVersionManagerPolicy, defaultVersionProfiles, validateRule, validateScoringRules, versionManagerPolicyHash, type VersionGroup, type VersionManagerPolicy, type VersionProfile, type VersionRecord } from "./versionManager";
 
 function normalizePolicy(policy: Partial<VersionManagerPolicy>): VersionManagerPolicy {
   return {
@@ -28,7 +28,7 @@ export function saveVersionManagerPolicy(policy: VersionManagerPolicy): void {
 }
 
 export function getVersionManagerPolicyHash(): string {
-  return versionManagerPolicyHash(getVersionManagerPolicy());
+  return versionManagerPolicyHash(getVersionManagerPolicy(), getVersionProfiles());
 }
 
 export interface VersionManagerPreviewAudit {
@@ -58,6 +58,7 @@ export function getVersionProfiles(): VersionProfile[] {
     try {
       const profile = JSON.parse(row.profile_json) as VersionProfile;
       if (profile.hardRequirements) profile.hardRequirements = validateRule(profile.hardRequirements);
+      if (profile.scoringRules) profile.scoringRules = validateScoringRules(profile.scoringRules);
       return [profile];
     } catch { return []; }
   });
@@ -68,7 +69,7 @@ export function saveVersionProfiles(profiles: VersionProfile[]): void {
   const transaction = database.transaction(() => {
     database.exec("DELETE FROM version_manager_profiles");
     const insert = database.prepare("INSERT INTO version_manager_profiles (profile_id, profile_json, updated_at) VALUES (?, ?, ?)");
-    for (const profile of profiles) insert.run(profile.id, JSON.stringify({ ...profile, hardRequirements: profile.hardRequirements ? validateRule(profile.hardRequirements) : undefined }), new Date().toISOString());
+    for (const profile of profiles) insert.run(profile.id, JSON.stringify({ ...profile, hardRequirements: profile.hardRequirements ? validateRule(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? validateScoringRules(profile.scoringRules) : undefined }), new Date().toISOString());
   });
   transaction();
 }

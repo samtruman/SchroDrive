@@ -58,6 +58,8 @@ export interface VersionProfile {
   maxBitrate?: number;
   maxSizeBytes?: number;
   scoring?: Record<string, number>;
+  /** Structured scoring rules; `scoring` remains for backwards compatibility. */
+  scoringRules?: ScoringRule[];
   acquisitionBehavior?: "AUTOMATIC" | "APPROVAL_REQUIRED" | "DISABLED";
 }
 
@@ -68,9 +70,17 @@ export type RuleNode =
   | { op: "IN"; field: string; values: unknown[] }
   | { op: "HAS"; field: string; value: unknown };
 
-type CompareOperator = "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "equals" | "not_equals" | "greater_than" | "greater_or_equal" | "less_than" | "less_or_equal" | "contains" | "not_contains" | "exists" | "not_exists";
+export type CompareOperator = "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "equals" | "not_equals" | "greater_than" | "greater_or_equal" | "less_than" | "less_or_equal" | "contains" | "not_contains" | "exists" | "not_exists";
 
 const RULE_FIELDS = new Set(["resolution", "source", "codec", "bitrate", "size", "fileSize", "audioCodec", "audioLanguage", "subtitleLanguage", "channels", "atmos", "hdr", "dolbyVision", "container", "originalLanguage", "identityConfidence", "mediaType", "profileEligible"]);
+const NUMERIC_RULE_FIELDS = new Set(["bitrate", "size", "fileSize", "channels", "identityConfidence"]);
+const BOOLEAN_RULE_FIELDS = new Set(["atmos", "hdr", "dolbyVision", "profileEligible"]);
+
+function validateRuleValue(field: string, value: unknown): void {
+  if (value === undefined || value === null || value === "") throw new Error("Rule value is required for this operator");
+  if (NUMERIC_RULE_FIELDS.has(field) && (typeof value !== "number" || !Number.isFinite(value))) throw new Error(`Rule value for ${field} must be numeric`);
+  if (BOOLEAN_RULE_FIELDS.has(field) && typeof value !== "boolean") throw new Error(`Rule value for ${field} must be boolean`);
+}
 
 export function validateRule(node: unknown, depth = 0): RuleNode {
   if (depth > 8 || !node || typeof node !== "object" || Array.isArray(node)) throw new Error("Invalid version rule");
@@ -82,11 +92,57 @@ export function validateRule(node: unknown, depth = 0): RuleNode {
   }
   if (op === "NOT") return { op, child: validateRule(value.child, depth + 1) };
   if (op === "COMPARE" && RULE_FIELDS.has(String(value.field)) && ["eq", "neq", "gt", "gte", "lt", "lte", "equals", "not_equals", "greater_than", "greater_or_equal", "less_than", "less_or_equal", "contains", "not_contains", "exists", "not_exists"].includes(String(value.operator))) {
+    if (!(["exists", "not_exists"].includes(String(value.operator)))) validateRuleValue(String(value.field), value.value);
     return { op, field: String(value.field), operator: value.operator as CompareOperator, value: value.value };
   }
-  if (op === "IN" && RULE_FIELDS.has(String(value.field)) && Array.isArray(value.values)) return { op, field: String(value.field), values: value.values };
-  if (op === "HAS" && RULE_FIELDS.has(String(value.field))) return { op, field: String(value.field), value: value.value };
+  if (op === "IN" && RULE_FIELDS.has(String(value.field)) && Array.isArray(value.values) && value.values.length > 0) {
+    value.values.forEach((item) => validateRuleValue(String(value.field), item));
+    return { op, field: String(value.field), values: value.values };
+  }
+  if (op === "HAS" && RULE_FIELDS.has(String(value.field))) {
+    validateRuleValue(String(value.field), value.value);
+    return { op, field: String(value.field), value: value.value };
+  }
   throw new Error("Invalid version rule field or operator");
+}
+
+export interface ScoringRule {
+  op?: "COMPARE" | "IN" | "HAS";
+  field: string;
+  operator?: CompareOperator;
+  value?: unknown;
+  values?: unknown[];
+  weight: number;
+}
+
+export function validateScoringRule(rule: unknown): ScoringRule {
+  if (!rule || typeof rule !== "object" || Array.isArray(rule)) throw new Error("Invalid scoring rule");
+  const value = rule as Record<string, unknown>;
+  const weight = Number(value.weight);
+  if (!Number.isFinite(weight)) throw new Error("Scoring rule weight must be finite");
+  const op = value.op || "COMPARE";
+  if (op === "COMPARE") {
+    const validated = validateRule({ op, field: value.field, operator: value.operator, value: value.value });
+    if (validated.op !== "COMPARE") throw new Error("Invalid scoring comparison");
+    return { ...validated, weight };
+  }
+  if (op === "IN") {
+    const validated = validateRule({ op, field: value.field, values: value.values });
+    if (validated.op !== "IN") throw new Error("Invalid scoring IN rule");
+    return { ...validated, weight };
+  }
+  if (op === "HAS") {
+    const validated = validateRule({ op, field: value.field, value: value.value });
+    if (validated.op !== "HAS") throw new Error("Invalid scoring HAS rule");
+    return { ...validated, weight };
+  }
+  throw new Error("Invalid scoring rule operator");
+}
+
+export function validateScoringRules(rules: unknown): ScoringRule[] {
+  if (rules === undefined) return [];
+  if (!Array.isArray(rules)) throw new Error("scoringRules must be an array");
+  return rules.map(validateScoringRule);
 }
 
 function ruleField(version: VersionRecord, field: string, profileEligible = true): unknown {
@@ -403,6 +459,13 @@ function evaluateProfile(version: VersionRecord, profile: VersionProfile): Profi
     const current = breakdown[criterion] || 0;
     breakdown[criterion] = current + Number(weight || 0);
   }
+  for (const [index, rule] of (profile.scoringRules || []).entries()) {
+    const matches = evaluateRule(
+      rule.op === "IN" ? { op: "IN", field: rule.field, values: rule.values || [] } : rule.op === "HAS" ? { op: "HAS", field: rule.field, value: rule.value } : { op: "COMPARE", field: rule.field, operator: rule.operator || "equals", value: rule.value },
+      version,
+    );
+    if (matches) breakdown[`rule:${index}`] = Number(rule.weight || 0);
+  }
   const eligible = reasons.length === 0;
   const score = eligible ? Math.round(Object.values(breakdown).reduce((sum, value) => sum + value, 0) * 100) / 100 : undefined;
   if (eligible) reasons.push({ code: "profile_eligible", message: `Eligible for ${profile.name}`, facts: { target: profile.target } });
@@ -471,7 +534,93 @@ export function evaluateVersionGroups(versions: VersionRecord[], profiles = defa
   });
 }
 
-export function versionManagerPolicyHash(policy: VersionManagerPolicy): string {
-  const normalized = JSON.stringify({ ...policy, safety: { ...defaultVersionManagerPolicy.safety, ...(policy.safety || {}) } });
-  return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
+const OPERATOR_ALIASES: Record<string, string> = {
+  eq: "equals",
+  neq: "not_equals",
+  gt: "greater_than",
+  gte: "greater_or_equal",
+  lt: "less_than",
+  lte: "less_or_equal",
+};
+
+function canonicalCompare(left: unknown, right: unknown): number {
+  const a = JSON.stringify(left);
+  const b = JSON.stringify(right);
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (!value || typeof value !== "object") return value;
+  return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0).map(([key, item]) => [key, canonicalValue(item)]));
+}
+
+function canonicalRule(node: RuleNode | undefined): unknown {
+  if (!node) return null;
+  if (node.op === "AND" || node.op === "OR") {
+    const children = node.children.map(canonicalRule).sort(canonicalCompare);
+    return { op: node.op, children };
+  }
+  if (node.op === "NOT") return { op: "NOT", child: canonicalRule(node.child) };
+  if (node.op === "IN") {
+    const values = node.values.map(canonicalValue).sort(canonicalCompare);
+    return { op: "IN", field: node.field, values };
+  }
+  const leaf = node as Extract<RuleNode, { op: "COMPARE" | "HAS" }>;
+  const operator = "operator" in leaf && leaf.operator ? OPERATOR_ALIASES[leaf.operator] || leaf.operator : undefined;
+  return { op: leaf.op, field: leaf.field, ...(operator ? { operator } : {}), ...("value" in leaf ? { value: canonicalValue(leaf.value) } : {}) };
+}
+
+function canonicalScoringRule(rule: ScoringRule): unknown {
+  const op = rule.op || "COMPARE";
+  const operator = rule.operator ? OPERATOR_ALIASES[rule.operator] || rule.operator : undefined;
+  if (op === "IN") {
+    const values = (rule.values || []).map(canonicalValue).sort(canonicalCompare);
+    return { op, field: rule.field, values, weight: rule.weight };
+  }
+  return { op, field: rule.field, ...(operator ? { operator } : {}), ...("value" in rule ? { value: canonicalValue(rule.value) } : {}), weight: rule.weight };
+}
+
+function canonicalLanguagePolicy(policy: LanguagePolicy): unknown {
+  return {
+    required: {
+      mode: policy.required.mode,
+      values: [...policy.required.values].map((value) => value.trim().toLowerCase()).sort(),
+    },
+    preferred: [...policy.preferred].map((value) => value.trim().toLowerCase()),
+    original: policy.original === true,
+    scope: policy.scope || "AUDIO",
+  };
+}
+
+function canonicalProfile(profile: VersionProfile): unknown {
+  return {
+    id: profile.id,
+    enabled: profile.enabled === true,
+    priority: profile.priority ?? null,
+    target: profile.target,
+    preferredResolution: profile.preferredResolution,
+    languagePolicy: canonicalLanguagePolicy(profile.languagePolicy),
+    sourceOrder: [...profile.sourceOrder],
+    codecOrder: [...profile.codecOrder],
+    audioOrder: [...profile.audioOrder],
+    hardRequirements: canonicalRule(profile.hardRequirements),
+    maxBitrate: profile.maxBitrate ?? null,
+    maxSizeBytes: profile.maxSizeBytes ?? null,
+    scoring: Object.fromEntries(Object.entries(profile.scoring || {}).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)),
+    scoringRules: (profile.scoringRules || []).map(canonicalScoringRule).sort(canonicalCompare),
+  };
+}
+
+/** Hashes the complete decision configuration; policyVersion is revision metadata, not content identity. */
+export function versionManagerPolicyHash(policy: VersionManagerPolicy, profiles: VersionProfile[] = defaultVersionProfiles): string {
+  const normalized = {
+    policy: {
+      enableRemote: policy.enableRemote === true,
+      acquireMissingRemote: policy.acquireMissingRemote === true,
+      safety: { ...defaultVersionManagerPolicy.safety, ...(policy.safety || {}) },
+    },
+    profiles: profiles.map(canonicalProfile),
+  };
+  return createHash("sha256").update(JSON.stringify(normalized)).digest("hex").slice(0, 16);
 }

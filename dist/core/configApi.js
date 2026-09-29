@@ -34,6 +34,9 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CONFIG_SCHEMA = void 0;
+exports.getOriginalEnvironmentKeys = getOriginalEnvironmentKeys;
+exports.resolveRuntimeOrPersistedValue = resolveRuntimeOrPersistedValue;
+exports.getPersistedEnvValue = getPersistedEnvValue;
 exports.getConfigWithSources = getConfigWithSources;
 exports.saveConfigToFile = saveConfigToFile;
 exports.isRunningInDocker = isRunningInDocker;
@@ -90,7 +93,7 @@ exports.CONFIG_SCHEMA = {
     // Mount Settings
     MOUNT_BASE: { type: "string", default: "/mnt/schrodrive", category: "mounts", label: "Mount Base Path" },
     RCLONE_PATH: { type: "string", default: "rclone", category: "mounts", label: "Rclone Path" },
-    MOUNT_OPTIONS: { type: "string", default: "--vfs-cache-mode=full --dir-cache-time=12h --poll-interval=0 --buffer-size=64M", category: "mounts", label: "Mount Options" },
+    MOUNT_OPTIONS: { type: "string", default: "", category: "mounts", label: "Mount Options" },
     MOUNT_ALLOW_OTHER: { type: "boolean", default: "true", category: "mounts", label: "Allow Other Users" },
     MOUNT_UID: { type: "number", default: "", category: "mounts", label: "Mount UID" },
     PUID: { type: "number", default: "", category: "mounts", label: "PUID (alias for UID)" },
@@ -113,7 +116,15 @@ exports.CONFIG_SCHEMA = {
     TMDB_API_KEY: { type: "password", default: "", category: "organizer", label: "TMDB API Key" },
     ORGANIZED_BASE: { type: "string", default: "", category: "organizer", label: "Organized Base Path" },
     ORGANIZER_MODE: { type: "select", default: "symlink", options: ["symlink", "copy", "move"], category: "organizer", label: "Organizer Mode" },
+    ORGANIZER_FILENAME_MODE: { type: "select", default: "canonical", options: ["canonical", "original"], category: "organizer", label: "Organizer Filename Mode" },
     ORG_SCAN_INTERVAL_S: { type: "number", default: "300", category: "organizer", label: "Organizer Scan Interval (seconds)" },
+    // Optional media-server metadata providers
+    PLEX_URL: { type: "string", default: "", category: "media_servers", label: "Plex URL" },
+    PLEX_TOKEN: { type: "password", default: "", category: "media_servers", label: "Plex Token" },
+    PLEX_MOUNT_DIR: { type: "string", default: "", category: "media_servers", label: "Plex Mount Path" },
+    JELLYFIN_URL: { type: "string", default: "", category: "media_servers", label: "Jellyfin URL" },
+    JELLYFIN_API_KEY: { type: "password", default: "", category: "media_servers", label: "Jellyfin API Key" },
+    JELLYFIN_USER_ID: { type: "string", default: "", category: "media_servers", label: "Jellyfin User ID" },
     // Auto-Update
     AUTO_UPDATE_ENABLED: { type: "boolean", default: "false", category: "updates", label: "Enable Auto-Update" },
     AUTO_UPDATE_INTERVAL_S: { type: "number", default: "3600", category: "updates", label: "Update Check Interval (seconds)" },
@@ -121,6 +132,35 @@ exports.CONFIG_SCHEMA = {
     REPO_OWNER: { type: "string", default: "moderniselife", category: "updates", label: "Repository Owner" },
     REPO_NAME: { type: "string", default: "SchroDrive", category: "updates", label: "Repository Name" },
 };
+/**
+ * Bun loads .env values into process.env before application modules run.
+ * Reading /proc/self/environ preserves the original environment boundary on
+ * Linux/Docker and therefore does not misclassify persisted .env values.
+ */
+function getOriginalEnvironmentKeys() {
+    try {
+        const raw = fs.readFileSync("/proc/self/environ");
+        return new Set(raw
+            .toString("utf8")
+            .split("\0")
+            .map((entry) => entry.slice(0, entry.indexOf("=")))
+            .filter(Boolean));
+    }
+    catch {
+        // Non-Linux runtimes do not expose /proc. This is the best available
+        // fallback for runtimes that do not auto-load dotenv values.
+        return new Set(Object.keys(process.env));
+    }
+}
+/**
+ * Resolve a setting using the runtime environment first and the persisted
+ * .env value as a fallback. An explicitly empty runtime value is treated as
+ * unset so Docker compose entries such as TMDB_API_KEY=${TMDB_API_KEY:-}
+ * do not mask a value saved through the Settings UI.
+ */
+function resolveRuntimeOrPersistedValue(runtimeValue, persistedValue) {
+    return runtimeValue !== undefined && runtimeValue !== "" ? runtimeValue : persistedValue || "";
+}
 // Find the .env file path
 function findEnvPath() {
     // Check multiple possible locations
@@ -163,10 +203,15 @@ function parseEnvFile(filePath) {
     }
     return result;
 }
+/** Read one persisted setting without exposing or logging its value. */
+function getPersistedEnvValue(key) {
+    return parseEnvFile(findEnvPath()).get(key) || "";
+}
 // Get all config values with their sources
-function getConfigWithSources() {
-    const envPath = findEnvPath();
+function getConfigWithSources(options = {}) {
+    const envPath = options.envPath || findEnvPath();
     const fileValues = parseEnvFile(envPath);
+    const containerEnvKeys = options.containerEnvKeys || getOriginalEnvironmentKeys();
     const config = {};
     for (const [key, schema] of Object.entries(exports.CONFIG_SCHEMA)) {
         const k = key;
@@ -174,24 +219,34 @@ function getConfigWithSources() {
         const fileValue = fileValues.get(key);
         let value;
         let source;
-        if (envValue !== undefined && envValue !== "") {
+        let provenance;
+        let locked;
+        if (containerEnvKeys.has(key) && envValue !== undefined && envValue !== "") {
             // Runtime environment variable takes priority
             value = envValue;
             source = "env";
+            provenance = "CONTAINER_ENV";
+            locked = true;
         }
         else if (fileValue !== undefined) {
             // .env file value
             value = fileValue;
             source = "file";
+            provenance = "PERSISTED_DOTENV";
+            locked = false;
         }
         else {
             // Default value
             value = schema.default;
             source = "default";
+            provenance = "DEFAULT";
+            locked = false;
         }
         config[k] = {
             value,
             source,
+            provenance,
+            locked,
             schema,
         };
     }

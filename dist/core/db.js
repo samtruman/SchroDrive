@@ -27,6 +27,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getDb = getDb;
 exports.closeDb = closeDb;
+exports.recordAcquisitionAudit = recordAcquisitionAudit;
+exports.recordMigrationAudit = recordMigrationAudit;
+exports.listMigrationAudit = listMigrationAudit;
 exports.pruneOldEntries = pruneOldEntries;
 exports.isWatchlistProcessed = isWatchlistProcessed;
 exports.markWatchlistProcessed = markWatchlistProcessed;
@@ -199,14 +202,177 @@ function runMigrations(database) {
       ON strm_codes (provider, torrent_id, file_id)`,
         `CREATE INDEX IF NOT EXISTS idx_strm_expires
       ON strm_codes (expires_at)`,
+        `CREATE TABLE IF NOT EXISTS arr_categories (
+      name TEXT PRIMARY KEY,
+      save_path TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`,
+        `CREATE TABLE IF NOT EXISTS arr_tracked_torrents (
+      hash TEXT PRIMARY KEY,
+      state_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
+    )`,
+        `CREATE TABLE IF NOT EXISTS organizer_reviews (
+      id TEXT PRIMARY KEY,
+      source_path TEXT NOT NULL,
+      source_basename TEXT NOT NULL,
+      parsed_json TEXT NOT NULL,
+      decision TEXT NOT NULL DEFAULT 'pending',
+      override_json TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+        `CREATE TABLE IF NOT EXISTS organizer_review_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      review_id TEXT NOT NULL,
+      action TEXT NOT NULL,
+      payload_json TEXT,
+      created_at TEXT NOT NULL
+    )`,
+        `CREATE INDEX IF NOT EXISTS idx_organizer_reviews_decision
+      ON organizer_reviews (decision, updated_at)`,
+        `CREATE TABLE IF NOT EXISTS version_manager_scans (
+      id TEXT PRIMARY KEY,
+      group_count INTEGER NOT NULL,
+      version_count INTEGER NOT NULL,
+      profiles_json TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`,
+        `CREATE TABLE IF NOT EXISTS version_manager_profiles (
+      profile_id TEXT PRIMARY KEY,
+      profile_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+        `CREATE TABLE IF NOT EXISTS version_manager_policy (
+      id TEXT PRIMARY KEY,
+      policy_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+        `CREATE TABLE IF NOT EXISTS version_manager_identity_overrides (
+      identity_key TEXT PRIMARY KEY,
+      override_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+        `CREATE TABLE IF NOT EXISTS version_manager_preview_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      policy_hash TEXT NOT NULL,
+      evaluated_at TEXT NOT NULL,
+      content_count INTEGER NOT NULL,
+      version_group_count INTEGER NOT NULL,
+      version_count INTEGER NOT NULL,
+      keep_count INTEGER NOT NULL,
+      delete_candidate_count INTEGER NOT NULL,
+      review_count INTEGER NOT NULL,
+      primary_missing INTEGER NOT NULL,
+      remote_missing INTEGER NOT NULL
+    )`,
+        `CREATE TABLE IF NOT EXISTS version_manager_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      scan_id TEXT NOT NULL,
+      group_id TEXT NOT NULL,
+      item_id TEXT NOT NULL,
+      decision TEXT NOT NULL,
+      fingerprint_json TEXT NOT NULL,
+      reasons_json TEXT NOT NULL,
+      UNIQUE(scan_id, item_id)
+    )`,
+        `CREATE INDEX IF NOT EXISTS idx_version_manager_items_scan
+      ON version_manager_items (scan_id, decision)`,
+        `CREATE TABLE IF NOT EXISTS version_manager_probe_cache (
+      cache_key TEXT PRIMARY KEY,
+      path TEXT NOT NULL,
+      fingerprint_json TEXT NOT NULL,
+      ffprobe_version TEXT,
+      probed_at TEXT NOT NULL,
+      status TEXT NOT NULL
+    )`,
+        `CREATE TABLE IF NOT EXISTS version_manager_metadata_cache (
+      cache_key TEXT PRIMARY KEY,
+      provider TEXT NOT NULL,
+      metadata_json TEXT NOT NULL,
+      status TEXT NOT NULL,
+      fetched_at TEXT NOT NULL,
+      expires_at TEXT NOT NULL
+    )`,
+        `CREATE TABLE IF NOT EXISTS acquisition_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      need_id TEXT NOT NULL,
+      identity_json TEXT NOT NULL,
+      profile_id TEXT NOT NULL,
+      adapter_id TEXT NOT NULL,
+      phase TEXT NOT NULL,
+      status TEXT NOT NULL,
+      provider_request_id TEXT,
+      detail TEXT,
+      created_at TEXT NOT NULL
+    )`,
+        `CREATE INDEX IF NOT EXISTS idx_acquisition_audit_need
+      ON acquisition_audit (need_id, created_at)`,
+        `CREATE TABLE IF NOT EXISTS migration_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      source_provider TEXT NOT NULL,
+      target_provider TEXT NOT NULL,
+      source_provider_item_id TEXT,
+      infohash TEXT NOT NULL,
+      initial_status TEXT NOT NULL,
+      revalidation_status TEXT NOT NULL,
+      execution_status TEXT NOT NULL,
+      target_provider_item_id TEXT,
+      created_at TEXT NOT NULL
+    )`,
+        `ALTER TABLE migration_audit ADD COLUMN reason TEXT`,
+        `ALTER TABLE migration_audit ADD COLUMN retry_count INTEGER DEFAULT 0`,
+        `ALTER TABLE migration_audit ADD COLUMN import_executed INTEGER DEFAULT 0`,
     ];
     for (const sql of migrations) {
         try {
             database.exec(sql);
         }
         catch (err) {
-            console.error(`[${new Date().toISOString()}][db] Migration failed: ${err?.message}`);
+            if (!/duplicate column name/i.test(String(err?.message || ""))) {
+                console.error(`[${new Date().toISOString()}][db] Migration failed: ${err?.message}`);
+            }
         }
+    }
+}
+function recordAcquisitionAudit(record) {
+    try {
+        getDb().prepare(`INSERT INTO acquisition_audit (need_id, identity_json, profile_id, adapter_id, phase, status, provider_request_id, detail, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(record.needId, JSON.stringify(record.identity), record.profileId, record.adapterId, record.phase, record.status, record.providerRequestId ?? null, record.detail ?? null, record.createdAt || new Date().toISOString());
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}][db] acquisition audit error: ${error?.message}`);
+    }
+}
+function recordMigrationAudit(record) {
+    try {
+        getDb().prepare(`INSERT INTO migration_audit (source_provider, target_provider, source_provider_item_id, infohash, initial_status, revalidation_status, execution_status, target_provider_item_id, reason, retry_count, import_executed, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(record.sourceProvider, record.targetProvider, record.sourceProviderItemId ?? null, record.infoHash, record.initialStatus, record.revalidationStatus, record.executionStatus, record.targetProviderItemId ?? null, record.reason ?? null, record.retryCount ?? 0, record.importExecuted ? 1 : 0, record.createdAt || new Date().toISOString());
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}][db] migration audit error: ${error?.message}`);
+    }
+}
+/** Read-only migration history used to reconcile provider state with outcomes. */
+function listMigrationAudit(limit = 5000) {
+    try {
+        const rows = getDb().prepare(`SELECT id, source_provider, target_provider, source_provider_item_id, infohash,
+      initial_status, revalidation_status, execution_status, target_provider_item_id, reason,
+      retry_count, import_executed, created_at
+      FROM migration_audit ORDER BY created_at DESC, id DESC LIMIT ?`).all(Math.max(1, Math.min(limit, 10000)));
+        return rows.map((row) => ({
+            id: Number(row.id), sourceProvider: String(row.source_provider), targetProvider: String(row.target_provider),
+            sourceProviderItemId: row.source_provider_item_id ? String(row.source_provider_item_id) : undefined,
+            infoHash: String(row.infohash), initialStatus: String(row.initial_status),
+            revalidationStatus: String(row.revalidation_status), executionStatus: String(row.execution_status),
+            targetProviderItemId: row.target_provider_item_id ? String(row.target_provider_item_id) : undefined,
+            reason: row.reason ? String(row.reason) : undefined, retryCount: Number(row.retry_count || 0),
+            importExecuted: Number(row.import_executed || 0) === 1, createdAt: String(row.created_at),
+        }));
+    }
+    catch (error) {
+        console.error(`[${new Date().toISOString()}][db] migration audit read error: ${error?.message}`);
+        return [];
     }
 }
 // ===========================================================================

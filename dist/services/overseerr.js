@@ -10,6 +10,7 @@ const index_1 = require("../indexers/index");
 const providers_1 = require("../providers");
 const db_1 = require("../core/db");
 const plex_1 = require("../integrations/plex");
+const seerrUrl_1 = require("./seerrUrl");
 function defaultCategoriesFor(mediaType) {
     const map = {
         movie: ["5000"],
@@ -21,7 +22,7 @@ function defaultCategoriesFor(mediaType) {
 async function fetchTitleYearFromOverseerr(mediaType, tmdbId) {
     if (!config_1.config.overseerrUrl || (!config_1.config.overseerrApiKey && !config_1.config.overseerrAuth))
         return undefined;
-    const base = config_1.config.overseerrUrl.replace(/\/$/, "");
+    const base = (0, seerrUrl_1.seerrApiBaseUrl)(config_1.config.overseerrUrl);
     const path = mediaType?.toLowerCase() === 'movie' ? `/movie/${tmdbId}` : `/tv/${tmdbId}`;
     const url = `${base}${path}`;
     console.log(`[${new Date().toISOString()}][poller->seerr] GET ${url} (details)`);
@@ -70,7 +71,7 @@ function buildSearchFromRequest(r) {
     return result;
 }
 async function fetchApprovedRequests() {
-    const base = config_1.config.overseerrUrl.replace(/\/$/, "");
+    const base = (0, seerrUrl_1.seerrApiBaseUrl)(config_1.config.overseerrUrl);
     const url = `${base}/request`;
     const started = Date.now();
     console.log(`[${new Date().toISOString()}][poller->seerr] GET ${url}`, {
@@ -323,7 +324,7 @@ function startOverseerrPoller() {
 async function syncAllApprovedRequests() {
     if (!config_1.config.overseerrUrl || (!config_1.config.overseerrApiKey && !config_1.config.overseerrAuth))
         return;
-    const base = config_1.config.overseerrUrl.replace(/\/$/, "");
+    const base = (0, seerrUrl_1.seerrApiBaseUrl)(config_1.config.overseerrUrl);
     const url = `${base}/request`;
     const headers = {};
     if (config_1.config.overseerrApiKey)

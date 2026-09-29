@@ -18,6 +18,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.scanDirRecursive = scanDirRecursive;
 exports.clearTrackedForTests = clearTrackedForTests;
 exports.startArrBridge = startArrBridge;
 exports.stopArrBridge = stopArrBridge;
@@ -26,6 +27,7 @@ const busboy_1 = __importDefault(require("busboy"));
 const promises_1 = __importDefault(require("fs/promises"));
 const path_1 = __importDefault(require("path"));
 const config_1 = require("../core/config");
+const db_1 = require("../core/db");
 const providers_1 = require("../providers");
 const utils_1 = require("../core/utils");
 // ===========================================================================
@@ -43,6 +45,49 @@ const MOUNT_SCAN_INTERVAL_MS = 10000;
 // ===========================================================================
 /** All tracked torrents, keyed by uppercase info hash. */
 const tracked = new Map();
+let trackedStateLoaded = false;
+function persistTrackedTorrent(torrent) {
+    try {
+        (0, db_1.getDb)().prepare(`INSERT INTO arr_tracked_torrents (hash, state_json, updated_at)
+      VALUES (?, ?, ?) ON CONFLICT(hash) DO UPDATE SET state_json=excluded.state_json, updated_at=excluded.updated_at`)
+            .run(torrent.hash, JSON.stringify(torrent), Date.now());
+    }
+    catch (err) {
+        console.warn(`${LOG_PREFIX} Could not persist tracked torrent ${torrent.hash.slice(0, 8)}: ${err?.message || String(err)}`);
+    }
+}
+function removePersistedTorrent(hash) {
+    try {
+        (0, db_1.getDb)().prepare('DELETE FROM arr_tracked_torrents WHERE hash = ?').run(hash);
+    }
+    catch (err) {
+        console.warn(`${LOG_PREFIX} Could not remove persisted torrent: ${err?.message || String(err)}`);
+    }
+}
+function loadTrackedTorrents() {
+    if (trackedStateLoaded)
+        return;
+    trackedStateLoaded = true;
+    try {
+        const rows = (0, db_1.getDb)().prepare('SELECT state_json FROM arr_tracked_torrents').all();
+        for (const row of rows) {
+            try {
+                const torrent = JSON.parse(row.state_json);
+                if (torrent?.hash && torrent?.magnet && torrent?.name)
+                    tracked.set(torrent.hash.toUpperCase(), torrent);
+            }
+            catch { /* Ignore one malformed record and restore the rest. */ }
+        }
+        if (rows.length)
+            console.log(`${LOG_PREFIX} Restored ${tracked.size} tracked torrent(s) from SQLite`);
+    }
+    catch (err) {
+        console.warn(`${LOG_PREFIX} Could not restore tracked torrents: ${err?.message || String(err)}`);
+    }
+}
+function stateFingerprint(torrent) {
+    return `${torrent.state}|${torrent.progress}|${torrent.size}|${torrent.completionOn}|${torrent.mountScanned}|${torrent.contentPath}`;
+}
 /** Express server instance (last started, for backwards compat). */
 let server = null;
 /** All active servers keyed by port — supports parallel test runs that share module state. */
@@ -129,6 +174,7 @@ async function pollDebridStatus() {
         }
     }
     for (const torrent of pending) {
+        const before = stateFingerprint(torrent);
         torrent.pollAttempts++;
         // Try to find this torrent across providers
         let found = false;
@@ -168,6 +214,8 @@ async function pollDebridStatus() {
             console.warn(`${LOG_PREFIX} Torrent "${torrent.name}" not found on any provider after ${torrent.pollAttempts} polls — marking as error`);
             torrent.state = 'error';
         }
+        if (before !== stateFingerprint(torrent) || torrent.pollAttempts % 5 === 0)
+            persistTrackedTorrent(torrent);
     }
 }
 // ===========================================================================
@@ -241,6 +289,7 @@ async function scanMountsForCompleted() {
                     const symlinkPath = path_1.default.join(torrentDir, file.name);
                     try {
                         // Create relative symlink
+                        await promises_1.default.mkdir(path_1.default.dirname(symlinkPath), { recursive: true });
                         const relativePath = path_1.default.relative(path_1.default.dirname(symlinkPath), file.path);
                         // Remove existing symlink if it exists
                         try {
@@ -262,6 +311,7 @@ async function scanMountsForCompleted() {
                 torrent.savePath = path_1.default.join(getDownloadsPath(), torrent.category || '');
                 torrent.contentPath = torrentDir;
                 torrent.size = foundFiles.reduce((sum, f) => sum + f.size, 0);
+                persistTrackedTorrent(torrent);
                 console.log(`${LOG_PREFIX} ✅ Torrent "${torrent.name}" completed — ${foundFiles.length} file(s) symlinked to ${torrentDir}`);
             }
         }
@@ -271,18 +321,18 @@ async function scanMountsForCompleted() {
     }
 }
 /** Recursively scans a directory for video files. */
-async function scanDirRecursive(dir) {
+async function scanDirRecursive(dir, rootDir = dir) {
     const results = [];
     try {
         const entries = await promises_1.default.readdir(dir, { withFileTypes: true });
         for (const entry of entries) {
             const full = path_1.default.join(dir, entry.name);
             if (entry.isDirectory()) {
-                results.push(...await scanDirRecursive(full));
+                results.push(...await scanDirRecursive(full, rootDir));
             }
             else if (entry.isFile() && isMediaFile(entry.name)) {
                 const stat = await promises_1.default.stat(full);
-                results.push({ name: entry.name, size: stat.size, path: full });
+                results.push({ name: path_1.default.relative(rootDir, full), size: stat.size, path: full });
             }
         }
     }
@@ -458,6 +508,7 @@ async function handleAddTorrent(req, res) {
                 mountScanned: false,
             };
             tracked.set(hash, torrent);
+            persistTrackedTorrent(torrent);
             // Submit to debrid providers in background (don't block the response)
             const addStrategy = config_1.config.addStrategy || 'all';
             providers_1.registry.addMagnetWithStrategy(magnet, name, addStrategy)
@@ -475,9 +526,11 @@ async function handleAddTorrent(req, res) {
                 else {
                     console.log(`${LOG_PREFIX} ✅ Submitted "${name}" to ${successCount} provider(s)`);
                 }
+                persistTrackedTorrent(torrent);
             })
                 .catch((err) => {
                 torrent.state = 'error';
+                persistTrackedTorrent(torrent);
                 console.error(`${LOG_PREFIX} ❌ Failed to submit "${name}": ${err?.message}`);
             });
         }
@@ -649,6 +702,7 @@ function handleDeleteTorrent(req, res) {
                 promises_1.default.rm(torrent.symlinkPath, { recursive: true, force: true }).catch(() => { });
             }
             tracked.delete(hash);
+            removePersistedTorrent(hash);
         }
     }
     res.send('Ok.');
@@ -670,6 +724,7 @@ function handleSetCategory(req, res) {
         if (torrent) {
             torrent.category = category;
             torrent.savePath = path_1.default.join(getDownloadsPath(), category);
+            persistTrackedTorrent(torrent);
         }
     }
     res.send('Ok.');
@@ -677,6 +732,18 @@ function handleSetCategory(req, res) {
 /** GET /api/v2/torrents/categories — Return known categories. */
 function handleCategories(_req, res) {
     const cats = {};
+    // qBittorrent categories survive restarts. Restore categories created by
+    // Radarr/Sonarr before adding categories inferred from tracked torrents.
+    try {
+        const rows = (0, db_1.getDb)().prepare('SELECT name, save_path FROM arr_categories').all();
+        for (const row of rows) {
+            if (row.name)
+                cats[row.name] = { name: row.name, savePath: row.save_path };
+        }
+    }
+    catch (err) {
+        console.warn(`${LOG_PREFIX} Could not restore qBittorrent categories: ${err?.message || String(err)}`);
+    }
     // Collect categories from tracked torrents
     for (const t of tracked.values()) {
         if (t.category && !cats[t.category]) {
@@ -696,12 +763,43 @@ function handleCategories(_req, res) {
     res.json(cats);
 }
 /** POST /api/v2/torrents/createCategory — Create a category. */
-function handleCreateCategory(_req, res) {
-    // No-op — we auto-create categories
+function handleCreateCategory(req, res) {
+    const name = String(req.body?.category || req.body?.name || '').trim();
+    if (!name) {
+        res.status(400).send('Missing category');
+        return;
+    }
+    const savePath = String(req.body?.savePath || req.body?.save_path || path_1.default.join(getDownloadsPath(), name));
+    try {
+        (0, db_1.getDb)().prepare(`INSERT INTO arr_categories (name, save_path, updated_at)
+      VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET save_path=excluded.save_path, updated_at=excluded.updated_at`)
+            .run(name, savePath, Date.now());
+    }
+    catch (err) {
+        console.warn(`${LOG_PREFIX} Could not persist qBittorrent category ${name}: ${err?.message || String(err)}`);
+        res.status(500).send('Could not persist category');
+        return;
+    }
     res.send('Ok.');
 }
 /** POST /api/v2/torrents/editCategory — Edit a category. */
-function handleEditCategory(_req, res) {
+function handleEditCategory(req, res) {
+    const name = String(req.body?.category || req.body?.name || '').trim();
+    if (!name) {
+        res.status(400).send('Missing category');
+        return;
+    }
+    const savePath = String(req.body?.savePath || req.body?.save_path || path_1.default.join(getDownloadsPath(), name));
+    try {
+        (0, db_1.getDb)().prepare(`INSERT INTO arr_categories (name, save_path, updated_at)
+      VALUES (?, ?, ?) ON CONFLICT(name) DO UPDATE SET save_path=excluded.save_path, updated_at=excluded.updated_at`)
+            .run(name, savePath, Date.now());
+    }
+    catch (err) {
+        console.warn(`${LOG_PREFIX} Could not persist qBittorrent category ${name}: ${err?.message || String(err)}`);
+        res.status(500).send('Could not persist category');
+        return;
+    }
     res.send('Ok.');
 }
 /** GET /api/v2/transfer/info — Transfer speed info. */
@@ -768,6 +866,7 @@ async function startArrBridge() {
     }
     console.log(`${LOG_PREFIX} Starting *arr bridge (fake qBittorrent v${FAKE_QBIT_VERSION}) on port ${port}...`);
     await ensureDownloadsDir();
+    loadTrackedTorrents();
     const app = (0, express_1.default)();
     // Parse URL-encoded bodies (qBit API uses form data)
     app.use(express_1.default.urlencoded({ extended: true }));
@@ -855,6 +954,7 @@ async function startArrBridge() {
 async function stopArrBridge() {
     // Clear in-memory tracking so a subsequent test run starts empty.
     tracked.clear();
+    trackedStateLoaded = false;
     const currentPort = config_1.config.arrBridgePort;
     const targets = [];
     if (servers.has(currentPort)) {

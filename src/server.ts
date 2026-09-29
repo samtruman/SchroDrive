@@ -34,10 +34,11 @@ import { getBlacklistEntries, getBlacklistCount, addToBlacklist, removeFromBlack
 import { tokenRotator } from "./core/tokenRotator";
 import { clearOrganizerReviewOverride, decideOrganizerReview, filterOrganizerReviewsByParserStatus, listOrganizerReviewAudit, listOrganizerReviews, retryOrganizerReview, validateReviewOverride } from "./services/organizerReview";
 import { browseMountedFilesystem, FilesystemBrowserError } from "./core/filesystemBrowser";
-import { evaluateVersionGroups, fingerprintTorrent, validateRule, versionManagerPolicyHash, type VersionRecord } from "./services/versionManager";
+import { evaluateVersionGroups, validateRule, validateScoringRules, versionManagerPolicyHash, type VersionRecord } from "./services/versionManager";
+import { loadMediaManagerInventory, type MediaManagerInventoryStats } from "./services/mediaManagerInventory";
 import { deriveAcquisitionNeeds } from "./services/acquisition";
 import { SeerrAcquisitionAdapter } from "./services/seerrAcquisitionAdapter";
-import { getLatestVersionManagerRecords, getLatestVersionManagerScan, getVersionManagerPolicy, getVersionManagerPolicyHash, getVersionProfiles, saveVersionManagerPolicy, saveVersionManagerPreviewAudit, saveVersionManagerScan, saveVersionProfiles } from "./services/versionManagerStore";
+import { getLatestVersionManagerRecords, getLatestVersionManagerScan, getVersionManagerPolicy, getVersionProfiles, saveVersionManagerPolicy, saveVersionManagerPreviewAudit, saveVersionManagerScan, saveVersionProfiles } from "./services/versionManagerStore";
 import { probeVersionRecords } from "./services/versionManagerProbe";
 import { enrichVersionMetadata } from "./services/versionManagerMetadata";
 import { searchTmdbCandidates } from "./services/tmdbService";
@@ -53,17 +54,8 @@ import { buildUnifiedReviewQueue } from "./services/unifiedReview";
 // Server Initialisation
 // ===========================================================================
 
-async function loadVersionManagerInventory(): Promise<VersionRecord[]> {
-  const resolved: VersionRecord[] = [];
-  const recoverabilityCache = new Map<string, RecoverabilityEvidence>();
-  for (const provider of registry.configured()) {
-    const torrents = await provider.listTorrents();
-    for (const torrent of torrents) {
-      await resolveProviderItemRecoverability(torrent, provider, recoverabilityCache);
-      resolved.push(...fingerprintTorrent(torrent, provider.id));
-    }
-  }
-  return resolved;
+async function loadVersionManagerInventory(stats?: MediaManagerInventoryStats): Promise<VersionRecord[]> {
+  return loadMediaManagerInventory(undefined, stats);
 }
 
 /**
@@ -201,14 +193,16 @@ export function startServer() {
    * delete operation.
    */
   app.get("/api/version-manager/status", (_req, res) => {
+    const profiles = getVersionProfiles();
+    const policy = getVersionManagerPolicy();
     res.json({
       ok: true,
       enabled: false,
       mode: "dry-run",
       deleteExecutor: "not_implemented",
-      policy: getVersionManagerPolicy(),
-      policyHash: getVersionManagerPolicyHash(),
-      profiles: getVersionProfiles(),
+      policy,
+      policyHash: versionManagerPolicyHash(policy, profiles),
+      profiles,
       latestScan: getLatestVersionManagerScan() || null,
     });
   });
@@ -227,7 +221,7 @@ export function startServer() {
       const policy = getVersionManagerPolicy();
       const groups = evaluateVersionGroups(evaluatedVersions, profiles, policy);
       const scanId = saveVersionManagerScan(groups, profiles);
-      res.json({ ok: true, mode: "dry-run", scanId, policyHash: versionManagerPolicyHash(policy), inventoryCount: versions.length, groupCount: groups.length, probe, metadata, groups });
+      res.json({ ok: true, mode: "dry-run", scanId, policyHash: versionManagerPolicyHash(policy, profiles), inventoryCount: versions.length, groupCount: groups.length, probe, metadata, groups });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message || "Version Manager preview failed" });
     }
@@ -236,13 +230,23 @@ export function startServer() {
   /** Read-only policy evaluation intended for cleanup review. It never calls provider delete. */
   app.get("/api/version-manager/delete-preview", async (_req, res) => {
     try {
-      const versions = await loadVersionManagerInventory();
+      const startedAt = Date.now();
+      const inventoryStats: MediaManagerInventoryStats = { durationMs: 0, providers: 0, providerListCalls: 0, fileTreeFetches: 0, providerItems: 0, fileTreeItems: 0, inlineFileItems: 0, nameFallbackItems: 0, mediaFiles: 0, versions: 0, recoverability: { requested: 0, cacheHits: 0, providerLookups: 0, resolved: 0, unknown: 0 } };
+      const inventoryStartedAt = Date.now();
+      const versions = await loadVersionManagerInventory(inventoryStats);
+      const inventoryMs = Date.now() - inventoryStartedAt;
       const evaluatedVersions = applyManualIdentityOverrides(versions);
-      await probeVersionRecords(evaluatedVersions);
-      await enrichVersionMetadata(evaluatedVersions);
+      const probeStartedAt = Date.now();
+      const probe = await probeVersionRecords(evaluatedVersions);
+      const probeMs = Date.now() - probeStartedAt;
+      const metadataStartedAt = Date.now();
+      const metadata = await enrichVersionMetadata(evaluatedVersions);
+      const metadataMs = Date.now() - metadataStartedAt;
       const profiles = getVersionProfiles();
       const policy = getVersionManagerPolicy();
+      const policyStartedAt = Date.now();
       const groups = evaluateVersionGroups(evaluatedVersions, profiles, policy);
+      const policyMs = Date.now() - policyStartedAt;
       const versionsFlat = groups.flatMap((group) => group.versions);
       const counts = {
         contents: groups.length,
@@ -255,9 +259,9 @@ export function startServer() {
         remoteMissing: policy.enableRemote ? groups.filter((group) => group.remote?.status === "REMOTE_MISSING").length : 0,
       };
       const evaluatedAt = new Date().toISOString();
-      const policyHash = versionManagerPolicyHash(policy);
+      const policyHash = versionManagerPolicyHash(policy, profiles);
       saveVersionManagerPreviewAudit({ policyHash, evaluatedAt, contentCount: counts.contents, versionGroupCount: counts.versionGroups, versionCount: counts.versions, keepCount: counts.KEEP, deleteCandidateCount: counts.DELETE_CANDIDATE, reviewCount: counts.REVIEW, primaryMissing: counts.primaryMissing, remoteMissing: counts.remoteMissing });
-      res.json({ ok: true, readOnly: true, mode: "dry-run", deleteExecutor: "not_implemented", evaluatedAt, policyVersion: policy.policyVersion || "1", policyHash, counts, groups });
+      res.json({ ok: true, readOnly: true, mode: "dry-run", deleteExecutor: "not_implemented", evaluatedAt, policyVersion: policy.policyVersion || "1", policyHash, counts, groups, performance: { totalMs: Date.now() - startedAt, inventoryMs, probeMs, metadataMs, policyMs, inventory: inventoryStats, probe, metadata } });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message || "Delete preview failed" });
     }
@@ -509,7 +513,7 @@ export function startServer() {
   app.put("/api/version-manager/profiles", (req, res) => {
     try {
       if (!Array.isArray(req.body?.profiles) || req.body.profiles.length === 0) return res.status(400).json({ ok: false, error: "profiles must be a non-empty array" });
-      const profiles = req.body.profiles.map((profile: any) => ({ ...profile, hardRequirements: profile.hardRequirements ? validateRule(profile.hardRequirements) : undefined }));
+      const profiles = req.body.profiles.map((profile: any) => ({ ...profile, hardRequirements: profile.hardRequirements ? validateRule(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? validateScoringRules(profile.scoringRules) : undefined }));
       const policy = {
         enableRemote: req.body.policy?.enableRemote === true,
         acquireMissingRemote: req.body.policy?.acquireMissingRemote === true,

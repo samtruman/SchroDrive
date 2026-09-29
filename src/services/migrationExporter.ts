@@ -78,12 +78,22 @@ export function evaluateRecoverability(item: TorrentInfo): RecoverabilityEvidenc
   return { status: "UNKNOWN", source: "PROVIDER_CAPABILITY", reason: "No canonical hash or magnet evidence available" };
 }
 
-export async function resolveProviderItemRecoverability(item: TorrentInfo, provider: DebridProvider, cache = new Map<string, RecoverabilityEvidence>()): Promise<RecoverabilityEvidence> {
+export interface RecoverabilityResolutionMetrics {
+  requested: number;
+  cacheHits: number;
+  providerLookups: number;
+  resolved: number;
+  unknown: number;
+}
+
+export async function resolveProviderItemRecoverability(item: TorrentInfo, provider: DebridProvider, cache = new Map<string, RecoverabilityEvidence>(), metrics?: RecoverabilityResolutionMetrics): Promise<RecoverabilityEvidence> {
+  if (metrics) metrics.requested++;
   const key = `${provider.id}:${item.id}`;
   const cached = cache.get(key);
-  if (cached) { item.recoverability = cached; return cached; }
+  if (cached) { if (metrics) metrics.cacheHits++; item.recoverability = cached; return cached; }
   let evidence = evaluateRecoverability(item);
   if (evidence.status === "UNKNOWN" && provider.getInfoHash) {
+    if (metrics) metrics.providerLookups++;
     const infoHash = canonicalInfoHash(await provider.getInfoHash(item.id) || undefined);
     if (infoHash) evidence = { status: "RECOVERABLE", source: "PROVIDER_LOOKUP", infoHash };
     else evidence = { status: "UNKNOWN", source: "PROVIDER_LOOKUP", reason: "Provider lookup returned no canonical hash" };
@@ -91,6 +101,10 @@ export async function resolveProviderItemRecoverability(item: TorrentInfo, provi
   cache.set(key, evidence);
   item.recoverability = evidence;
   if (evidence.infoHash && !item.infoHash) item.infoHash = evidence.infoHash;
+  if (metrics) {
+    if (evidence.status === "UNKNOWN") metrics.unknown++;
+    else metrics.resolved++;
+  }
   return evidence;
 }
 
