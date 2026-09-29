@@ -41,7 +41,7 @@ import { getLatestVersionManagerScan, getVersionManagerPolicy, getVersionProfile
 import { probeVersionRecords } from "./services/versionManagerProbe";
 import { enrichVersionMetadata } from "./services/versionManagerMetadata";
 import { exportMigrationLibrary, normalizeMigrationExportMode } from "./services/migrationExporter";
-import { analyzeMigrationImport, executeMigrationImportItem, getRecoverableManifestItem } from "./services/migrationImporter";
+import { analyzeMigrationImport, executeMigrationImportBulk, executeMigrationImportItem, getRecoverableManifestItem } from "./services/migrationImporter";
 import { recordAcquisitionAudit, recordMigrationAudit } from "./core/db";
 
 // ===========================================================================
@@ -309,6 +309,36 @@ export function startServer() {
       res.json({ ok: true, readOnly: false, sourceProvider, targetProvider: target.id, result, postImportPlan: after });
     } catch (err: any) {
       res.status(502).json({ ok: false, error: err?.message || "Migration execution failed" });
+    }
+  });
+
+  /** Explicit full-import executor. The caller must opt into the complete current READY plan. */
+  app.post("/api/version-manager/import/execute-bulk", async (req, res) => {
+    try {
+      if (req.body?.confirm !== "IMPORT_ALL_READY") return res.status(400).json({ ok: false, error: "Explicit IMPORT_ALL_READY confirmation is required" });
+      const source = registry.get("alldebrid");
+      const target = registry.get("realdebrid");
+      if (!source || !source.isConfigured()) return res.status(503).json({ ok: false, error: "AllDebrid source provider is unavailable" });
+      if (!target || !target.isConfigured()) return res.status(503).json({ ok: false, error: "Real-Debrid target provider is unavailable" });
+      const sourceInventory = await source.listTorrents();
+      const exported = exportMigrationLibrary(sourceInventory, [], { mode: "FULL_LIBRARY", sourceProvider: source.id });
+      const initialTargetInventory = await target.listTorrents();
+      const initialPlan = analyzeMigrationImport({ manifest: exported.manifest }, initialTargetInventory);
+      const ready = initialPlan.items.filter((item) => item.status === "READY_TO_IMPORT");
+      console.log(`[${new Date().toISOString()}][migration-bulk] start total=${ready.length} sourceItems=${sourceInventory.length} targetItems=${initialTargetInventory.length}`);
+      const execution = await executeMigrationImportBulk(ready, target, {
+        targetInventory: () => target.listTorrents(),
+        onProgress: (progress) => console.log(`[${new Date().toISOString()}][migration-bulk] progress`, { ...progress, etaMs: progress.processed > 0 ? Math.round((progress.elapsedMs / progress.processed) * progress.remaining) : undefined }),
+      });
+      const finalTargetInventory = await target.listTorrents();
+      const finalPlan = analyzeMigrationImport({ manifest: exported.manifest }, finalTargetInventory);
+      for (const item of execution.results) {
+        if (!item.infoHash) continue;
+        recordMigrationAudit({ sourceProvider: source.id, targetProvider: target.id, infoHash: item.infoHash, initialStatus: "READY_TO_IMPORT", revalidationStatus: item.status === "SKIPPED_ALREADY_PRESENT" ? "ALREADY_PRESENT" : "READY_TO_IMPORT", executionStatus: item.status, targetProviderItemId: item.providerItemId });
+      }
+      return res.json({ ok: true, readOnly: false, sourceProvider: source.id, targetProvider: target.id, initial: { providerItems: sourceInventory.length, targetItems: initialTargetInventory.length, plan: initialPlan.counts }, execution, final: { targetItems: finalTargetInventory.length, plan: finalPlan.counts } });
+    } catch (err: any) {
+      return res.status(502).json({ ok: false, error: err?.message || "Migration bulk execution failed" });
     }
   });
 

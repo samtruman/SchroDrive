@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TorrentInfo } from "../../../src/providers";
-import { analyzeMigrationImport, executeMigrationImportItem } from "../../../src/services/migrationImporter";
+import { analyzeMigrationImport, executeMigrationImportBulk, executeMigrationImportItem } from "../../../src/services/migrationImporter";
 import { exportMigrationLibrary } from "../../../src/services/migrationExporter";
 
 const torrent = (id: string, hash?: string): TorrentInfo => ({
@@ -60,5 +60,26 @@ describe("migration importer preview", () => {
     const result = await executeMigrationImportItem({ canonicalInfohash: "d".repeat(40), originalName: "Movie.mkv" }, provider);
     expect(result.providerItemId).toBe("target-1");
     expect(calls).toEqual([`magnet:?xt=urn:btih:${"d".repeat(40)}`]);
+  });
+
+  test("bulk execution revalidates each item and resumes by skipping hashes already present", async () => {
+    const added: string[] = [];
+    const hashes = new Set<string>(["a".repeat(40)]);
+    const provider: any = {
+      isConfigured: () => true,
+      listTorrents: async () => [...hashes].map((hash) => torrent(`target-${hash.slice(0, 4)}`, hash)),
+      addMagnet: async (magnet: string) => { const hash = magnet.split(":").pop()!; hashes.add(hash); added.push(hash); return { id: `target-${hash.slice(0, 4)}` }; },
+    };
+    const items: any[] = [
+      { source: "MANIFEST", index: 0, status: "READY_TO_IMPORT", infoHash: "a".repeat(40), originalName: "already.mkv", reason: "ready at initial snapshot" },
+      { source: "MANIFEST", index: 1, status: "READY_TO_IMPORT", infoHash: "b".repeat(40), originalName: "new.mkv", reason: "ready at initial snapshot" },
+    ];
+    const progress: any[] = [];
+    const result = await executeMigrationImportBulk(items, provider, { targetInventory: () => provider.listTorrents(), onProgress: (value) => progress.push(value) });
+    expect(result.imported).toBe(1);
+    expect(result.skipped).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(added).toEqual(["b".repeat(40)]);
+    expect(progress.at(-1).remaining).toBe(0);
   });
 });

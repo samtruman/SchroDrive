@@ -36,6 +36,26 @@ export interface MigrationImportInput {
   magnetsText?: string;
 }
 
+export interface BulkImportProgress {
+  total: number;
+  processed: number;
+  imported: number;
+  skipped: number;
+  failed: number;
+  retrying: number;
+  remaining: number;
+  elapsedMs: number;
+  currentInfoHash?: string;
+}
+
+export interface BulkImportResult {
+  total: number;
+  imported: number;
+  skipped: number;
+  failed: number;
+  results: Array<{ infoHash?: string; status: "IMPORTED" | "SKIPPED_ALREADY_PRESENT" | "SKIPPED_NOT_READY" | "FAILED"; providerItemId?: string; reason?: string; attempts?: number }>;
+}
+
 function emptyCounts(): Record<ImportPlanStatus, number> {
   return {
     ALREADY_PRESENT: 0, ALREADY_PRESENT_EQUIVALENT_HASH: 0, READY_TO_IMPORT: 0,
@@ -73,6 +93,82 @@ export async function executeMigrationImportItem(item: unknown, provider: Debrid
   if (!recoverable) throw new Error("Migration item is not recoverable");
   const result = await provider.addMagnet(recoverable.magnetUri, typeof (item as any)?.originalName === "string" ? (item as any).originalName : undefined);
   return { providerItemId: String(result.id || ""), ...recoverable };
+}
+
+function retryableImportError(error: unknown): boolean {
+  const message = String((error as any)?.message || error || "").toLowerCase();
+  return /429|rate.?limit|timeout|timed out|network|econn|5\d\d|temporar/.test(message);
+}
+
+function retryDelayMs(error: unknown, attempt: number): number {
+  const message = String((error as any)?.message || error || "");
+  const seconds = message.match(/retry in\s+(\d+(?:\.\d+)?)s/i)?.[1];
+  if (seconds) return Math.min(60000, Math.max(1000, Math.ceil(Number(seconds) * 1000)));
+  return Math.min(30000, 1000 * 2 ** Math.max(0, attempt - 1));
+}
+
+/**
+ * Executes only the READY items supplied by the current ImportPlan. The
+ * target inventory is refreshed immediately before every item, so rerunning
+ * after interruption is naturally idempotent and resumable.
+ */
+export async function executeMigrationImportBulk(
+  items: ImportPlanItem[],
+  provider: DebridProvider,
+  options: {
+    targetInventory: () => Promise<TorrentInfo[]>;
+    onProgress?: (progress: BulkImportProgress) => void;
+    maxAttempts?: number;
+  },
+): Promise<BulkImportResult> {
+  const started = Date.now();
+  const ready = items.filter((item) => item.status === "READY_TO_IMPORT");
+  const result: BulkImportResult = { total: ready.length, imported: 0, skipped: 0, failed: 0, results: [] };
+  let processed = 0;
+  let retrying = 0;
+  const emit = (currentInfoHash?: string) => options.onProgress?.({ total: result.total, processed, imported: result.imported, skipped: result.skipped, failed: result.failed, retrying, remaining: result.total - processed, elapsedMs: Date.now() - started, currentInfoHash });
+
+  for (const item of ready) {
+    const currentInfoHash = item.infoHash;
+    emit(currentInfoHash);
+    if (!provider.isConfigured()) throw new Error("Target provider became unavailable during bulk import");
+    const currentPlan = analyzeMigrationImport({ manifest: { schemaVersion: "1.0", items: [item] } }, await options.targetInventory());
+    const current = currentPlan.items[0];
+    if (!current || current.status !== "READY_TO_IMPORT") {
+      result.skipped++;
+      result.results.push({ infoHash: currentInfoHash, status: current?.status === "ALREADY_PRESENT" || current?.status === "ALREADY_PRESENT_EQUIVALENT_HASH" ? "SKIPPED_ALREADY_PRESENT" : "SKIPPED_NOT_READY", reason: current?.reason || "Item is no longer READY_TO_IMPORT" });
+      processed++;
+      emit(currentInfoHash);
+      continue;
+    }
+
+    const maxAttempts = options.maxAttempts ?? 3;
+    let succeeded = false;
+    let lastError = "";
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        const added = await executeMigrationImportItem(item, provider);
+        result.imported++;
+        result.results.push({ infoHash: added.infoHash, status: "IMPORTED", providerItemId: added.providerItemId, attempts: attempt });
+        succeeded = true;
+        break;
+      } catch (error: any) {
+        lastError = error?.message || String(error);
+        if (!retryableImportError(error) || attempt >= maxAttempts) break;
+        retrying++;
+        emit(currentInfoHash);
+        await new Promise((resolve) => setTimeout(resolve, retryDelayMs(error, attempt)));
+        retrying--;
+      }
+    }
+    if (!succeeded) {
+      result.failed++;
+      result.results.push({ infoHash: currentInfoHash, status: "FAILED", reason: lastError, attempts: maxAttempts });
+    }
+    processed++;
+    emit(currentInfoHash);
+  }
+  return result;
 }
 
 function inventoryHashes(inventory: TorrentInfo[]): Map<string, TorrentInfo[]> {
