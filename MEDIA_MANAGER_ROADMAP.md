@@ -1,5 +1,40 @@
 # Media Manager Roadmap
 
+## CURRENT STATUS
+
+- Develop alignment: `VALIDATED` against
+  `f6f20d52cddca44529e225128095a13c97c0e428`.
+- Weight audit: `VALIDATED`; no SAFE_NOW code cleanup identified.
+- Full E2E acceptance: `PARTIAL`; fixture/build/API coverage is green, while
+  browser automation and a fresh production-like provider run were not
+  available without expanding scope or risking provider activity.
+- Media Manager upstream readiness: `NEEDS_FIXES` before PR splitting.
+
+The frozen Media Manager branch remains preserved separately. The integration
+branch includes the generic per-source mount-readiness change for validation;
+upstream PR #106 remains OPEN and is not assumed merged.
+
+## OPEN ITEMS
+
+- Complete browser-level smoke validation when an approved browser automation
+  environment is available.
+- Perform a fresh standard-runtime read-only acceptance against a stable,
+  isolated environment if required before upstream extraction.
+- Reassess extraction boundaries for generated `dist` and local assessment
+  documents.
+- Do not begin Media Manager PR splitting in this milestone.
+
+## HISTORY
+
+- 2026-09-29 — Created protected integration branch from the frozen Media
+  Manager state; upstream/develop was already the merge base.
+- 2026-09-29 — Integrated the shared per-source mount-readiness guard from the
+  still-open upstream PR #106 for validation; tests remained green.
+- 2026-09-29 — Completed the first weight audit; no behavior-preserving
+  SAFE_NOW cleanup was justified.
+- 2026-09-29 — Added the missing read-only Web proxy for the unified Review
+  endpoint; backend and Web route contracts now align in the source build.
+
 ## POST_MVP_UPGRADE — MEDIA_MANAGER_SIMPLE_POLICY_PRESETS
 
 Add a user-friendly Simple mode with presets such as Maximum Quality, Quality
