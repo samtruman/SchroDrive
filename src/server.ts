@@ -324,7 +324,9 @@ export function startServer() {
       const exported = exportMigrationLibrary(sourceInventory, [], { mode: "FULL_LIBRARY", sourceProvider: source.id });
       const initialTargetInventory = await target.listTorrents();
       const initialPlan = analyzeMigrationImport({ manifest: exported.manifest }, initialTargetInventory);
-      const ready = initialPlan.items.filter((item) => item.status === "READY_TO_IMPORT");
+      const skipLegal = new Set(Array.isArray(req.body?.skipLegalInfoHashes) ? req.body.skipLegalInfoHashes.map((value: unknown) => String(value).toLowerCase()) : []);
+      const knownRejectedLegal = initialPlan.items.filter((item) => item.status === "READY_TO_IMPORT" && item.infoHash && skipLegal.has(item.infoHash.toLowerCase()));
+      const ready = initialPlan.items.filter((item) => item.status === "READY_TO_IMPORT" && (!item.infoHash || !skipLegal.has(item.infoHash.toLowerCase())));
       console.log(`[${new Date().toISOString()}][migration-bulk] start total=${ready.length} sourceItems=${sourceInventory.length} targetItems=${initialTargetInventory.length}`);
       const execution = await executeMigrationImportBulk(ready, target, {
         targetInventory: () => target.listTorrents(),
@@ -336,7 +338,10 @@ export function startServer() {
         if (!item.infoHash) continue;
         recordMigrationAudit({ sourceProvider: source.id, targetProvider: target.id, infoHash: item.infoHash, initialStatus: "READY_TO_IMPORT", revalidationStatus: item.status === "SKIPPED_ALREADY_PRESENT" ? "ALREADY_PRESENT" : "READY_TO_IMPORT", executionStatus: item.status, targetProviderItemId: item.providerItemId, reason: item.reason, retryCount: item.retryCount, importExecuted: item.importExecuted });
       }
-      return res.json({ ok: true, readOnly: false, sourceProvider: source.id, targetProvider: target.id, initial: { providerItems: sourceInventory.length, targetItems: initialTargetInventory.length, plan: initialPlan.counts }, execution, final: { targetItems: finalTargetInventory.length, plan: finalPlan.counts } });
+      for (const item of knownRejectedLegal) {
+        recordMigrationAudit({ sourceProvider: source.id, targetProvider: target.id, infoHash: item.infoHash!, initialStatus: "READY_TO_IMPORT", revalidationStatus: "REJECTED_LEGAL", executionStatus: "REJECTED_LEGAL", reason: "LEGAL_RESTRICTION (previously recorded)", retryCount: 0, importExecuted: true });
+      }
+      return res.json({ ok: true, readOnly: false, sourceProvider: source.id, targetProvider: target.id, initial: { providerItems: sourceInventory.length, targetItems: initialTargetInventory.length, plan: initialPlan.counts }, knownRejectedLegal: knownRejectedLegal.length, execution, final: { targetItems: finalTargetInventory.length, plan: finalPlan.counts, residualTentableReady: Math.max(0, finalPlan.counts.READY_TO_IMPORT - knownRejectedLegal.length) } });
     } catch (err: any) {
       return res.status(502).json({ ok: false, error: err?.message || "Migration bulk execution failed" });
     }
