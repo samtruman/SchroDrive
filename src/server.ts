@@ -256,7 +256,7 @@ export function startServer() {
         ? await source.listTorrents()
         : (await Promise.all(registry.configured().map((provider) => provider.listTorrents()))).flat();
       const selectedProviderItemIds = typeof req.query.selected === "string" ? req.query.selected.split(",").map((value) => value.trim()).filter(Boolean) : undefined;
-      const exported = exportMigrationLibrary(inventory, [], { mode, selectedProviderItemIds });
+      const exported = exportMigrationLibrary(inventory, [], { mode, selectedProviderItemIds, sourceProvider: source?.id });
       if (String(req.query.format || "preview") === "preview") {
         return res.json({ ok: true, readOnly: true, mode, providerItems: inventory.length, exportableItems: exported.manifest.exportableItemCount, magnetCount: exported.manifest.magnetCount, generatedAt: exported.manifest.generatedAt });
       }
@@ -304,8 +304,9 @@ export function startServer() {
       if (!initial || initial.status !== "READY_TO_IMPORT") return res.status(409).json({ ok: false, error: "Revalidation blocked the import", plan: before });
       const result = await executeMigrationImportItem(sourceItem, target);
       const after = analyzeMigrationImport({ manifest: { schemaVersion: "1.0", items: [sourceItem] } }, await target.listTorrents());
-      recordMigrationAudit({ sourceProvider: String(sourceItem?.provider || "unknown"), targetProvider: target.id, sourceProviderItemId: String(sourceItem?.providerItemId || ""), infoHash: recoverable.infoHash, initialStatus: initial.status, revalidationStatus: "READY_TO_IMPORT", executionStatus: after.items[0]?.status || "EXECUTED", targetProviderItemId: result.providerItemId });
-      res.json({ ok: true, readOnly: false, sourceProvider: String(sourceItem?.provider || "unknown"), targetProvider: target.id, result, postImportPlan: after });
+      const sourceProvider = String(sourceItem?.provider || req.body?.sourceProvider || "unknown");
+      recordMigrationAudit({ sourceProvider, targetProvider: target.id, sourceProviderItemId: String(sourceItem?.providerItemId || ""), infoHash: recoverable.infoHash, initialStatus: initial.status, revalidationStatus: "READY_TO_IMPORT", executionStatus: after.items[0]?.status || "EXECUTED", targetProviderItemId: result.providerItemId });
+      res.json({ ok: true, readOnly: false, sourceProvider, targetProvider: target.id, result, postImportPlan: after });
     } catch (err: any) {
       res.status(502).json({ ok: false, error: err?.message || "Migration execution failed" });
     }

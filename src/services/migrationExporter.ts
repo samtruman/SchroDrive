@@ -7,6 +7,7 @@ export type MigrationExportMode = "FULL_LIBRARY" | "KEEP_ONLY" | "PRIMARY_ONLY" 
 export interface MigrationExportOptions {
   mode?: MigrationExportMode;
   selectedProviderItemIds?: string[];
+  sourceProvider?: string;
 }
 
 export function normalizeMigrationExportMode(value?: string): MigrationExportMode {
@@ -127,7 +128,7 @@ export function exportMigrationLibrary(inventory: TorrentInfo[], groups: Version
     const extracted = extractMagnet(item);
     const linked = [...byVersion.values()].filter(({ version }) => version.fingerprint.storage.torrentId === String(item.id));
     return {
-      provider: item.raw?.provider || "unknown",
+      provider: item.raw?.provider || options.sourceProvider || "unknown",
       providerItemId: String(item.id),
       exportable: Boolean(extracted.magnetUri),
       exportReason: extracted.reason,
