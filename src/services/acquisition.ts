@@ -11,6 +11,18 @@ export type AcquisitionStatus =
   | "ACQUISITION_AVAILABLE"
   | "ACQUISITION_FAILED";
 
+export type AcquisitionProviderStatus =
+  | "NOT_REQUESTED"
+  | "REQUESTED"
+  | "PENDING"
+  | "PROCESSING"
+  | "AVAILABLE"
+  | "PARTIALLY_AVAILABLE"
+  | "UNAVAILABLE"
+  | "CONFIGURATION_UNAVAILABLE"
+  | "MEDIA_NOT_FOUND"
+  | "ERROR";
+
 export type AcquisitionBlockReason =
   | "PROFILE_DISABLED"
   | "IDENTITY_NOT_RESOLVED"
@@ -150,7 +162,7 @@ export interface AcquisitionPreview {
 
 export interface AcquisitionAdapter {
   capabilities(): Promise<AcquisitionAdapterCapabilities>;
-  status(need: AcquisitionNeed): Promise<{ status: AcquisitionStatus | "NOT_REQUESTED" | "REQUESTED" | "PENDING" | "PROCESSING" | "AVAILABLE" | "UNAVAILABLE" | "CONFIGURATION_UNAVAILABLE" | "MEDIA_NOT_FOUND"; providerRequestId?: string; detail?: string }>;
+  status(need: AcquisitionNeed): Promise<{ status: AcquisitionStatus | AcquisitionProviderStatus; providerRequestId?: string; detail?: string }>;
   preview(need: AcquisitionNeed): Promise<AcquisitionPreview>;
   request(need: AcquisitionNeed): Promise<never>;
 }

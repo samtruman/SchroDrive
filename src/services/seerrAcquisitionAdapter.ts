@@ -6,9 +6,10 @@ import type {
   AcquisitionAdapterCapabilities,
   AcquisitionNeed,
   AcquisitionPreview,
+  AcquisitionProviderStatus,
 } from "./acquisition";
 
-type ProviderStatus = "NOT_REQUESTED" | "REQUESTED" | "PENDING" | "PROCESSING" | "AVAILABLE" | "UNAVAILABLE" | "CONFIGURATION_UNAVAILABLE" | "MEDIA_NOT_FOUND";
+type ProviderStatus = AcquisitionProviderStatus;
 
 function configured(): boolean {
   return Boolean(config.overseerrUrl && (config.overseerrApiKey || config.overseerrAuth));
@@ -34,6 +35,8 @@ function providerId(need: AcquisitionNeed): string | undefined {
 function mediaStatus(data: any): ProviderStatus {
   if (!data) return "MEDIA_NOT_FOUND";
   const status = String(data.status || data.mediaInfo?.status || data.media?.status || "").toLowerCase();
+  if (status.includes("error") || status.includes("failed")) return "ERROR";
+  if (status.includes("partial")) return "PARTIALLY_AVAILABLE";
   if (status.includes("available") || data.mediaInfo?.mediaFiles?.length || data.mediaFiles?.length) return "AVAILABLE";
   if (status.includes("processing") || status.includes("downloading")) return "PROCESSING";
   if (status.includes("pending") || status.includes("approve")) return "PENDING";
@@ -70,6 +73,7 @@ export class SeerrAcquisitionAdapter implements AcquisitionAdapter {
     } catch (error: any) {
       const status = Number(error?.response?.status);
       if (status === 404) return { status: "MEDIA_NOT_FOUND", detail: "Seerr media record was not found" };
+      if (status >= 400) return { status: "ERROR", detail: `Seerr GET failed with HTTP ${status}` };
       return { status: "UNAVAILABLE", detail: status ? `Seerr GET failed with HTTP ${status}` : "Seerr GET failed" };
     }
   }
@@ -96,7 +100,7 @@ export class SeerrAcquisitionAdapter implements AcquisitionAdapter {
       : "The Version Profile is more precise than the provider quality mapping; Seerr/Radarr/Sonarr may not guarantee the requested fingerprint.";
     return {
       needId: need.id,
-      status: alreadySatisfied ? "ACQUISITION_AVAILABLE" : current.status === "REQUESTED" || current.status === "PENDING" || current.status === "PROCESSING" ? "ACQUISITION_ALREADY_EXISTS" : current.status === "CONFIGURATION_UNAVAILABLE" || current.status === "UNAVAILABLE" ? "ACQUISITION_BLOCKED" : "ACQUISITION_ELIGIBLE",
+      status: alreadySatisfied ? "ACQUISITION_AVAILABLE" : current.status === "REQUESTED" || current.status === "PENDING" || current.status === "PROCESSING" || current.status === "PARTIALLY_AVAILABLE" ? "ACQUISITION_ALREADY_EXISTS" : current.status === "CONFIGURATION_UNAVAILABLE" || current.status === "UNAVAILABLE" || current.status === "ERROR" ? "ACQUISITION_BLOCKED" : "ACQUISITION_ELIGIBLE",
       adapterId: "seerr",
       contentIdentity: need.contentIdentity,
       mediaType: need.mediaType,

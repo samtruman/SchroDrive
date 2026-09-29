@@ -3,6 +3,8 @@ import { deriveAcquisitionNeeds, deduplicateAcquisitionNeeds, revalidateAcquisit
 import { evaluateVersionGroups, fingerprintTorrent, type VersionProfile } from "../../../src/services/versionManager";
 import { SeerrAcquisitionAdapter } from "../../../src/services/seerrAcquisitionAdapter";
 import { seerrApiBaseUrl } from "../../../src/services/seerrUrl";
+import axios from "axios";
+import { config } from "../../../src/core/config";
 
 const torrent = (name: string) => ({ id: name, name, status: "completed", progress: 100, bytes: 1_000_000, files: [{ id: "f", name, path: name, size: 1_000_000, selected: true }] });
 const profile = (overrides: Partial<VersionProfile> = {}): VersionProfile => ({
@@ -64,5 +66,28 @@ describe("Seerr acquisition safety contract", () => {
     const adapter = new SeerrAcquisitionAdapter();
     expect((await adapter.capabilities()).canRequest).toBe(false);
     await expect(adapter.request({} as any)).rejects.toThrow("disabled");
+  });
+
+  test("maps Seerr read-only media states without collapsing partial availability", async () => {
+    const adapter = new SeerrAcquisitionAdapter();
+    const originalGet = axios.get;
+    const original = { overseerrUrl: config.overseerrUrl, overseerrApiKey: config.overseerrApiKey, overseerrAuth: config.overseerrAuth };
+    config.overseerrUrl = "http://seerr.test";
+    config.overseerrApiKey = "test-only";
+    config.overseerrAuth = "";
+    const need: any = { contentIdentity: { tmdbId: "10" }, mediaType: "movie" };
+    try {
+      for (const [payload, expected] of [[{ status: "available" }, "AVAILABLE"], [{ status: "partially_available" }, "PARTIALLY_AVAILABLE"], [{ status: "requested" }, "REQUESTED"], [{ status: "pending" }, "PENDING"], [{ status: "processing" }, "PROCESSING"], [{}, "NOT_REQUESTED"], [{ status: "error" }, "ERROR"]] as const) {
+        axios.get = (async () => ({ data: payload })) as typeof axios.get;
+        expect((await adapter.status(need)).status).toBe(expected);
+      }
+      axios.get = (async () => { const error: any = new Error("server"); error.response = { status: 503 }; throw error; }) as typeof axios.get;
+      expect((await adapter.status(need)).status).toBe("ERROR");
+      axios.get = (async () => { const error: any = new Error("missing"); error.response = { status: 404 }; throw error; }) as typeof axios.get;
+      expect((await adapter.status(need)).status).toBe("MEDIA_NOT_FOUND");
+    } finally {
+      axios.get = originalGet;
+      Object.assign(config, original);
+    }
   });
 });
