@@ -47,6 +47,7 @@ import { analyzeMigrationImport, executeMigrationImportBulk, executeMigrationImp
 import { aggregateMigrationJobs, effectiveMigrationStatus } from "./services/migrationState";
 import { migrationRouteLevel, providerMigrationCapabilities } from "./services/providerMigrationCapabilities";
 import { listMigrationAudit, recordAcquisitionAudit, recordMigrationAudit } from "./core/db";
+import { buildUnifiedReviewQueue } from "./services/unifiedReview";
 
 // ===========================================================================
 // Server Initialisation
@@ -259,6 +260,24 @@ export function startServer() {
       res.json({ ok: true, readOnly: true, mode: "dry-run", deleteExecutor: "not_implemented", evaluatedAt, policyVersion: policy.policyVersion || "1", policyHash, counts, groups });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message || "Delete preview failed" });
+    }
+  });
+
+  /** Read-only operator queue combining Organizer and policy/recoverability review. */
+  app.get("/api/version-manager/review", async (req, res) => {
+    try {
+      const requestedStatus = String(req.query.status || "pending");
+      const status = requestedStatus === "dismissed" || requestedStatus === "all" ? requestedStatus : "pending";
+      const versions = await loadVersionManagerInventory();
+      const evaluatedVersions = applyManualIdentityOverrides(versions);
+      await probeVersionRecords(evaluatedVersions);
+      await enrichVersionMetadata(evaluatedVersions);
+      const groups = evaluateVersionGroups(evaluatedVersions, getVersionProfiles(), getVersionManagerPolicy());
+      const organizerStatus = status === "all" ? undefined : status;
+      const organizers = listOrganizerReviews(true, organizerStatus);
+      res.json({ ok: true, readOnly: true, ...buildUnifiedReviewQueue(groups, organizers, status) });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || "Unified review queue failed" });
     }
   });
 

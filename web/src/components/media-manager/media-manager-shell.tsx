@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   Archive,
   Check,
@@ -20,9 +20,12 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { normalizeIdentitySearchPrefill } from "./identity-search-prefill";
+import { ConfirmationDialog } from "./confirmation-dialog";
 
 type View = "overview" | "library" | "migration" | "settings";
 type Profile = { id: string; name: string; enabled: boolean; priority?: number; description?: string; preferredResolution?: string; languagePolicy?: any; hardRequirements?: any; scoring?: Record<string, number>; acquisitionBehavior?: string };
+type PendingConfirmation = { title: string; description: string; context?: ReactNode; confirmLabel: string; variant?: "default" | "secondary" | "outline" | "destructive"; onConfirm: () => Promise<void> };
 
 const tone: Record<
   string,
@@ -72,14 +75,17 @@ function IdentityResolver({
   onSaved?: () => void;
   actionLabel?: string;
 }) {
-  const [query, setQuery] = useState(initialQuery || "");
+  const prefill = normalizeIdentitySearchPrefill(initialQuery, initialYear);
+  const [query, setQuery] = useState(prefill.query);
   const [type, setType] = useState<"movie" | "tv">(initialType || "movie");
-  const [year, setYear] = useState(initialYear ? String(initialYear) : "");
+  const [year, setYear] = useState(prefill.year ? String(prefill.year) : "");
   const [results, setResults] = useState<any[]>([]);
   const [selected, setSelected] = useState<any>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [open, setOpen] = useState(Boolean(existingOverride));
+  const [confirmMatchOpen, setConfirmMatchOpen] = useState(false);
+  const [clearMatchOpen, setClearMatchOpen] = useState(false);
 
   async function search() {
     if (!query.trim()) return;
@@ -95,7 +101,7 @@ function IdentityResolver({
     finally { setBusy(false); }
   }
 
-  async function confirm() {
+  async function saveMatch() {
     if (!selected || (!reviewId && !identity)) return;
     setBusy(true); setMessage("");
     try {
@@ -160,10 +166,28 @@ function IdentityResolver({
         <p className="text-xs text-muted-foreground">IMDb: {candidate.imdbId || "—"} · TVDb: {candidate.tvdbId || "—"}</p>
         {candidate.overview && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{candidate.overview}</p>}
       </button>)}
-      <Button size="sm" onClick={() => void confirm()} disabled={busy || !selected || (!reviewId && !identity)}>Confirm manual match</Button>
-      {existingOverride && <Button size="sm" variant="outline" onClick={() => void clearMatch()} disabled={busy}>Clear manual match</Button>}
+      <Button size="sm" onClick={() => setConfirmMatchOpen(true)} disabled={busy || !selected || (!reviewId && !identity)}>Confirm manual match</Button>
+      {existingOverride && <Button size="sm" variant="destructive" onClick={() => setClearMatchOpen(true)} disabled={busy}>Clear manual match</Button>}
     </div>}
     </div>}
+    <ConfirmationDialog
+      open={confirmMatchOpen}
+      onOpenChange={setConfirmMatchOpen}
+      title="Confirm manual identity?"
+      description="This identity will override automatic matching until the manual match is cleared."
+      context={selected && <div className="space-y-1"><p><b>Title:</b> {selected.title || "—"}</p><p><b>Year:</b> {selected.year || "—"}</p><p><b>Type:</b> {selected.mediaType === "tv" ? "TV" : "Movie"}</p><p><b>TMDb ID:</b> {selected.tmdbId || "—"}</p></div>}
+      confirmLabel="Confirm match"
+      onConfirm={saveMatch}
+    />
+    <ConfirmationDialog
+      open={clearMatchOpen}
+      onOpenChange={setClearMatchOpen}
+      title="Clear manual identity?"
+      description="Automatic identity resolution will be restored and policy will be re-evaluated."
+      confirmLabel="Clear manual match"
+      variant="destructive"
+      onConfirm={clearMatch}
+    />
   </div>;
 }
 function Stat({
@@ -271,7 +295,7 @@ function Header({
   );
 }
 
-function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; onClose: () => void; onReviewAction?: (id: string, body: Record<string, unknown>) => void; onSaved?: () => void }) {
+function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; onClose: () => void; onReviewAction?: (id: string, body: Record<string, unknown>, item?: any) => void; onSaved?: () => void }) {
   const review = item.review || (item.parsed ? item : undefined);
   const identity = item.identity || item.contentIdentity || (review ? { title: review.parsed?.title, year: review.parsed?.year, kind: review.parsed?.kind, confidence: review.parsed?.confidence, source: review.override ? "manual" : "unknown" } : {});
   const versions = item.versions || item.existingVersions || [];
@@ -318,8 +342,8 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
             </p>
           </dl>
           {review && <div className="mt-4 rounded border bg-muted/20 p-3"><h3 className="mb-2 font-semibold">Detected identity</h3><p><b>Title:</b> {review.parsed?.title || "—"}</p><p><b>Type:</b> {review.parsed?.kind || "—"}</p><p><b>Status:</b> {review.parsed?.status || "—"}</p><p><b>Confidence:</b> {review.parsed?.confidence ?? "—"}</p><p><b>Reason:</b> {review.parsed?.reason || "—"}</p></div>}
-          {(identity.title || item.title) && <div className="mt-4"><h3 className="mb-2 font-semibold">Identity actions</h3><IdentityResolver reviewId={item.reviewId || review?.id} identity={{ title: identity.title || item.title, year: identity.year, kind: identity.kind, mediaType: identity.mediaType, tmdbId: identity.tmdbId }} initialQuery={identity.title || item.title} initialType={identity.kind === "episode" || identity.mediaType === "tv" ? "tv" : "movie"} initialYear={identity.year} existingOverride={item.override || review?.override || (identity.source === "manual" ? { tmdbId: identity.tmdbId } : undefined)} actionLabel={identityAction} onSaved={onSaved} /></div>}
-          {review && onReviewAction && <div className="mt-4 flex flex-wrap gap-2"><Button size="sm" variant="secondary" onClick={() => onReviewAction(review.id, { decision: "accepted" })}>Accept as detected</Button><Button size="sm" variant="outline" onClick={() => onReviewAction(review.id, { action: "retry" })}>Retry / Resume</Button><Button size="sm" variant="outline" onClick={() => onReviewAction(review.id, { decision: "dismissed" })}>Dismiss</Button></div>}
+          {(identity.title || item.title) && (review || item.allowIdentityActions !== false) && <div className="mt-4"><h3 className="mb-2 font-semibold">Identity actions</h3><IdentityResolver reviewId={item.reviewId || review?.id} identity={{ title: identity.title || item.title, year: identity.year, kind: identity.kind, mediaType: identity.mediaType, tmdbId: identity.tmdbId }} initialQuery={identity.title || item.title} initialType={identity.kind === "episode" || identity.mediaType === "tv" ? "tv" : "movie"} initialYear={identity.year} existingOverride={item.override || review?.override || (identity.source === "manual" ? { tmdbId: identity.tmdbId } : undefined)} actionLabel={identityAction} onSaved={onSaved} /></div>}
+          {review && onReviewAction && <div className="mt-4 flex flex-wrap gap-2">{review.decision === "dismissed" ? <Button size="sm" onClick={() => onReviewAction(review.id, { action: "retry" }, review)}>Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => onReviewAction(review.id, { decision: "accepted" }, review)}>Accept as detected</Button><Button size="sm" variant="outline" onClick={() => onReviewAction(review.id, { action: "retry" }, review)}>Retry / Resume</Button><Button size="sm" variant="destructive" onClick={() => onReviewAction(review.id, { decision: "dismissed" }, review)}>Dismiss</Button></>}</div>}
         </section>
         <section>
           <h3 className="mb-2 font-semibold">Profiles</h3>
@@ -401,11 +425,9 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
 function Overview() {
   const status = useJson<any>("/api/version-manager/status");
   const migration = useJson<any>("/api/version-manager/migration/state");
-  const reviewQueue = useJson<any>("/api/organizer/review?limit=200&status=pending");
+  const reviewQueue = useJson<any>("/api/version-manager/review?status=pending");
   const profiles = status.data?.profiles || [];
-  const identityIssues = (reviewQueue.data?.entries || []).filter((entry: any) =>
-    entry.parsed?.status === "ambiguous" || entry.parsed?.status === "unmatched",
-  ).length;
+  const identityIssues = reviewQueue.data?.summary?.identityIssues ?? 0;
   const latestScan = status.data?.latestScan;
   const [scan, setScan] = useState<any>(null);
   const [scanning, setScanning] = useState(false);
@@ -561,11 +583,11 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const [mediaType, setMediaType] = useState("all");
   const [decision, setDecision] = useState("all");
   const [selected, setSelected] = useState<any>(null);
-  const reviewQueue = useJson<any>("/api/organizer/review?limit=200&status=pending");
+  const [reviewStatus, setReviewStatus] = useState<"pending" | "dismissed">("pending");
+  const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null);
+  const reviewQueue = useJson<any>("/api/version-manager/review?status=pending");
   const [identityOnly, setIdentityOnly] = useState(false);
-  const identityIssueCount = (reviewQueue.data?.entries || []).filter((entry: any) =>
-    entry.parsed?.status === "ambiguous" || entry.parsed?.status === "unmatched",
-  ).length;
+  const identityIssueCount = reviewQueue.data?.summary?.identityIssues ?? 0;
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     setPreset(params.get("view") || initialPreset);
@@ -588,7 +610,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const loadReview = useCallback(async () => {
     try {
       const response = await fetch(
-        "/api/organizer/review?limit=100&status=pending",
+        `/api/version-manager/review?status=${reviewStatus}`,
         { cache: "no-store" },
       );
       const body = await response.json();
@@ -597,10 +619,10 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     } catch (value: any) {
       setReviewError(value.message || "Unable to load review");
     }
-  }, []);
+  }, [reviewStatus]);
   useEffect(() => {
     if (preset === "review") void loadReview();
-  }, [loadReview, preset]);
+  }, [loadReview, preset, reviewStatus]);
   async function reviewAction(id: string, body: Record<string, unknown>) {
     const response = await fetch(
       `/api/organizer/review/${encodeURIComponent(id)}`,
@@ -610,8 +632,24 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
         body: JSON.stringify(body),
       },
     );
-    if (response.ok) void loadReview();
-    else setReviewError("Unable to save review action");
+    if (!response.ok) {
+      const body = await response.json().catch(() => ({}));
+      throw new Error(body.error || "Unable to save review action");
+    }
+    await Promise.all([loadReview(), reviewQueue.reload()]);
+  }
+  function requestReviewAction(id: string, body: Record<string, unknown>, item?: any) {
+    const isRestore = body.action === "retry" && item?.decision === "dismissed";
+    const isAccept = body.decision === "accepted";
+    const isDismiss = body.decision === "dismissed";
+    setConfirmation({
+      title: isRestore ? "Restore review item?" : isAccept ? "Accept detected identity?" : isDismiss ? "Dismiss review item?" : "Retry review item?",
+      description: isRestore ? "This item will be returned to the pending review queue." : isAccept ? "The detected identity will be accepted without a manual TMDb match." : isDismiss ? "This item will be removed from the pending review queue and kept in review history." : "The item will be returned to the organizer review workflow.",
+      context: item?.parsed?.title ? <p><b>Detected title:</b> {item.parsed.title}</p> : undefined,
+      confirmLabel: isRestore ? "Restore to Review" : isAccept ? "Accept as detected" : isDismiss ? "Dismiss" : "Retry / Resume",
+      variant: isDismiss ? "destructive" : isAccept ? "secondary" : "default",
+      onConfirm: () => reviewAction(id, body),
+    });
   }
   const groups = useMemo(
     () =>
@@ -788,7 +826,8 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                       </p>
                       <p className="text-xs text-muted-foreground">
                         {group.identity?.year || "—"} ·{" "}
-                        {group.identity?.mediaType ||
+                        type: {group.identity?.kind ||
+                          group.identity?.mediaType ||
                           group.mediaType ||
                           "unknown"}{" "}
                         · {group.versions?.length || 0} versions
@@ -885,12 +924,22 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                     : "Organizer identity issues and other operator review work."}
                 </p>
               </div>
-              <div className="flex items-center gap-2 text-sm">
-                <span>Identity issues</span>
-                <Badge variant={identityIssueCount > 0 ? "destructive" : "outline"}>{identityIssueCount}</Badge>
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span>All <Badge variant="outline">{review.summary?.total ?? "—"}</Badge></span>
+                <span>Identity <Badge variant={review.summary?.identityIssues > 0 ? "destructive" : "outline"}>{review.summary?.identityIssues ?? "—"}</Badge></span>
+                <span>Policy <Badge variant="outline">{review.summary?.policyReviews ?? "—"}</Badge></span>
+                <span>Recoverability <Badge variant="outline">{review.summary?.recoverabilityIssues ?? "—"}</Badge></span>
               </div>
             </CardContent>
           </Card>
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border p-3">
+            <span className="text-sm font-medium">Review status</span>
+            <select className="rounded border bg-background p-2 text-sm" value={reviewStatus} onChange={(event) => setReviewStatus(event.target.value as "pending" | "dismissed")}>
+              <option value="pending">Pending</option>
+              <option value="dismissed">Dismissed</option>
+            </select>
+            <span className="text-xs text-muted-foreground">Dismissed items remain auditable and can be restored.</span>
+          </div>
           <ErrorBox error={reviewError} />
           {!review ? (
             <p className="text-sm text-muted-foreground">
@@ -898,57 +947,20 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
             </p>
           ) : (
             <div className="space-y-3">
-              {(review.entries || []).filter((entry: any) => !identityOnly || entry.parsed?.status === "ambiguous" || entry.parsed?.status === "unmatched").map((entry: any) => (
+              {(review.entries || []).filter((entry: any) => !identityOnly || entry.issueTypes?.includes("IDENTITY_ISSUE")).map((entry: any) => (
                 <Card key={entry.id}>
                   <CardContent className="space-y-3 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        <p className="font-medium">{entry.sourceBasename}</p>
-                        <p className="break-all text-xs text-muted-foreground">
-                          {entry.sourcePath}
-                        </p>
+                        <p className="font-medium">{entry.title || entry.sourceBasename || "Unidentified content"}</p>
+                        <p className="break-all text-xs text-muted-foreground">{entry.year || "—"} · {entry.kind || "unknown"}{entry.sourceBasename ? ` · ${entry.sourceBasename}` : ""}</p>
                       </div>
-                      <StatusBadge
-                        value={String(
-                          entry.decision || entry.parsed?.status || "REVIEW",
-                        ).toUpperCase()}
-                      />
+                      <div className="flex flex-wrap gap-1">{(entry.issueTypes || []).map((issue: string) => <StatusBadge key={issue} value={issue} />)}</div>
                     </div>
-                    <p className="text-sm">
-                      {entry.parsed?.title || "No title"} ·{" "}
-                      {entry.parsed?.reason || "Review required"}
-                    </p>
-                    <IdentityResolver reviewId={entry.id} identity={{ title: entry.parsed?.title, year: entry.parsed?.year, kind: entry.parsed?.kind === "episode" ? "episode" : "movie" }} initialQuery={entry.parsed?.title} initialType={entry.parsed?.kind === "episode" ? "tv" : "movie"} initialYear={entry.parsed?.year} existingOverride={entry.override} actionLabel={entry.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />
+                    <p className="text-sm">{(entry.blockers || []).slice(0, 3).join(" · ") || "Review required"}</p>
+                    {entry.organizerReview && entry.decision !== "dismissed" && <IdentityResolver reviewId={entry.organizerReview.id} identity={entry.identity} initialQuery={entry.title} initialType={entry.kind === "episode" ? "tv" : "movie"} initialYear={entry.year} existingOverride={entry.organizerReview.override} actionLabel={entry.organizerReview.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />}
                     <div className="flex flex-wrap gap-2">
-                      <Button
-                        size="sm"
-                        onClick={() =>
-                          void reviewAction(entry.id, { decision: "accepted" })
-                        }
-                      >
-                        <Check className="mr-2 h-4 w-4" />
-                        Accept as detected
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          void reviewAction(entry.id, { decision: "dismissed" })
-                        }
-                      >
-                        <X className="mr-2 h-4 w-4" />
-                        Dismiss
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() =>
-                          void reviewAction(entry.id, { action: "retry" })
-                        }
-                      >
-                        <RefreshCw className="mr-2 h-4 w-4" />
-                        Retry / Resume
-                      </Button>
+                      {entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "accepted" }, entry.organizerReview)}><Check className="mr-2 h-4 w-4" />Accept as detected</Button><Button size="sm" variant="destructive" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "dismissed" }, entry.organizerReview)}><X className="mr-2 h-4 w-4" />Dismiss</Button><Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry.organizerReview)}><RefreshCw className="mr-2 h-4 w-4" />Retry / Resume</Button></>)}
                       <Button size="sm" variant="ghost" onClick={() => setSelected(entry)}>
                         <ExternalLink className="mr-2 h-4 w-4" />Details
                       </Button>
@@ -956,16 +968,17 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                   </CardContent>
                 </Card>
               ))}
-              {review.entries && review.entries.filter((entry: any) => !identityOnly || entry.parsed?.status === "ambiguous" || entry.parsed?.status === "unmatched").length === 0 && (
-                <Card><CardContent className="p-6 text-sm text-muted-foreground">No identity issues require manual resolution.</CardContent></Card>
+              {review.entries && review.entries.filter((entry: any) => !identityOnly || entry.issueTypes?.includes("IDENTITY_ISSUE")).length === 0 && (
+                <Card><CardContent className="p-6 text-sm text-muted-foreground">No review items match the selected filter.</CardContent></Card>
               )}
             </div>
           )}
         </>
       )}
       {selected && (
-        <DetailPanel item={selected} onClose={() => setSelected(null)} onReviewAction={reviewAction} onSaved={() => { void loadReview(); setSelected(null); }} />
+        <DetailPanel item={selected} onClose={() => setSelected(null)} onReviewAction={requestReviewAction} onSaved={() => { void loadReview(); setSelected(null); }} />
       )}
+      {confirmation && <ConfirmationDialog open={Boolean(confirmation)} onOpenChange={(open) => !open && setConfirmation(null)} title={confirmation.title} description={confirmation.description} context={confirmation.context} confirmLabel={confirmation.confirmLabel} variant={confirmation.variant} onConfirm={async () => { await confirmation.onConfirm(); setConfirmation(null); }} />}
     </div>
   );
 }
