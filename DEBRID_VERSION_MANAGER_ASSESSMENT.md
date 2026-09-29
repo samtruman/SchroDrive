@@ -1533,3 +1533,38 @@ without inventing backend fields that do not yet exist. The next UI increment
 can add richer detail drawers and job records once corresponding read models
 are available; this change does not alter Organizer, resolver, providers,
 acquisition execution or import execution.
+## Provider Capability Matrix
+
+Backup & Migration now derives source/target availability from explicit provider capabilities rather than assuming a symmetric `DebridProvider`. The capability vocabulary is: `inventory`, `fileTree`, `infohash`, `magnetExport`, `recoverability`, `cacheLookup`, `importMagnet`, `importTorrent`, `duplicateLookup`, `postImportVerification`, `delete`, and `status`. Each capability separates API support (`SUPPORTED`, `PARTIAL`, `UNSUPPORTED`, `UNKNOWN`) from validation (`IMPLEMENTED`, `CONTRACT_TESTED`, `INTEGRATION_TESTED`, `E2E_VALIDATED`, `UNVALIDATED`).
+
+| Provider | Inventory | File tree | Export/source | Recoverability | Import/target | Hash lookup | Post-import verification | Delete |
+|---|---|---|---|---|---|---|---|---|
+| AllDebrid | E2E_VALIDATED | E2E_VALIDATED | E2E_VALIDATED | E2E_VALIDATED | CONTRACT_TESTED | E2E_VALIDATED | CONTRACT_TESTED | IMPLEMENTED (not executable) |
+| Real-Debrid | E2E_VALIDATED | INTEGRATION_TESTED | UNVALIDATED | UNVALIDATED | E2E_VALIDATED | E2E_VALIDATED | E2E_VALIDATED | IMPLEMENTED (not executable) |
+| TorBox | UNVALIDATED* | UNVALIDATED* | UNVALIDATED* | UNVALIDATED* | UNVALIDATED* | UNVALIDATED* | UNVALIDATED* | UNVALIDATED* |
+
+`*` TorBox migration validation is not available on the current Free account (`Upgrade to Access API`). This is an account/plan limitation, not a claim that TorBox is inherently unsupported. No TorBox migration operation is enabled by this milestone.
+
+### Migration routes
+
+Routes are derived from the declared capabilities of both adapters. A source requires inventory + export + recoverability; a target requires inventory + import + hash lookup.
+
+| Route | Status | Meaning |
+|---|---|---|
+| AllDebrid → Real-Debrid | E2E_VALIDATED | The only cross-provider migration route currently validated end-to-end. |
+| Real-Debrid → AllDebrid | UNVALIDATED | The reverse real migration has not been executed. |
+| Any route involving TorBox | UNVALIDATED | API access is unavailable on the current account. |
+
+The UI exposes provider capability levels and disables unsupported source/target operations. It must not promote a route to E2E validation merely because both adapters implement a common method. Delete remains non-executable in the Media Manager until a recovery-aware Delete Executor milestone is explicitly authorized.
+
+### Official API assessment
+
+Assessment date: 2026-09-29.
+
+| Provider | Official source | Assessment |
+|---|---|---|
+| AllDebrid | [AllDebrid API documentation](https://docs.alldebrid.com/) | Official v4/v4.1 endpoints document magnet upload, torrent upload, status, file tree, delete and restart. The adapter uses status/files and reconstructs canonical magnets from infohash where available. |
+| Real-Debrid | [Real-Debrid API documentation](https://api.real-debrid.com/) | Official endpoints document torrent inventory/info, add magnet/torrent, file selection and delete. The API exposes hash/metadata, but a complete original magnet is not guaranteed; export/recoverability is therefore partial and not E2E validated. |
+| TorBox | [TorBox official Swagger](https://api.torbox.app/docs) | Official API documentation exposes torrent management operations, but the current account reports `Upgrade to Access API`. No live calls or account workaround were used; documented support is separated from current validation. |
+
+For additional providers already present in SchröDrive, no new migration capability is declared without provider-specific official documentation and adapter validation. They fail closed as `UNKNOWN/UNVALIDATED` for migration rather than being inferred compatible from the common `DebridProvider` interface.

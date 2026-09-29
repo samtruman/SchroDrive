@@ -43,6 +43,7 @@ import { enrichVersionMetadata } from "./services/versionManagerMetadata";
 import { exportMigrationLibrary, normalizeMigrationExportMode } from "./services/migrationExporter";
 import { analyzeMigrationImport, executeMigrationImportBulk, executeMigrationImportItem, getRecoverableManifestItem } from "./services/migrationImporter";
 import { aggregateMigrationJobs, effectiveMigrationStatus } from "./services/migrationState";
+import { migrationRouteLevel, providerMigrationCapabilities } from "./services/providerMigrationCapabilities";
 import { listMigrationAudit, recordAcquisitionAudit, recordMigrationAudit } from "./core/db";
 
 // ===========================================================================
@@ -284,6 +285,8 @@ export function startServer() {
       const target = registry.get(targetId);
       if (!source || !source.isConfigured()) return res.status(503).json({ ok: false, error: "Source provider is not configured" });
       if (!target || !target.isConfigured()) return res.status(503).json({ ok: false, error: "Target provider is not configured" });
+      const routeCapabilities = migrationRouteLevel(providerMigrationCapabilities(source), providerMigrationCapabilities(target));
+      if (!routeCapabilities.supported) return res.status(422).json({ ok: false, error: "Migration route is not supported by the declared provider capabilities", route: routeCapabilities });
       const [sourceInventory, targetInventory] = await Promise.all([source.listTorrents(), target.listTorrents()]);
       const exported = exportMigrationLibrary(sourceInventory, [], { mode: "FULL_LIBRARY", sourceProvider: source.id });
       const rawPlan = analyzeMigrationImport({ manifest: exported.manifest }, targetInventory);
@@ -317,6 +320,16 @@ export function startServer() {
     }
   });
 
+  /** Declared provider migration capabilities and derived source/target routes. */
+  app.get("/api/version-manager/migration/capabilities", (_req, res) => {
+    const providers = registry.all().map(providerMigrationCapabilities);
+    const routes = providers.flatMap((source) => providers.map((target) => {
+      const route = migrationRouteLevel(source, target);
+      return { sourceProvider: source.providerId, targetProvider: target.providerId, ...route };
+    }));
+    res.json({ ok: true, readOnly: true, providers, routes });
+  });
+
   /** Read-only import analysis. It never calls addMagnet or any provider mutation API. */
   app.post("/api/version-manager/import/preview", async (req, res) => {
     try {
@@ -325,6 +338,13 @@ export function startServer() {
       const target = targetId ? registry.get(targetId) : undefined;
       if (targetId && !target) return res.status(400).json({ ok: false, error: "Unknown target provider" });
       if (targetId && !target!.isConfigured()) return res.status(503).json({ ok: false, error: "Target provider is not configured" });
+      if (target) {
+        const targetCapabilities = providerMigrationCapabilities(target);
+        const importCapability = targetCapabilities.capabilities.find((item) => item.capability === "importMagnet");
+        if (!importCapability || importCapability.support === "UNSUPPORTED" || importCapability.support === "UNKNOWN") {
+          return res.status(422).json({ ok: false, error: "Target provider does not declare a usable magnet import capability", capability: importCapability });
+        }
+      }
       const inventory = target
         ? await target.listTorrents()
         : (await Promise.all(registry.configured().map((provider) => provider.listTorrents()))).flat();

@@ -1,0 +1,62 @@
+# Provider Capability Assessment
+
+Assessment date: 2026-09-29.
+
+The migration core consumes explicit capability declarations. API support and
+validation are separate: a documented operation may be implemented and
+contract-tested without being E2E validated on the current account.
+
+Validation levels: `IMPLEMENTED`, `CONTRACT_TESTED`, `INTEGRATION_TESTED`,
+`E2E_VALIDATED`, `UNVALIDATED`.
+
+Support levels: `SUPPORTED`, `PARTIAL`, `UNSUPPORTED`, `UNKNOWN`.
+
+## Official sources
+
+| Provider | Official documentation | Notes |
+|---|---|---|
+| AllDebrid | https://docs.alldebrid.com/ | v4/v4.1 magnet upload, torrent upload, status, files, delete and restart. |
+| Real-Debrid | https://api.real-debrid.com/ | Official torrent list/info, add magnet/torrent, select files and delete endpoints. |
+| TorBox | https://api.torbox.app/docs | Official Swagger/OpenAPI surface; current account reports `Upgrade to Access API`. |
+
+## Capability matrix
+
+| Provider | Capability | API support | Validation | Limitation |
+|---|---|---|---|---|
+| AllDebrid | inventory, file tree, infohash, magnet export, recoverability, status | SUPPORTED | E2E_VALIDATED | Current source/export path validated. |
+| AllDebrid | import magnet/torrent, duplicate lookup, post-import verification | SUPPORTED | CONTRACT_TESTED | No additional real import in this assessment. |
+| AllDebrid | cache lookup | UNKNOWN | UNVALIDATED | No separate documented cache-check path used by the adapter. |
+| AllDebrid | delete | SUPPORTED | IMPLEMENTED | Provider method exists; Media Manager Delete Executor remains disabled. |
+| Real-Debrid | inventory, infohash, duplicate lookup, status | SUPPORTED | E2E_VALIDATED | Target inventory and single import E2E validated. |
+| Real-Debrid | file tree | SUPPORTED | INTEGRATION_TESTED | Source file-tree behavior is not a cross-provider export E2E. |
+| Real-Debrid | magnet export, recoverability | PARTIAL | UNVALIDATED | Hash and metadata can reconstruct a magnet, but original complete magnet data is not guaranteed. |
+| Real-Debrid | import magnet, post-import verification | SUPPORTED | E2E_VALIDATED | Cross-provider target path validated. |
+| Real-Debrid | import torrent | SUPPORTED | CONTRACT_TESTED | No new real mutation performed. |
+| Real-Debrid | cache lookup | UNKNOWN | UNVALIDATED | Not exposed as a separately validated adapter capability. |
+| Real-Debrid | delete | SUPPORTED | IMPLEMENTED | Provider method exists; not executable from Media Manager. |
+| TorBox | inventory, file tree, infohash, status, import magnet/torrent, duplicate lookup, post-import verification, delete | SUPPORTED | UNVALIDATED | Documented API surface, but API access is unavailable on the current Free account. |
+| TorBox | magnet export, recoverability | PARTIAL | UNVALIDATED | Depends on hash/metadata returned by the account/API response. |
+| TorBox | cache lookup | SUPPORTED | UNVALIDATED | Documented API capability; no live account validation. |
+
+TorBox is not classified as universally unsupported. No upgrade, scraping,
+session-cookie workaround, or unauthorised call was attempted.
+
+## Migration route matrix
+
+| Source → target | Support | Validation | Reason |
+|---|---|---|---|
+| AllDebrid → Real-Debrid | SUPPORTED | E2E_VALIDATED | Only route exercised with a real export, target preview and controlled restore. |
+| Real-Debrid → AllDebrid | SUPPORTED | UNVALIDATED | Capability-derived route; reverse real migration has not been executed. |
+| TorBox → AllDebrid | SUPPORTED | UNVALIDATED | Requires TorBox API access. |
+| AllDebrid → TorBox | SUPPORTED | UNVALIDATED | Requires TorBox API access. |
+| Real-Debrid → TorBox | SUPPORTED | UNVALIDATED | Requires TorBox API access and source export assessment. |
+| TorBox → Real-Debrid | SUPPORTED | UNVALIDATED | Requires TorBox API access. |
+| Routes involving undeclared future providers | UNKNOWN | UNVALIDATED | Fail closed until an adapter declaration and tests exist. |
+
+The UI derives route availability from these declarations; it does not use a
+hardcoded provider-pair whitelist. Unsupported/unknown capabilities block
+preview, while supported but unvalidated capabilities remain visibly marked
+as unvalidated rather than being promoted to E2E status.
+
+No delete operation was executed. Delete remains outside the Media Manager
+until the recovery-aware Delete Executor milestone is explicitly authorized.
