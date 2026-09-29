@@ -22,7 +22,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
 type View = "overview" | "library" | "migration" | "settings";
-type Profile = { id: string; name: string; enabled: boolean; priority?: number; preferredResolution?: string; languagePolicy?: any; hardRequirements?: any };
+type Profile = { id: string; name: string; enabled: boolean; priority?: number; description?: string; preferredResolution?: string; languagePolicy?: any; hardRequirements?: any; scoring?: Record<string, number>; acquisitionBehavior?: string };
 
 const tone: Record<
   string,
@@ -104,9 +104,9 @@ function useJson<T>(url: string, enabled = true) {
 function SectionNav({ view }: { view: View }) {
   const links = [
     ["Overview", "/media-manager"],
-    ["Library", "/media-manager/library?view=all"],
-    ["Backup & Migration", "/media-manager/migration"],
-    ["Settings", "/media-manager/settings"],
+    ["Library", "/media-manager/library"],
+    ["Backup & Migration", "/media-manager/migration/export"],
+    ["Settings", "/media-manager/settings/profiles"],
   ] as const;
   return (
     <nav className="flex flex-wrap gap-2 border-b pb-3">
@@ -243,6 +243,16 @@ function DetailPanel({ item, onClose }: { item: any; onClose: () => void }) {
               </p>
             )}
           </div>
+        </section>
+        <section>
+          <h3 className="mb-2 font-semibold">Policy / Decision</h3>
+          <p><b>Decision:</b> <StatusBadge value={item.decision || versions[0]?.decision || "REVIEW"} /></p>
+          <p className="mt-2 text-muted-foreground">Winning profiles: {versions.flatMap((version: any) => version.satisfiesProfiles || []).join(", ") || "none"}</p>
+          <div className="mt-2 space-y-1 text-xs text-muted-foreground">{versions.flatMap((version: any) => (version.reasons || []).map((reason: any) => <p key={`${version.id}-${reason.code}`}>• {reason.message}</p>))}</div>
+        </section>
+        <section>
+          <h3 className="mb-2 font-semibold">Safety</h3>
+          {versions.length ? versions.map((version: any, index: number) => <p key={version.id || index} className="text-sm text-muted-foreground">{version.fingerprint?.storage?.provider || "provider"} · recoverability: {version.fingerprint?.storage?.infoHash ? "YES · infohash available" : "UNKNOWN · review required"}</p>) : <p className="text-muted-foreground">No safety details available.</p>}
         </section>
         <details className="rounded border p-3 lg:col-span-2">
           <summary className="cursor-pointer font-semibold">
@@ -382,7 +392,7 @@ function Overview() {
   );
 }
 
-function Library() {
+function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const pathname = usePathname();
   const [preset, setPreset] = useState("all");
   const [query, setQuery] = useState("");
@@ -392,8 +402,8 @@ function Library() {
   const [decision, setDecision] = useState("all");
   const [selected, setSelected] = useState<any>(null);
   useEffect(() => {
-    setPreset(new URLSearchParams(window.location.search).get("view") || "all");
-  }, [pathname]);
+    setPreset(new URLSearchParams(window.location.search).get("view") || initialPreset);
+  }, [pathname, initialPreset]);
   const preview = useJson<any>(
     "/api/version-manager/preview",
     preset === "all",
@@ -484,24 +494,24 @@ function Library() {
           variant={preset === "all" ? "default" : "outline"}
           size="sm"
         >
-          <Link href="/media-manager/library?view=all">All</Link>
+          <Link href="/media-manager/library">All</Link>
         </Button>
         <Button
           asChild
           variant={preset === "missing" ? "default" : "outline"}
           size="sm"
         >
-          <Link href="/media-manager/library?view=missing">Missing</Link>
+          <Link href="/media-manager/library/missing">Missing</Link>
         </Button>
         <Button
           asChild
           variant={preset === "review" ? "default" : "outline"}
           size="sm"
         >
-          <Link href="/media-manager/library?view=review">Review</Link>
+          <Link href="/media-manager/library/review">Review</Link>
         </Button>
         <Button asChild variant={preset === "delete-preview" ? "default" : "outline"} size="sm">
-          <Link href="/media-manager/library?view=delete-preview">Delete Preview</Link>
+          <Link href="/media-manager/library/delete-preview">Delete Preview</Link>
         </Button>
       </div>
       {preset !== "review" && preset !== "delete-preview" && (
@@ -775,7 +785,7 @@ function Library() {
   );
 }
 
-function Migration() {
+function Migration({ section = "export" }: { section?: string }) {
   const capabilities = useJson<any>("/api/version-manager/migration/capabilities");
   const [sourceProvider, setSourceProvider] = useState("alldebrid");
   const [targetProvider, setTargetProvider] = useState("realdebrid");
@@ -840,26 +850,23 @@ function Migration() {
         description="Portable export, safe import preview and migration history."
       />
       <div className="flex flex-wrap gap-2">
-        <a
-          href="#export"
-          className="inline-flex items-center rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground"
-        >
+        <Button asChild variant={section === "export" ? "default" : "outline"}>
+          <Link href="/media-manager/migration/export">
           <Archive className="mr-2 h-4 w-4" />
           Export
-        </a>
-        <a
-          href="#import"
-          className="inline-flex items-center rounded-md border px-3 py-2 text-sm"
-        >
+          </Link>
+        </Button>
+        <Button asChild variant={section === "import" ? "default" : "outline"}>
+          <Link href="/media-manager/migration/import">
           <FileUp className="mr-2 h-4 w-4" />
           Import preview
-        </a>
-        <a
-          href="#history"
-          className="inline-flex items-center rounded-md border px-3 py-2 text-sm"
-        >
+          </Link>
+        </Button>
+        <Button asChild variant={section === "history" ? "default" : "outline"}>
+          <Link href="/media-manager/migration/history">
           Jobs / History
-        </a>
+          </Link>
+        </Button>
       </div>
       <Card>
         <CardHeader>
@@ -1201,7 +1208,18 @@ function Migration() {
   );
 }
 
-function SettingsView() {
+const RULE_FIELDS = ["resolution", "source", "codec", "audioLanguage", "subtitleLanguage", "hdr", "dolbyVision", "bitrate", "fileSize", "container", "identityConfidence"];
+const RULE_OPERATORS = ["equals", "not_equals", "contains", "not_contains", "greater_than", "greater_or_equal", "less_than", "less_or_equal", "exists", "not_exists"];
+
+function RuleBuilder({ node, onChange, onRemove, root = false }: { node: any; onChange: (node: any) => void; onRemove?: () => void; root?: boolean }) {
+  const addCondition = () => onChange({ ...(node?.op === "AND" || node?.op === "OR" ? node : { op: "AND", children: [] }), children: [...(node?.children || []), { op: "COMPARE", field: "resolution", operator: "equals", value: "2160p" }] });
+  const addGroup = () => onChange({ ...(node?.op === "AND" || node?.op === "OR" ? node : { op: "AND", children: [] }), children: [...(node?.children || []), { op: "AND", children: [{ op: "COMPARE", field: "resolution", operator: "equals", value: "1080p" }] }] });
+  if (node?.op === "NOT") return <div className="rounded border border-dashed p-2"><div className="flex items-center justify-between"><b>NOT</b>{!root && <Button size="sm" variant="ghost" onClick={onRemove}>Remove</Button>}</div><RuleBuilder node={node.child} root onChange={(child) => onChange({ ...node, child })} /></div>;
+  if (node?.op === "AND" || node?.op === "OR") return <div className="space-y-2 rounded border p-2"><div className="flex flex-wrap items-center gap-2"><select className="rounded border bg-background p-1 text-sm" value={node.op} onChange={(event) => onChange({ ...node, op: event.target.value })}><option>AND</option><option>OR</option></select>{!root && <Button size="sm" variant="ghost" onClick={onRemove}>Remove group</Button>}<Button size="sm" variant="outline" onClick={addCondition}>Add condition</Button><Button size="sm" variant="outline" onClick={addGroup}>Add group</Button><Button size="sm" variant="outline" onClick={() => onChange({ op: "NOT", child: { op: "COMPARE", field: "resolution", operator: "equals", value: "2160p" } })}>Add NOT</Button></div>{(node.children || []).map((child: any, index: number) => <RuleBuilder key={index} node={child} onChange={(next) => onChange({ ...node, children: node.children.map((item: any, itemIndex: number) => itemIndex === index ? next : item) })} onRemove={() => onChange({ ...node, children: node.children.filter((_: any, itemIndex: number) => itemIndex !== index) })} />)}</div>;
+  return <div className="flex flex-wrap items-center gap-2 rounded border bg-muted/20 p-2"><select className="rounded border bg-background p-1 text-sm" value={node?.field || "resolution"} onChange={(event) => onChange({ ...node, field: event.target.value })}>{RULE_FIELDS.map((field) => <option key={field}>{field}</option>)}</select><select className="rounded border bg-background p-1 text-sm" value={node?.operator || "equals"} onChange={(event) => onChange({ ...node, operator: event.target.value })}>{RULE_OPERATORS.map((operator) => <option key={operator}>{operator}</option>)}</select>{!["exists", "not_exists"].includes(node?.operator) && <input className="min-w-28 rounded border bg-background p-1 text-sm" value={String(node?.value ?? "")} onChange={(event) => onChange({ ...node, value: event.target.value })} placeholder="value" />} {!root && <Button size="sm" variant="ghost" onClick={onRemove}>Remove</Button>}</div>;
+}
+
+function SettingsView({ section = "profiles" }: { section?: string }) {
   const status = useJson<any>("/api/version-manager/status");
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [policy, setPolicy] = useState<any>({ enableRemote: false, acquireMissingRemote: false, safety: { requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false } });
@@ -1228,6 +1246,8 @@ function SettingsView() {
       setSaving(false);
     }
   }
+  function updateProfile(index: number, patch: Partial<Profile>) { setProfiles((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item)); }
+  function addProfile() { const id = `custom-${Date.now()}`; setProfiles((current) => [...current, { id, name: "Custom profile", enabled: true, priority: 0, preferredResolution: "1080p", languagePolicy: { required: { values: [], mode: "ALL" }, preferred: [], original: false, scope: "AUDIO" }, sourceOrder: [], codecOrder: [], audioOrder: [], hardRequirements: { op: "AND", children: [] }, scoring: {}, acquisitionBehavior: "DISABLED" } as any]); }
   return (
     <div className="space-y-6">
       <Header
@@ -1236,43 +1256,35 @@ function SettingsView() {
         description="Configure profiles, acquisition behavior and safety without duplicating global provider credentials."
       />
       <div className="flex flex-wrap gap-2">
-        <Button>Profiles</Button>
-        <Button variant="outline" onClick={() => document.getElementById("media-manager-languages")?.scrollIntoView({ behavior: "smooth" })}>Languages</Button>
-        <Button variant="outline" onClick={() => document.getElementById("media-manager-rules")?.scrollIntoView({ behavior: "smooth" })}>Rules</Button>
-        <Button variant="outline" onClick={() => document.getElementById("media-manager-acquisition")?.scrollIntoView({ behavior: "smooth" })}>Acquisition</Button>
-        <Button variant="outline" onClick={() => document.getElementById("media-manager-safety")?.scrollIntoView({ behavior: "smooth" })}>Safety</Button>
+        {[["Profiles", "profiles"], ["Languages", "languages"], ["Rules", "rules"], ["Acquisition", "acquisition"], ["Safety", "safety"]].map(([label, id]) => <Button key={id} asChild variant={section === id ? "default" : "outline"}><Link href={`/media-manager/settings/${id}`}>{label}</Link></Button>)}
       </div>
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Profiles</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="flex justify-end"><Button size="sm" variant="outline" onClick={addProfile}>Create profile</Button></div>
           {profiles.map((profile, index) => (
             <div
               className="flex flex-wrap items-center justify-between gap-3 rounded border p-3"
               key={profile.id}
             >
               <div>
-                <input className="rounded border bg-background p-1 font-medium" value={profile.name || profile.id} onChange={(event) => setProfiles((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item))} aria-label={`${profile.id} name`} />
+                <input className="rounded border bg-background p-1 font-medium" value={profile.name || profile.id} onChange={(event) => updateProfile(index, { name: event.target.value })} aria-label={`${profile.id} name`} />
+                <input className="mt-1 block w-full rounded border bg-background p-1 text-xs" value={profile.description || ""} onChange={(event) => updateProfile(index, { description: event.target.value })} placeholder="Description" />
                 <p className="text-xs text-muted-foreground">
                   VersionProfile · requirements remain extensible
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-3 text-sm">
-                <label>Priority <input className="ml-1 w-16 rounded border bg-background p-1" type="number" value={profile.priority ?? 0} onChange={(event) => setProfiles((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, priority: Number(event.target.value) } : item))} /></label>
-                <label>Resolution <input className="ml-1 w-20 rounded border bg-background p-1" value={profile.preferredResolution || ""} onChange={(event) => setProfiles((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, preferredResolution: event.target.value } : item))} /></label>
+                <label>Priority <input className="ml-1 w-16 rounded border bg-background p-1" type="number" value={profile.priority ?? 0} onChange={(event) => updateProfile(index, { priority: Number(event.target.value) })} /></label>
+                <label>Resolution <input className="ml-1 w-20 rounded border bg-background p-1" value={profile.preferredResolution || ""} onChange={(event) => updateProfile(index, { preferredResolution: event.target.value })} /></label>
                 <label>
                 <input
                   type="checkbox"
                   checked={profile.enabled}
                   onChange={(event) =>
-                    setProfiles((current) =>
-                      current.map((item, itemIndex) =>
-                        itemIndex === index
-                          ? { ...item, enabled: event.target.checked }
-                          : item,
-                      ),
-                    )
+                    updateProfile(index, { enabled: event.target.checked })
                   }
                 />
                 Enabled
@@ -1288,6 +1300,7 @@ function SettingsView() {
               <span className="text-sm text-muted-foreground">{saved}</span>
             )}
           </div>
+          <div className="space-y-2 rounded border p-3"><p className="font-medium">Scoring</p><p className="text-xs text-muted-foreground">Weights are profile-specific and only apply after hard requirements pass.</p>{profiles.map((profile, index) => <details key={`score-${profile.id}`} className="rounded border p-2"><summary className="cursor-pointer text-sm">{profile.name || profile.id}</summary><div className="mt-2 space-y-2">{Object.entries(profile.scoring || {}).map(([field, weight]) => <div className="flex gap-2" key={field}><input className="flex-1 rounded border bg-background p-1 text-sm" value={field} onChange={(event) => { const scoring = { ...(profile.scoring || {}) }; delete scoring[field]; scoring[event.target.value] = Number(weight); updateProfile(index, { scoring }); }} /><input className="w-24 rounded border bg-background p-1 text-sm" type="number" value={String(weight)} onChange={(event) => updateProfile(index, { scoring: { ...(profile.scoring || {}), [field]: Number(event.target.value) } })} /><Button size="sm" variant="ghost" onClick={() => { const scoring = { ...(profile.scoring || {}) }; delete scoring[field]; updateProfile(index, { scoring }); }}>Remove</Button></div>)}<Button size="sm" variant="outline" onClick={() => updateProfile(index, { scoring: { ...(profile.scoring || {}), resolution: 0 } })}>Add scoring rule</Button></div></details>)}</div>
         </CardContent>
       </Card>
       <Card id="media-manager-languages">
@@ -1296,15 +1309,15 @@ function SettingsView() {
           <p className="text-muted-foreground">Language rules are profile-scoped. Audio and subtitles remain distinct; ORIGINAL is resolved from identity metadata.</p>
           {profiles.map((profile, index) => <div key={profile.id} className="grid gap-2 rounded border p-3 md:grid-cols-4">
             <span className="font-medium">{profile.name || profile.id}</span>
-            <input className="rounded border bg-background p-2" placeholder="required: ita, eng" value={(profile.languagePolicy?.required?.values || []).join(", ")} onChange={(event) => setProfiles((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, languagePolicy: { ...(item.languagePolicy || {}), required: { ...(item.languagePolicy?.required || {}), values: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) } } } : item))} />
-            <select className="rounded border bg-background p-2" value={profile.languagePolicy?.required?.mode || "ALL"} onChange={(event) => setProfiles((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, languagePolicy: { ...(item.languagePolicy || {}), required: { ...(item.languagePolicy?.required || {}), mode: event.target.value } } } : item))}><option>ALL</option><option>ANY</option></select>
-            <select className="rounded border bg-background p-2" value={profile.languagePolicy?.scope || "AUDIO"} onChange={(event) => setProfiles((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, languagePolicy: { ...(item.languagePolicy || {}), scope: event.target.value } } : item))}><option>AUDIO</option><option>SUBTITLE</option><option>AUDIO_OR_SUBTITLE</option></select>
+            <input className="rounded border bg-background p-2" placeholder="required: ita, eng" value={(profile.languagePolicy?.required?.values || []).join(", ")} onChange={(event) => updateProfile(index, { languagePolicy: { ...(profile.languagePolicy || {}), required: { ...(profile.languagePolicy?.required || {}), values: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) } } } as any)} />
+            <select className="rounded border bg-background p-2" value={profile.languagePolicy?.required?.mode || "ALL"} onChange={(event) => updateProfile(index, { languagePolicy: { ...(profile.languagePolicy || {}), required: { ...(profile.languagePolicy?.required || {}), mode: event.target.value } } } as any)}><option>ALL</option><option>ANY</option></select>
+            <select className="rounded border bg-background p-2" value={profile.languagePolicy?.scope || "AUDIO"} onChange={(event) => updateProfile(index, { languagePolicy: { ...(profile.languagePolicy || {}), scope: event.target.value } } as any)}><option>AUDIO</option><option>SUBTITLE</option><option>AUDIO_OR_SUBTITLE</option></select>
           </div>)}
         </CardContent>
       </Card>
       <Card id="media-manager-rules">
         <CardHeader><CardTitle className="text-base">Rules</CardTitle></CardHeader>
-        <CardContent className="space-y-2 text-sm"><p className="text-muted-foreground">Hard requirements use the persisted nested AND/OR/NOT rule tree. Configure advanced nested rules through the API-compatible model; evaluation remains fail-closed.</p>{profiles.map((profile) => <details key={profile.id} className="rounded border p-3"><summary className="cursor-pointer font-medium">{profile.name || profile.id} hard requirements</summary><pre className="mt-2 overflow-auto text-xs text-muted-foreground">{JSON.stringify(profile.hardRequirements || { op: "AND", children: [] }, null, 2)}</pre></details>)}</CardContent>
+        <CardContent className="space-y-2 text-sm"><p className="text-muted-foreground">Hard requirements are evaluated before scoring. The builder keeps field/operator combinations within the supported rule model.</p>{profiles.map((profile, index) => <details key={profile.id} className="rounded border p-3"><summary className="cursor-pointer font-medium">{profile.name || profile.id} hard requirements</summary><div className="mt-2"><RuleBuilder node={profile.hardRequirements || { op: "AND", children: [] }} root onChange={(hardRequirements) => updateProfile(index, { hardRequirements } as any)} /></div></details>)}</CardContent>
       </Card>
       <Card id="media-manager-acquisition">
         <CardHeader><CardTitle className="text-base">Acquisition</CardTitle></CardHeader>
@@ -1329,9 +1342,9 @@ function SettingsView() {
     </div>
   );
 }
-export function MediaManagerShell({ view }: { view: View }) {
+export function MediaManagerShell({ view, section }: { view: View; section?: string }) {
   if (view === "overview") return <Overview />;
-  if (view === "library") return <Library />;
-  if (view === "migration") return <Migration />;
-  return <SettingsView />;
+  if (view === "library") return <Library initialPreset={section || "all"} />;
+  if (view === "migration") return <Migration section={section || "export"} />;
+  return <SettingsView section={section || "profiles"} />;
 }

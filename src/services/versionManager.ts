@@ -76,7 +76,7 @@ export function validateRule(node: unknown, depth = 0): RuleNode {
   const value = node as Record<string, unknown>;
   const op = value.op;
   if (op === "AND" || op === "OR") {
-    if (!Array.isArray(value.children) || value.children.length === 0) throw new Error(`${op} requires children`);
+    if (!Array.isArray(value.children) || (op === "OR" && value.children.length === 0)) throw new Error(`${op} requires children`);
     return { op, children: value.children.map((child) => validateRule(child, depth + 1)) };
   }
   if (op === "NOT") return { op, child: validateRule(value.child, depth + 1) };

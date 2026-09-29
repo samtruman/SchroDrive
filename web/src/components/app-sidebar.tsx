@@ -14,9 +14,6 @@ import {
   Magnet,
   ClipboardCheck,
   Layers3,
-  LibraryBig,
-  Archive,
-  Settings2,
 } from "lucide-react"
 
 import {
@@ -50,9 +47,6 @@ const navigation = [
       { name: "Search", href: "/search", icon: Search },
       { name: "Add Content", href: "/add", icon: Plus },
       { name: "Media Manager", href: "/media-manager", icon: Layers3 },
-      { name: "Library", href: "/media-manager/library?view=all", icon: LibraryBig },
-      { name: "Backup & Migration", href: "/media-manager/migration", icon: Archive },
-      { name: "Media Settings", href: "/media-manager/settings", icon: Settings2 },
     ],
   },
   {
