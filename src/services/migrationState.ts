@@ -14,6 +14,44 @@ export interface EffectiveMigrationStatus {
   targetProviderItemId?: string;
 }
 
+export interface MigrationJobSummary {
+  jobId: string;
+  sourceProvider: string;
+  targetProvider: string;
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  total: number;
+  imported: number;
+  skipped: number;
+  rejectedLegal: number;
+  failed: number;
+  status: "COMPLETED" | "PARTIAL" | "FAILED" | "INTERRUPTED";
+  items: Array<{ infoHash: string; status: string; reason?: string; createdAt: string }>;
+}
+
+export function aggregateMigrationJobs(entries: Array<{
+  id: number; sourceProvider: string; targetProvider: string; infoHash: string;
+  executionStatus: string; reason?: string; createdAt: string;
+}>): MigrationJobSummary[] {
+  const grouped = new Map<string, typeof entries>();
+  for (const entry of entries) {
+    const day = entry.createdAt.slice(0, 10);
+    const key = `${entry.sourceProvider}:${entry.targetProvider}:${day}`;
+    const group = grouped.get(key) || [];
+    group.push(entry); grouped.set(key, group);
+  }
+  return [...grouped.values()].map((items) => {
+    const ordered = [...items].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id - b.id);
+    const imported = items.filter((item) => item.executionStatus === "IMPORTED").length;
+    const skipped = items.filter((item) => item.executionStatus === "SKIPPED_ALREADY_PRESENT").length;
+    const rejectedLegal = items.filter((item) => item.executionStatus === "REJECTED_LEGAL").length;
+    const failed = items.filter((item) => ["FAILED_PERMANENT", "FAILED_RETRYABLE_EXHAUSTED"].includes(item.executionStatus)).length;
+    const status: MigrationJobSummary["status"] = failed === items.length ? "FAILED" : (failed || rejectedLegal ? "PARTIAL" : "COMPLETED");
+    return { jobId: `audit-${ordered[0].id}-${ordered[ordered.length - 1].id}`, sourceProvider: ordered[0].sourceProvider, targetProvider: ordered[0].targetProvider, createdAt: ordered[0].createdAt, startedAt: ordered[0].createdAt, completedAt: ordered[ordered.length - 1].createdAt, total: items.length, imported, skipped, rejectedLegal, failed, status, items: ordered.map((item) => ({ infoHash: item.infoHash, status: item.executionStatus, reason: item.reason, createdAt: item.createdAt })) };
+  }).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
 /** Reconciles raw provider state with durable outcomes such as legal rejection. */
 export function effectiveMigrationStatus(rawStatus: ImportPlanStatus, audit?: MigrationStateAuditLike): EffectiveMigrationStatus {
   if (!audit) return { status: rawStatus };
