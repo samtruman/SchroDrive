@@ -24,13 +24,15 @@ Support levels: `SUPPORTED`, `PARTIAL`, `UNSUPPORTED`, `UNKNOWN`.
 | Provider | Capability | API support | Validation | Limitation |
 |---|---|---|---|---|
 | AllDebrid | inventory, file tree, infohash, magnet export, recoverability, status | SUPPORTED | E2E_VALIDATED | Current source/export path validated. |
-| AllDebrid | import magnet/torrent, duplicate lookup, post-import verification | SUPPORTED | CONTRACT_TESTED | No additional real import in this assessment. |
+| AllDebrid | import magnet | SUPPORTED | E2E_VALIDATED | Single reverse restore validated; no bulk import in this assessment. |
+| AllDebrid | duplicate lookup, post-import verification | SUPPORTED | E2E_VALIDATED | Reverse restore produced a target item and the second preview detected its equivalent hash. |
+| AllDebrid | import torrent | SUPPORTED | CONTRACT_TESTED | No real torrent-file import in this assessment. |
 | AllDebrid | cache lookup | UNKNOWN | UNVALIDATED | No separate documented cache-check path used by the adapter. |
 | AllDebrid | delete | SUPPORTED | IMPLEMENTED | Provider method exists; Media Manager Delete Executor remains disabled. |
 | Real-Debrid | inventory, infohash, duplicate lookup, status | SUPPORTED | E2E_VALIDATED | Target inventory and single import E2E validated. |
 | Real-Debrid | file tree | SUPPORTED | INTEGRATION_TESTED | Source file-tree behavior is not a cross-provider export E2E. |
-| Real-Debrid | magnet export, recoverability | PARTIAL | UNVALIDATED | Hash and metadata can reconstruct a magnet, but original complete magnet data is not guaranteed. |
-| Real-Debrid | import magnet, post-import verification | SUPPORTED | E2E_VALIDATED | Cross-provider target path validated. |
+| Real-Debrid | magnet export, recoverability | SUPPORTED | E2E_VALIDATED | Reverse restore validated canonical magnet reconstruction from infohash; original complete magnet data is not guaranteed. |
+| Real-Debrid | import magnet, post-import verification | SUPPORTED | E2E_VALIDATED | Cross-provider target path was already validated. |
 | Real-Debrid | import torrent | SUPPORTED | CONTRACT_TESTED | No new real mutation performed. |
 | Real-Debrid | cache lookup | UNKNOWN | UNVALIDATED | Not exposed as a separately validated adapter capability. |
 | Real-Debrid | delete | SUPPORTED | IMPLEMENTED | Provider method exists; not executable from Media Manager. |
@@ -46,7 +48,7 @@ session-cookie workaround, or unauthorised call was attempted.
 | Source → target | Support | Validation | Reason |
 |---|---|---|---|
 | AllDebrid → Real-Debrid | SUPPORTED | E2E_VALIDATED | Only route exercised with a real export, target preview and controlled restore. |
-| Real-Debrid → AllDebrid | SUPPORTED | UNVALIDATED | Capability-derived route; reverse real migration has not been executed. |
+| Real-Debrid → AllDebrid | SUPPORTED | E2E_VALIDATED | One real recoverable item restored; file-tree completeness remains a separate limitation. |
 | TorBox → AllDebrid | SUPPORTED | UNVALIDATED | Requires TorBox API access. |
 | AllDebrid → TorBox | SUPPORTED | UNVALIDATED | Requires TorBox API access. |
 | Real-Debrid → TorBox | SUPPORTED | UNVALIDATED | Requires TorBox API access and source export assessment. |

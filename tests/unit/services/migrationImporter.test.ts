@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TorrentInfo } from "../../../src/providers";
-import { analyzeMigrationImport, executeMigrationImportBulk, executeMigrationImportItem } from "../../../src/services/migrationImporter";
+import { analyzeMigrationImport, executeMigrationImportBulk, executeMigrationImportItem, migrationAuditOutcome } from "../../../src/services/migrationImporter";
 import { exportMigrationLibrary } from "../../../src/services/migrationExporter";
 
 const torrent = (id: string, hash?: string): TorrentInfo => ({
@@ -8,6 +8,14 @@ const torrent = (id: string, hash?: string): TorrentInfo => ({
 });
 
 describe("migration importer preview", () => {
+  test("preserves execution success separately from post-import reconciliation", () => {
+    expect(migrationAuditOutcome("ALREADY_PRESENT_EQUIVALENT_HASH", "target-1")).toEqual({
+      executionStatus: "IMPORTED",
+      importExecuted: true,
+      reconciliationStatus: "ALREADY_PRESENT_EQUIVALENT_HASH",
+      targetProviderItemId: "target-1",
+    });
+  });
   test("FULL export is idempotent against the source inventory", () => {
     const inventory = [torrent("one", "a".repeat(40)), torrent("two", "b".repeat(40))];
     const exported = exportMigrationLibrary(inventory);

@@ -163,6 +163,8 @@ export interface DebridProvider {
   deleteTorrent(torrentId: string): Promise<void>;
   /** Returns the info hash or magnet URI for a torrent (used for repair). */
   getInfoHash?(torrentId: string): Promise<string | null>;
+  /** Fetches a provider-native file tree when the list endpoint omits it. */
+  getTorrentFileTree?(torrentId: string): Promise<TorrentFile[]>;
   /**
    * Attempts to repair a dead torrent by re-adding its magnet to the same provider.
    * Returns true if repair succeeded, false if the torrent should be replaced.

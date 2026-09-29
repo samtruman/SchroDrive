@@ -475,6 +475,28 @@ export class RealDebridProvider implements DebridProvider {
     }
   }
 
+  /** Fetches complete file metadata from the RD detail endpoint. */
+  async getTorrentFileTree(torrentId: string): Promise<TorrentFile[]> {
+    if (rateLimiter.isRateLimited(PROVIDER_NAME)) return [];
+    await rateLimiter.throttle(PROVIDER_NAME);
+    try {
+      const base = getBaseUrl();
+      const res = await axiosIPv4.get(`${base}/torrents/info/${encodeURIComponent(torrentId)}`, { headers: rdHeaders(), timeout: 30000 });
+      rateLimiter.recordSuccess(PROVIDER_NAME);
+      const files: any[] = Array.isArray(res?.data?.files) ? res.data.files : [];
+      return files.map((file) => ({
+        id: String(file.id || ""),
+        name: String(file.path || file.name || "").split("/").pop() || String(file.id || ""),
+        path: String(file.path || file.name || ""),
+        size: typeof file.bytes === "number" ? file.bytes : 0,
+        selected: file.selected === 1,
+      }));
+    } catch (err: any) {
+      this.handleError(err, `get file tree ${torrentId}`);
+      return [];
+    }
+  }
+
   /**
    * Attempts to repair a dead torrent by re-adding the same magnet.
    *

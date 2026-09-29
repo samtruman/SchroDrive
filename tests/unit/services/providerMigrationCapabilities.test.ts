@@ -6,11 +6,11 @@ function provider(id: string, configured = true): any {
 }
 
 describe("provider migration capabilities", () => {
-  test("only the validated AllDebrid to Real-Debrid direction is E2E validated", () => {
+  test("both real restore directions are E2E validated independently", () => {
     const allDebrid = providerMigrationCapabilities(provider("alldebrid"));
     const realDebrid = providerMigrationCapabilities(provider("realdebrid"));
     expect(migrationRouteLevel(allDebrid, realDebrid)).toEqual({ level: "E2E_VALIDATED", supported: true });
-    expect(migrationRouteLevel(realDebrid, allDebrid)).toEqual({ level: "UNVALIDATED", supported: true });
+    expect(migrationRouteLevel(realDebrid, allDebrid)).toEqual({ level: "E2E_VALIDATED", supported: true });
   });
 
   test("TorBox is unvalidated rather than universally unsupported", () => {

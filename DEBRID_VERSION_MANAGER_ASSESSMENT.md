@@ -1539,8 +1539,8 @@ Backup & Migration now derives source/target availability from explicit provider
 
 | Provider | Inventory | File tree | Export/source | Recoverability | Import/target | Hash lookup | Post-import verification | Delete |
 |---|---|---|---|---|---|---|---|---|
-| AllDebrid | E2E_VALIDATED | E2E_VALIDATED | E2E_VALIDATED | E2E_VALIDATED | CONTRACT_TESTED | E2E_VALIDATED | CONTRACT_TESTED | IMPLEMENTED (not executable) |
-| Real-Debrid | E2E_VALIDATED | INTEGRATION_TESTED | UNVALIDATED | UNVALIDATED | E2E_VALIDATED | E2E_VALIDATED | E2E_VALIDATED | IMPLEMENTED (not executable) |
+| AllDebrid | E2E_VALIDATED | E2E_VALIDATED | E2E_VALIDATED | E2E_VALIDATED | E2E_VALIDATED | E2E_VALIDATED | E2E_VALIDATED | IMPLEMENTED (not executable) |
+| Real-Debrid | E2E_VALIDATED | INTEGRATION_TESTED | E2E_VALIDATED | E2E_VALIDATED | E2E_VALIDATED | E2E_VALIDATED | E2E_VALIDATED | IMPLEMENTED (not executable) |
 | TorBox | UNVALIDATED* | UNVALIDATED* | UNVALIDATED* | UNVALIDATED* | UNVALIDATED* | UNVALIDATED* | UNVALIDATED* | UNVALIDATED* |
 
 `*` TorBox migration validation is not available on the current Free account (`Upgrade to Access API`). This is an account/plan limitation, not a claim that TorBox is inherently unsupported. No TorBox migration operation is enabled by this milestone.
@@ -1552,7 +1552,7 @@ Routes are derived from the declared capabilities of both adapters. A source req
 | Route | Status | Meaning |
 |---|---|---|
 | AllDebrid → Real-Debrid | E2E_VALIDATED | The only cross-provider migration route currently validated end-to-end. |
-| Real-Debrid → AllDebrid | UNVALIDATED | The reverse real migration has not been executed. |
+| Real-Debrid → AllDebrid | E2E_VALIDATED | One real recoverable item restored; RD file-tree completeness remains a separate limitation. |
 | Any route involving TorBox | UNVALIDATED | API access is unavailable on the current account. |
 
 The UI exposes provider capability levels and disables unsupported source/target operations. It must not promote a route to E2E validation merely because both adapters implement a common method. Delete remains non-executable in the Media Manager until a recovery-aware Delete Executor milestone is explicitly authorized.
@@ -1568,3 +1568,20 @@ Assessment date: 2026-09-29.
 | TorBox | [TorBox official Swagger](https://api.torbox.app/docs) | Official API documentation exposes torrent management operations, but the current account reports `Upgrade to Access API`. No live calls or account workaround were used; documented support is separated from current validation. |
 
 For additional providers already present in SchröDrive, no new migration capability is declared without provider-specific official documentation and adapter validation. They fail closed as `UNKNOWN/UNVALIDATED` for migration rather than being inferred compatible from the common `DebridProvider` interface.
+
+### Reverse restore evidence and file-tree limitation
+
+The reverse test used Real-Debrid item `NVTY3EO4Z2HQ2` and hash
+`f6ad95a9…d99724`. The canonical magnet reconstructed from the infohash was
+accepted by AllDebrid, creating target item `779121245`; AllDebrid inventory
+increased from 417 to 418, and a second preview returned
+`ALREADY_PRESENT_EQUIVALENT_HASH` with zero duplicate creation.
+
+The Real-Debrid list endpoint omits file metadata, which is why the initial
+export showed zero files. A read-only detail response for this item contained
+`files` (5), `links` (1), a hash, filename, byte counts and one selected file.
+The adapter now exposes the detail file tree and the export/state paths use it
+when available. Restore recoverability is therefore independent from metadata
+completeness: infohash/magnet reconstruction is E2E validated, while file-tree
+completeness is supported through the detail endpoint and must be treated as
+partial whenever provider links/files are unavailable for an item state.

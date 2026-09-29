@@ -41,7 +41,7 @@ import { getLatestVersionManagerScan, getVersionManagerPolicy, getVersionProfile
 import { probeVersionRecords } from "./services/versionManagerProbe";
 import { enrichVersionMetadata } from "./services/versionManagerMetadata";
 import { exportMigrationLibrary, normalizeMigrationExportMode } from "./services/migrationExporter";
-import { analyzeMigrationImport, executeMigrationImportBulk, executeMigrationImportItem, getRecoverableManifestItem } from "./services/migrationImporter";
+import { analyzeMigrationImport, executeMigrationImportBulk, executeMigrationImportItem, getRecoverableManifestItem, migrationAuditOutcome } from "./services/migrationImporter";
 import { aggregateMigrationJobs, effectiveMigrationStatus } from "./services/migrationState";
 import { migrationRouteLevel, providerMigrationCapabilities } from "./services/providerMigrationCapabilities";
 import { listMigrationAudit, recordAcquisitionAudit, recordMigrationAudit } from "./core/db";
@@ -257,8 +257,11 @@ export function startServer() {
       const inventory = source
         ? await source.listTorrents()
         : (await Promise.all(registry.configured().map((provider) => provider.listTorrents()))).flat();
+      const exportInventory = source?.getTorrentFileTree
+        ? await Promise.all(inventory.map(async (item) => ({ ...item, files: await source.getTorrentFileTree!(item.id) })))
+        : inventory;
       const selectedProviderItemIds = typeof req.query.selected === "string" ? req.query.selected.split(",").map((value) => value.trim()).filter(Boolean) : undefined;
-      const exported = exportMigrationLibrary(inventory, [], { mode, selectedProviderItemIds, sourceProvider: source?.id });
+      const exported = exportMigrationLibrary(exportInventory, [], { mode, selectedProviderItemIds, sourceProvider: source?.id });
       if (String(req.query.format || "preview") === "preview") {
         return res.json({ ok: true, readOnly: true, mode, providerItems: inventory.length, exportableItems: exported.manifest.exportableItemCount, magnetCount: exported.manifest.magnetCount, generatedAt: exported.manifest.generatedAt });
       }
@@ -288,7 +291,10 @@ export function startServer() {
       const routeCapabilities = migrationRouteLevel(providerMigrationCapabilities(source), providerMigrationCapabilities(target));
       if (!routeCapabilities.supported) return res.status(422).json({ ok: false, error: "Migration route is not supported by the declared provider capabilities", route: routeCapabilities });
       const [sourceInventory, targetInventory] = await Promise.all([source.listTorrents(), target.listTorrents()]);
-      const exported = exportMigrationLibrary(sourceInventory, [], { mode: "FULL_LIBRARY", sourceProvider: source.id });
+      const exportInventory = source.getTorrentFileTree
+        ? await Promise.all(sourceInventory.map(async (item) => ({ ...item, files: await source.getTorrentFileTree!(item.id) })))
+        : sourceInventory;
+      const exported = exportMigrationLibrary(exportInventory, [], { mode: "FULL_LIBRARY", sourceProvider: source.id });
       const rawPlan = analyzeMigrationImport({ manifest: exported.manifest }, targetInventory);
       const audit = listMigrationAudit(10000).filter((entry) => entry.sourceProvider === source.id && entry.targetProvider === target.id);
       const latest = new Map<string, typeof audit[number]>();
@@ -372,7 +378,8 @@ export function startServer() {
       const result = await executeMigrationImportItem(sourceItem, target);
       const after = analyzeMigrationImport({ manifest: { schemaVersion: "1.0", items: [sourceItem] } }, await target.listTorrents());
       const sourceProvider = String(sourceItem?.provider || req.body?.sourceProvider || "unknown");
-      recordMigrationAudit({ sourceProvider, targetProvider: target.id, sourceProviderItemId: String(sourceItem?.providerItemId || ""), infoHash: recoverable.infoHash, initialStatus: initial.status, revalidationStatus: "READY_TO_IMPORT", executionStatus: after.items[0]?.status || "EXECUTED", targetProviderItemId: result.providerItemId });
+      const auditOutcome = migrationAuditOutcome(after.items[0]?.status || "ALREADY_PRESENT_EQUIVALENT_HASH", result.providerItemId);
+      recordMigrationAudit({ sourceProvider, targetProvider: target.id, sourceProviderItemId: String(sourceItem?.providerItemId || ""), infoHash: recoverable.infoHash, initialStatus: initial.status, revalidationStatus: auditOutcome.reconciliationStatus, executionStatus: auditOutcome.executionStatus, targetProviderItemId: auditOutcome.targetProviderItemId, importExecuted: auditOutcome.importExecuted });
       res.json({ ok: true, readOnly: false, sourceProvider, targetProvider: target.id, result, postImportPlan: after });
     } catch (err: any) {
       res.status(502).json({ ok: false, error: err?.message || "Migration execution failed" });

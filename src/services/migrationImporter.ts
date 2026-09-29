@@ -102,6 +102,15 @@ export async function executeMigrationImportItem(item: unknown, provider: Debrid
   return { providerItemId: String(result.id || ""), ...recoverable };
 }
 
+export function migrationAuditOutcome(reconciliationStatus: string, targetProviderItemId: string): {
+  executionStatus: "IMPORTED";
+  importExecuted: true;
+  reconciliationStatus: string;
+  targetProviderItemId: string;
+} {
+  return { executionStatus: "IMPORTED", importExecuted: true, reconciliationStatus, targetProviderItemId };
+}
+
 function retryableImportError(error: unknown): boolean {
   const status = Number((error as any)?.response?.status ?? (error as any)?.status);
   if ([400, 401, 403, 451].includes(status)) return false;
