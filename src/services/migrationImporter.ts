@@ -88,6 +88,7 @@ export function analyzeMigrationImport(input: MigrationImportInput, inventory: T
   const sourceFormat = hasManifest && hasMagnets ? "MANIFEST_AND_MAGNETS" : hasManifest ? "MANIFEST" : "MAGNETS";
   const plan: ImportPlan = { readOnly: true, sourceFormat, items: [], counts: emptyCounts(), errors: [] };
   const byHash = inventoryHashes(inventory);
+  const manifestHashes = new Set<string>();
   if (hasManifest) {
     const manifest = input.manifest as any;
     plan.schemaVersion = typeof manifest?.schemaVersion === "string" ? manifest.schemaVersion : undefined;
@@ -99,6 +100,7 @@ export function analyzeMigrationImport(input: MigrationImportInput, inventory: T
         ? { source: "MANIFEST" as const, index, status: "INVALID_MAGNET" as const, providerItemId: typeof item?.providerItemId === "string" ? item.providerItemId : undefined, originalName: typeof item?.originalName === "string" ? item.originalName : undefined, reason: "Manifest magnet or infohash is invalid" }
         : classify("MANIFEST", index, extracted.hash, typeof item?.providerItemId === "string" ? item.providerItemId : undefined, typeof item?.originalName === "string" ? item.originalName : undefined, byHash);
       plan.items.push(row);
+      if (extracted.hash) manifestHashes.add(extracted.hash);
     });
   }
   if (hasMagnets) {
@@ -106,6 +108,10 @@ export function analyzeMigrationImport(input: MigrationImportInput, inventory: T
     for (const [index, line] of input.magnetsText!.split(/\r?\n/).map((value, i) => [i, value.trim()] as const)) {
       if (!line) continue;
       const hash = hashFromMagnet(line);
+      // When both formats are supplied, manifest records are authoritative
+      // item records and magnets.txt is only their portable fallback. Do not
+      // count the same ProviderItem/hash twice.
+      if (hash && manifestHashes.has(hash)) continue;
       if (hash && seen.has(hash)) continue;
       if (hash) seen.add(hash);
       plan.items.push(hash ? classify("MAGNETS", index, hash, undefined, undefined, byHash) : { source: "MAGNETS", index, status: "INVALID_MAGNET", reason: "Line is not a valid magnet with a supported btih" });

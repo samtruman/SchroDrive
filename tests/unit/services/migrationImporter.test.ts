@@ -14,6 +14,8 @@ describe("migration importer preview", () => {
     const plan = analyzeMigrationImport({ manifest: exported.manifest, magnetsText: exported.magnetsText }, inventory);
     expect(plan.readOnly).toBe(true);
     expect(plan.counts.ALREADY_PRESENT).toBe(2);
+    expect(plan.items).toHaveLength(2);
+    expect(plan.counts.ALREADY_PRESENT_EQUIVALENT_HASH).toBe(0);
     expect(plan.counts.READY_TO_IMPORT).toBe(0);
   });
 
