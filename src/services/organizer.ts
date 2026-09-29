@@ -22,7 +22,7 @@ import { createHash } from "crypto";
 import axios from "axios";
 import { config } from "../core/config";
 import { classifyTorrent } from "../core/mediaClassifier";
-import { getWebdavOrganiserRoots } from "./mount";
+import { getConfiguredMountReadiness, getWebdavOrganiserRoots } from "./mount";
 import { parseMediaFilename, selectMediaCandidate } from "./mediaParser";
 import { getOrganizerReview, recordOrganizerReview, type ReviewDecision, type ReviewOverride } from "./organizerReview";
 import { searchTmdb } from "./tmdbService";
@@ -879,6 +879,12 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
   const dryRun = !!opts?.dryRun;
   const limit = opts?.limit ?? 10000;
 
+  const mountStatuses = await getConfiguredMountReadiness();
+  const readinessByPath = new Map(
+    mountStatuses.filter((status) => status.path).map((status) => [path.resolve(status.path!), status]),
+  );
+  const hasUnavailableSource = mountStatuses.some((status) => !status.ready);
+
   const orgBase = config.organizedBase;
   const movieDir = path.join(orgBase, "Movies");
   const tvDir = path.join(orgBase, "TV");
@@ -903,6 +909,11 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
   const providerBases = config.providers.map((p) => path.join(config.mountBase, p));
   const roots: string[] = [];
   for (const b of providerBases) {
+    const status = readinessByPath.get(path.resolve(b));
+    if (config.runMount && status && !status.ready) {
+      console.warn(`[${new Date().toISOString()}][organize] skipping source mount`, { reason: status.reason });
+      continue;
+    }
     // Check for Zurg-style organised category layout (__all__/anime/shows/movies)
     const allDir = path.join(b, "__all__");
     const allStat = await fsp.stat(allDir).catch(() => null);
@@ -925,6 +936,11 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
   if (config.webdavMountsEnabled) {
     const webdavRoots = getWebdavOrganiserRoots();
     for (const wr of webdavRoots) {
+      const status = readinessByPath.get(path.resolve(wr));
+      if (status && !status.ready) {
+        console.warn(`[${new Date().toISOString()}][organize] skipping WebDAV source mount`, { reason: status.reason });
+        continue;
+      }
       const wrStat = await fsp.stat(wr).catch(() => null);
       if (wrStat?.isDirectory()) {
         roots.push(wr);
@@ -951,7 +967,7 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
   // An empty discovery is ambiguous: it can mean an empty library, but it can
   // also mean that a provider mount is temporarily unavailable. Never prune
   // existing organized links in that state.
-  if (!dryRun && files.length > 0) {
+  if (!dryRun && files.length > 0 && !hasUnavailableSource) {
     for (const dir of [movieDir, tvDir, animeDir]) {
       try {
         const st = await fsp.stat(dir);
@@ -964,6 +980,8 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
         throw new Error(`organized library unavailable: ${dir}: ${(err as Error)?.message || String(err)}`);
       }
     }
+  } else if (!dryRun && hasUnavailableSource) {
+    console.warn(`[${new Date().toISOString()}][organize] skipping stale-content pruning while a source mount is not ready`);
   }
 
   if (totalRemovedLinks > 0 || totalRemovedDirs > 0) {
