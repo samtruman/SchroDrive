@@ -1497,3 +1497,39 @@ cross-provider comparison was performed and no credentials were copied or
 changed. The cross-provider code path is covered by the provider-neutral
 ImportPlan tests and is ready for a later read-only comparison once the
 provider is configured.
+
+### Media Manager UX integration
+
+The user-facing information architecture is now grouped under **Media
+Manager**. The legacy `/version-manager` and `/review` list routes redirect to
+the new surfaces rather than maintaining parallel workflows.
+
+| Area | Route | Responsibility |
+|---|---|---|
+| Overview | `/media-manager` | compact library/profile/acquisition/recovery summary and Run Scan |
+| Library | `/media-manager/library?view=all\|missing\|review` | shared content, missing-profile and Organizer Review views |
+| Backup & Migration | `/media-manager/migration` | export, import preview and effective migration state |
+| Settings | `/media-manager/settings` | profiles plus acquisition and safety policy entry points |
+
+The Library reuses the existing Version Manager preview, Missing Versions and
+Organizer Review APIs; it does not reproduce identity, scoring, Seerr
+duplicate detection or migration logic in the browser. Review retains Accept,
+Dismiss, Retry/Resume and Details actions. Technical identity/provenance data
+remains available from the detail workflows instead of occupying the overview.
+
+Backup & Migration reconciles provider inventory, the raw ImportPlan and
+migration audit history through a read-only effective-state endpoint. This is
+important for the validated current data: raw provider state can still report
+232 `READY_TO_IMPORT` entries, while durable audit records classify them as
+`REJECTED_LEGAL`; the UI therefore reports effective importable remaining as
+zero and excludes those entries from Import All Missing. Export remains
+ProviderItem-based and downloads the existing `manifest.json`/`magnets.txt`
+formats without exposing credentials or local paths.
+
+The initial refactor intentionally leaves global Seerr credentials in the
+existing Settings page and keeps Delete disabled/not implemented. Languages,
+rules, acquisition and safety are represented as Media Manager policy areas
+without inventing backend fields that do not yet exist. The next UI increment
+can add richer detail drawers and job records once corresponding read models
+are available; this change does not alter Organizer, resolver, providers,
+acquisition execution or import execution.

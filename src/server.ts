@@ -42,7 +42,8 @@ import { probeVersionRecords } from "./services/versionManagerProbe";
 import { enrichVersionMetadata } from "./services/versionManagerMetadata";
 import { exportMigrationLibrary, normalizeMigrationExportMode } from "./services/migrationExporter";
 import { analyzeMigrationImport, executeMigrationImportBulk, executeMigrationImportItem, getRecoverableManifestItem } from "./services/migrationImporter";
-import { recordAcquisitionAudit, recordMigrationAudit } from "./core/db";
+import { effectiveMigrationStatus } from "./services/migrationState";
+import { listMigrationAudit, recordAcquisitionAudit, recordMigrationAudit } from "./core/db";
 
 // ===========================================================================
 // Server Initialisation
@@ -267,6 +268,46 @@ export function startServer() {
       res.type("application/json").set("Content-Disposition", `attachment; filename=debrid-migration-manifest.json`).send(JSON.stringify(exported.manifest, null, 2));
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message || "Migration export failed" });
+    }
+  });
+
+  /**
+   * Read-only effective migration state. Provider inventory alone cannot
+   * remember permanent outcomes such as Real-Debrid legal rejections, so the
+   * UI reconciles the current plan with the migration audit trail here.
+   */
+  app.get("/api/version-manager/migration/state", async (req, res) => {
+    try {
+      const sourceId = typeof req.query.source === "string" ? req.query.source.trim().toLowerCase() : "alldebrid";
+      const targetId = typeof req.query.target === "string" ? req.query.target.trim().toLowerCase() : "realdebrid";
+      const source = registry.get(sourceId);
+      const target = registry.get(targetId);
+      if (!source || !source.isConfigured()) return res.status(503).json({ ok: false, error: "Source provider is not configured" });
+      if (!target || !target.isConfigured()) return res.status(503).json({ ok: false, error: "Target provider is not configured" });
+      const [sourceInventory, targetInventory] = await Promise.all([source.listTorrents(), target.listTorrents()]);
+      const exported = exportMigrationLibrary(sourceInventory, [], { mode: "FULL_LIBRARY", sourceProvider: source.id });
+      const rawPlan = analyzeMigrationImport({ manifest: exported.manifest }, targetInventory);
+      const audit = listMigrationAudit(10000).filter((entry) => entry.sourceProvider === source.id && entry.targetProvider === target.id);
+      const latest = new Map<string, typeof audit[number]>();
+      for (const entry of audit) if (!latest.has(entry.infoHash)) latest.set(entry.infoHash, entry);
+      const effectiveItems = rawPlan.items.map((item) => {
+        const entry = item.infoHash ? latest.get(item.infoHash) : undefined;
+        const effective = effectiveMigrationStatus(item.status, entry);
+        return { ...item, effectiveStatus: effective.status, reason: effective.reason || item.reason, lastAttempt: effective.lastAttempt, targetProviderItemId: effective.targetProviderItemId };
+      });
+      const count = (status: string) => effectiveItems.filter((item) => item.effectiveStatus === status).length;
+      const importedHistory = new Set(audit.filter((entry) => entry.executionStatus === "IMPORTED").map((entry) => entry.infoHash)).size;
+      const alreadyPresent = count("ALREADY_PRESENT") + count("ALREADY_PRESENT_EQUIVALENT_HASH") + count("IMPORTED");
+      res.json({
+        ok: true, readOnly: true, sourceProvider: source.id, targetProvider: target.id,
+        generatedAt: new Date().toISOString(), sourceItems: sourceInventory.length, targetItems: targetInventory.length,
+        raw: { ...rawPlan.counts },
+        effective: { alreadyPresent, importedHistory, readyToImport: count("READY_TO_IMPORT"), rejectedLegal: count("REJECTED_LEGAL"), failedPermanent: count("FAILED_PERMANENT"), retryExhausted: count("RETRY_EXHAUSTED"), residualTentableReady: count("READY_TO_IMPORT") },
+        items: effectiveItems.map((item) => ({ ...item, infoHash: item.infoHash ? `${item.infoHash.slice(0, 8)}…${item.infoHash.slice(-6)}` : undefined })),
+        audit: audit.slice(0, 250).map((entry) => ({ ...entry, infoHash: `${entry.infoHash.slice(0, 8)}…${entry.infoHash.slice(-6)}` })),
+      });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || "Migration state unavailable" });
     }
   });
 

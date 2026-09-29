@@ -350,6 +350,44 @@ export function recordMigrationAudit(record: MigrationAuditRecord): void {
   }
 }
 
+export interface MigrationAuditEntry {
+  id: number;
+  sourceProvider: string;
+  targetProvider: string;
+  sourceProviderItemId?: string;
+  infoHash: string;
+  initialStatus: string;
+  revalidationStatus: string;
+  executionStatus: string;
+  targetProviderItemId?: string;
+  reason?: string;
+  retryCount: number;
+  importExecuted: boolean;
+  createdAt: string;
+}
+
+/** Read-only migration history used to reconcile provider state with outcomes. */
+export function listMigrationAudit(limit = 5000): MigrationAuditEntry[] {
+  try {
+    const rows = getDb().prepare(`SELECT id, source_provider, target_provider, source_provider_item_id, infohash,
+      initial_status, revalidation_status, execution_status, target_provider_item_id, reason,
+      retry_count, import_executed, created_at
+      FROM migration_audit ORDER BY created_at DESC, id DESC LIMIT ?`).all(Math.max(1, Math.min(limit, 10000))) as Array<Record<string, unknown>>;
+    return rows.map((row) => ({
+      id: Number(row.id), sourceProvider: String(row.source_provider), targetProvider: String(row.target_provider),
+      sourceProviderItemId: row.source_provider_item_id ? String(row.source_provider_item_id) : undefined,
+      infoHash: String(row.infohash), initialStatus: String(row.initial_status),
+      revalidationStatus: String(row.revalidation_status), executionStatus: String(row.execution_status),
+      targetProviderItemId: row.target_provider_item_id ? String(row.target_provider_item_id) : undefined,
+      reason: row.reason ? String(row.reason) : undefined, retryCount: Number(row.retry_count || 0),
+      importExecuted: Number(row.import_executed || 0) === 1, createdAt: String(row.created_at),
+    }));
+  } catch (error: any) {
+    console.error(`[${new Date().toISOString()}][db] migration audit read error: ${error?.message}`);
+    return [];
+  }
+}
+
 // ===========================================================================
 // Pruning
 // ===========================================================================

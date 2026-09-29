@@ -14,6 +14,9 @@ import {
   Magnet,
   ClipboardCheck,
   Layers3,
+  LibraryBig,
+  Archive,
+  Settings2,
 } from "lucide-react"
 
 import {
@@ -46,8 +49,10 @@ const navigation = [
       { name: "Browse Files", href: "/files", icon: FolderOpen },
       { name: "Search", href: "/search", icon: Search },
       { name: "Add Content", href: "/add", icon: Plus },
-      { name: "Organizer Review", href: "/review", icon: ClipboardCheck },
-      { name: "Version Manager", href: "/version-manager", icon: Layers3 },
+      { name: "Media Manager", href: "/media-manager", icon: Layers3 },
+      { name: "Library", href: "/media-manager/library?view=all", icon: LibraryBig },
+      { name: "Backup & Migration", href: "/media-manager/migration", icon: Archive },
+      { name: "Media Settings", href: "/media-manager/settings", icon: Settings2 },
     ],
   },
   {
@@ -82,7 +87,7 @@ export function AppSidebar() {
               <SidebarMenu>
                 {group.items.map((item) => (
                   <SidebarMenuItem key={item.href}>
-                    <SidebarMenuButton asChild isActive={pathname === item.href}>
+                    <SidebarMenuButton asChild isActive={pathname === item.href || (item.href.startsWith("/media-manager") && pathname.startsWith(item.href.split("?")[0]))}>
                       <Link href={item.href}>
                         <item.icon className="h-4 w-4" />
                         <span>{item.name}</span>
