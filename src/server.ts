@@ -299,11 +299,15 @@ export function startServer() {
       const importedHistory = new Set(audit.filter((entry) => entry.executionStatus === "IMPORTED").map((entry) => entry.infoHash)).size;
       const alreadyPresent = count("ALREADY_PRESENT") + count("ALREADY_PRESENT_EQUIVALENT_HASH") + count("IMPORTED");
       const jobs = aggregateMigrationJobs(audit.map((entry) => ({ id: entry.id, sourceProvider: entry.sourceProvider, targetProvider: entry.targetProvider, infoHash: entry.infoHash, executionStatus: entry.executionStatus, reason: entry.reason, createdAt: entry.createdAt })));
+      const effectiveByProviderItemId = Object.fromEntries(effectiveItems
+        .filter((item) => item.providerItemId)
+        .map((item) => [String(item.providerItemId), item.effectiveStatus]));
       res.json({
         ok: true, readOnly: true, sourceProvider: source.id, targetProvider: target.id,
         generatedAt: new Date().toISOString(), sourceItems: sourceInventory.length, targetItems: targetInventory.length,
         raw: { ...rawPlan.counts },
         effective: { alreadyPresent, importedHistory, readyToImport: count("READY_TO_IMPORT"), rejectedLegal: count("REJECTED_LEGAL"), failedPermanent: count("FAILED_PERMANENT"), retryExhausted: count("RETRY_EXHAUSTED"), residualTentableReady: count("READY_TO_IMPORT") },
+        effectiveByProviderItemId,
         jobs,
         items: effectiveItems.map((item) => ({ ...item, infoHash: item.infoHash ? `${item.infoHash.slice(0, 8)}…${item.infoHash.slice(-6)}` : undefined })),
         audit: audit.slice(0, 250).map((entry) => ({ ...entry, infoHash: `${entry.infoHash.slice(0, 8)}…${entry.infoHash.slice(-6)}` })),
