@@ -106,7 +106,7 @@ function retryableImportError(error: unknown): boolean {
   const status = Number((error as any)?.response?.status ?? (error as any)?.status);
   if ([400, 401, 403, 451].includes(status)) return false;
   const message = String((error as any)?.message || error || "").toLowerCase();
-  return status === 408 || status === 429 || status >= 500 || /timeout|timed out|network|econn|temporar/.test(message);
+  return status === 408 || status === 429 || status >= 500 || /timeout|timed out|network|econn|temporar|rate limit|rate limited|too many requests|retry in \d/.test(message);
 }
 
 function importErrorStatus(error: unknown): number | undefined {

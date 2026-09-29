@@ -120,4 +120,21 @@ describe("migration importer preview", () => {
     const serverResult = await executeMigrationImportBulk([{ source: "MANIFEST", index: 0, status: "READY_TO_IMPORT", infoHash: "3".repeat(40), reason: "ready" }], serverProvider, { targetInventory: () => serverProvider.listTorrents(), sleep: async () => undefined });
     expect(serverResult.systemicFailure?.status).toBe(503);
   });
+
+  test("retries provider rate-limit errors surfaced without an HTTP status", async () => {
+    let calls = 0;
+    const provider: any = {
+      isConfigured: () => true,
+      listTorrents: async () => [],
+      addMagnet: async () => {
+        calls++;
+        if (calls === 1) throw new Error("RealDebrid rate limited, retry in 1s");
+        return { id: "rate-message-ok" };
+      },
+    };
+    const result = await executeMigrationImportBulk([{ source: "MANIFEST", index: 0, status: "READY_TO_IMPORT", infoHash: "4".repeat(40), reason: "ready" }], provider, { targetInventory: () => provider.listTorrents(), sleep: async () => undefined });
+    expect(calls).toBe(2);
+    expect(result.imported).toBe(1);
+    expect(result.failedPermanent).toBe(0);
+  });
 });
