@@ -235,7 +235,7 @@ export function startServer() {
       const adapter = new SeerrAcquisitionAdapter();
       const previews = await Promise.all(needs.map(async (need) => {
         const preview = await adapter.preview(need);
-        recordAcquisitionAudit({ needId: need.id, identity: need.contentIdentity, profileId: need.missingProfileId, adapterId: preview.adapterId, phase: "PREVIEW", status: preview.status, detail: preview.mappingWarning });
+        recordAcquisitionAudit({ needId: need.id, identity: need.contentIdentity, profileId: need.missingProfileId, adapterId: preview.adapterId, phase: "PREVIEW", status: preview.status, providerRequestId: preview.providerRequestId, detail: [preview.providerStatusSource, preview.mappingWarning].filter(Boolean).join("; ") });
         return preview;
       }));
       return res.json({ ok: true, readOnly: true, mode: "dry-run", inventoryCount: versions.length, groupCount: groups.length, probe, needs, previews, adapter: await adapter.capabilities() });

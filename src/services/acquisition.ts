@@ -155,6 +155,8 @@ export interface AcquisitionPreview {
   requestedProfileName: string;
   providerStatus: string;
   providerMediaStatus?: string;
+  providerRequestId?: string;
+  providerStatusSource?: "MEDIA_STATUS" | "REQUEST_LOOKUP" | "BOTH";
   tvScope?: string;
   mappingWarning?: string;
   safe: boolean;

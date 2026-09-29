@@ -81,7 +81,7 @@ export class SeerrAcquisitionAdapter implements AcquisitionAdapter {
     };
   }
 
-  async status(need: AcquisitionNeed): Promise<{ status: ProviderStatus; providerRequestId?: string; detail?: string }> {
+  async status(need: AcquisitionNeed): Promise<{ status: ProviderStatus; providerRequestId?: string; detail?: string; source?: "MEDIA_STATUS" | "REQUEST_LOOKUP" | "BOTH" }> {
     if (!configured()) return { status: "CONFIGURATION_UNAVAILABLE", detail: "Seerr URL or authentication is not configured" };
     const id = providerId(need);
     if (!id) return { status: "MEDIA_NOT_FOUND", detail: "Current Seerr adapter requires a TMDb ID mapping" };
@@ -114,9 +114,9 @@ export class SeerrAcquisitionAdapter implements AcquisitionAdapter {
       const active = matching.find((item: any) => requestIsActive(item?.status));
       if (active) {
         const status = media === "AVAILABLE" || media === "PARTIALLY_AVAILABLE" ? media : requestStatus(active.status);
-        return { status, providerRequestId: active?.id !== undefined ? String(active.id) : undefined, detail: "Equivalent active Seerr request detected via request lookup" };
+        return { status, providerRequestId: active?.id !== undefined ? String(active.id) : undefined, source: media === "AVAILABLE" || media === "PARTIALLY_AVAILABLE" ? "BOTH" : "REQUEST_LOOKUP", detail: "Equivalent active Seerr request detected via request lookup" };
       }
-      return { status: media, providerRequestId: response.data?.request?.id ? String(response.data.request.id) : undefined };
+      return { status: media, providerRequestId: response.data?.request?.id ? String(response.data.request.id) : undefined, source: "MEDIA_STATUS" };
     } catch (error: any) {
       const status = Number(error?.response?.status);
       if (status === 404) return { status: "MEDIA_NOT_FOUND", detail: "Seerr media record was not found" };
@@ -155,6 +155,8 @@ export class SeerrAcquisitionAdapter implements AcquisitionAdapter {
       requestedProfileName: need.missingProfileName,
       providerStatus: current.status,
       providerMediaStatus: current.status,
+      providerRequestId: current.providerRequestId,
+      providerStatusSource: current.source,
       tvScope: need.mediaType === "tv" ? capabilities.tvScope : undefined,
       mappingWarning,
       safe: true,
@@ -180,7 +182,7 @@ export class SeerrAcquisitionAdapter implements AcquisitionAdapter {
       // media state or active request blocks the request and provides duplicate protection.
       const current = await this.status(need);
       if (current.status !== "NOT_REQUESTED") {
-        throw new Error(`Equivalent Seerr request/status detected: ${current.status}${current.providerRequestId ? ` (${current.providerRequestId})` : ""}`);
+        throw new Error(`Equivalent Seerr request/status detected by ${current.source || "MEDIA_STATUS"}: ${current.status}${current.providerRequestId ? ` (${current.providerRequestId})` : ""}`);
       }
 
       const response = await axios.post(`${baseUrl()}/request`, {
