@@ -54,6 +54,7 @@ export interface ResolutionResult {
   identityStatus: IdentityResolutionStatus;
   item?: MetadataItem;
   conflicts: IdentityConflict[];
+  descriptiveDisagreements: IdentityConflict[];
   confidence: number;
   reason: string;
   strongMatch?: boolean;
@@ -70,8 +71,9 @@ function itemIds(item: MetadataItem): Record<string, string> {
   return { ...(item.tmdbId ? { tmdbId: String(item.tmdbId) } : {}), ...(item.imdbId ? { imdbId: item.imdbId } : {}), ...(item.tvdbId ? { tvdbId: String(item.tvdbId) } : {}) };
 }
 
-function conflictsFor(items: MetadataItem[], version: VersionRecord, ignoreFilenameValues = false): IdentityConflict[] {
+function conflictsFor(items: MetadataItem[], version: VersionRecord, ignoreFilenameValues = false, suppressDescriptive = false): { conflicts: IdentityConflict[]; disagreements: IdentityConflict[] } {
   const conflicts: IdentityConflict[] = [];
+  const disagreements: IdentityConflict[] = [];
   const fields: Array<[string, (item: MetadataItem) => string | undefined, (identity: VersionRecord["fingerprint"]["identity"]) => string | undefined]> = [
     ["tmdbId", (item) => item.tmdbId, (identity) => identity.tmdbId],
     ["imdbId", (item) => item.imdbId, (identity) => identity.imdbId],
@@ -93,21 +95,35 @@ function conflictsFor(items: MetadataItem[], version: VersionRecord, ignoreFilen
         ? "PROVIDER_ID_MISMATCH"
         : sources.has("FILENAME") && sources.size > 1
           ? "FILENAME_PROVIDER_DISAGREEMENT"
-          : items.length > 1 && sources.size === 1 && sources.has("PLEX")
+        : items.length > 1 && sources.size === 1 && sources.has("PLEX")
             ? "MULTIPLE_PLEX_CANDIDATES"
+            : ["season", "episode"].includes(field)
+              ? "SEASON_EPISODE_MISMATCH"
             : sources.size > 1
               ? "CROSS_PROVIDER_DISAGREEMENT"
               : field === "title"
                 ? "TITLE_MISMATCH"
                 : field === "year"
                   ? "YEAR_MISMATCH"
-                  : ["season", "episode"].includes(field)
-                    ? "SEASON_EPISODE_MISMATCH"
-                    : "IDENTITY_FIELD_MISMATCH";
-      conflicts.push({ code, field, values: unique.map(([value, source]) => ({ value, source })) });
+                  : "IDENTITY_FIELD_MISMATCH";
+      const disagreement = { code, field, values: unique.map(([value, source]) => ({ value, source })) };
+      if (suppressDescriptive && ["title", "year"].includes(field)) disagreements.push(disagreement);
+      else conflicts.push(disagreement);
     }
   }
-  return conflicts;
+  return { conflicts, disagreements };
+}
+
+function hasStrongCanonicalAgreement(items: MetadataItem[], version: VersionRecord): boolean {
+  const identity = version.fingerprint.identity;
+  const fields: Array<["tmdbId" | "imdbId" | "tvdbId", Provenance | undefined]> = [
+    ["tmdbId", identity.provenance?.tmdbId], ["imdbId", identity.provenance?.imdbId], ["tvdbId", identity.provenance?.tvdbId],
+  ];
+  return fields.some(([field, provenance]) => {
+    const values = items.map((item) => item[field]).filter(Boolean).map(String);
+    if (provenance && provenance !== "FILENAME" && identity[field]) values.push(String(identity[field]));
+    return values.length > 0 && new Set(values).size === 1;
+  });
 }
 
 function mergeItems(items: MetadataItem[]): MetadataItem | undefined {
@@ -122,7 +138,7 @@ function mergeItems(items: MetadataItem[]): MetadataItem | undefined {
 }
 
 function matchCatalog(version: VersionRecord, catalog: MetadataCatalog): ResolutionResult {
-  if (catalog.status === "configuration_unavailable" || catalog.status === "unavailable" || catalog.status === "authentication_failed") return { status: catalog.status, identityStatus: "uncertain", conflicts: [], confidence: version.fingerprint.identity.confidence, reason: catalog.error || `${catalog.source} unavailable` };
+  if (catalog.status === "configuration_unavailable" || catalog.status === "unavailable" || catalog.status === "authentication_failed") return { status: catalog.status, identityStatus: "uncertain", conflicts: [], descriptiveDisagreements: [], confidence: version.fingerprint.identity.confidence, reason: catalog.error || `${catalog.source} unavailable` };
   const identity = version.fingerprint.identity;
   const versionIds = new Set([identity.tmdbId, identity.imdbId, identity.tvdbId].filter(Boolean).map(String));
   const byId = catalog.items.filter((item) => Object.values(itemIds(item)).some((value) => versionIds.has(value)));
@@ -130,11 +146,11 @@ function matchCatalog(version: VersionRecord, catalog: MetadataCatalog): Resolut
   const byPath = catalog.items.filter((item) => item.path && (normalPath(item.path) === pathValue || basename(item.path) === basename(pathValue)));
   const byKey = catalog.items.filter((item) => key(item.title, item.year, item.kind, item.season, item.episode) === key(identity.title, identity.year, identity.kind, identity.season, identity.episode));
   const candidates = byId.length ? byId : byPath.length ? byPath : byKey;
-  if (candidates.length > 1 && !byId.length && !byPath.length) return { status: "ambiguous", identityStatus: "uncertain", conflicts: [], confidence: Math.min(identity.confidence, 0.55), reason: `${catalog.source} returned multiple title/episode candidates` };
-  if (!candidates.length) return { status: "not_matched", identityStatus: "fallback", conflicts: [], confidence: identity.confidence, reason: `${catalog.source} had no matching item` };
+  if (candidates.length > 1 && !byId.length && !byPath.length) return { status: "ambiguous", identityStatus: "uncertain", conflicts: [], descriptiveDisagreements: [], confidence: Math.min(identity.confidence, 0.55), reason: `${catalog.source} returned multiple title/episode candidates` };
+  if (!candidates.length) return { status: "not_matched", identityStatus: "fallback", conflicts: [], descriptiveDisagreements: [], confidence: identity.confidence, reason: `${catalog.source} had no matching item` };
   const merged = mergeItems(candidates);
-  const conflicts = merged ? conflictsFor(candidates, version, Boolean(byId.length || byPath.length)) : [];
-  return { status: "matched", identityStatus: conflicts.length ? "conflict" : "resolved", item: merged, conflicts, confidence: conflicts.length ? Math.min(identity.confidence, 0.5) : 0.98, reason: conflicts.length ? `${catalog.source} match contains conflicting identifiers` : `${catalog.source} matched by provider ID, path or structured identity`, strongMatch: Boolean(byId.length || byPath.length) };
+  const result = merged ? conflictsFor(candidates, version, Boolean(byId.length || byPath.length), hasStrongCanonicalAgreement(candidates, version)) : { conflicts: [], disagreements: [] };
+  return { status: "matched", identityStatus: result.conflicts.length ? "conflict" : "resolved", item: merged, conflicts: result.conflicts, descriptiveDisagreements: result.disagreements, confidence: result.conflicts.length ? Math.min(identity.confidence, 0.5) : 0.98, reason: result.conflicts.length ? `${catalog.source} match contains conflicting identifiers` : `${catalog.source} matched by provider ID, path or structured identity`, strongMatch: Boolean(byId.length || byPath.length) };
 }
 
 function applyItem(version: VersionRecord, result: ResolutionResult): void {
@@ -174,6 +190,7 @@ function applyItem(version: VersionRecord, result: ResolutionResult): void {
   }
   identity.resolutionStatus = result.identityStatus;
   identity.conflicts = result.conflicts.length ? result.conflicts : undefined;
+  identity.descriptiveDisagreements = result.descriptiveDisagreements.length ? result.descriptiveDisagreements : undefined;
   identity.confidence = result.confidence;
   identity.source = "provider";
 }
@@ -199,7 +216,7 @@ async function tmdbLookup(version: VersionRecord, stats: MetadataStats, options:
   stats.tmdbResolutionAttempts++;
   if (!config.tmdbApiKey || !identity.title) {
     stats.tmdbConfigurationUnavailable++;
-    return { status: "configuration_unavailable", identityStatus: "uncertain", conflicts: [], confidence: identity.confidence, reason: "TMDb API key or title unavailable" };
+    return { status: "configuration_unavailable", identityStatus: "uncertain", conflicts: [], descriptiveDisagreements: [], confidence: identity.confidence, reason: "TMDb API key or title unavailable" };
   }
   const type = identity.kind === "episode" ? "tv" : "movie";
   const cacheKey = `tmdb:${type}:${normalizeMediaTitle(identity.title)}:${identity.year || ""}`;
@@ -208,7 +225,7 @@ async function tmdbLookup(version: VersionRecord, stats: MetadataStats, options:
   const cached = getCachedVersionManagerMetadata(cacheKey);
   if (cached) {
     stats.cacheHits++;
-    const result = { status: "matched" as const, identityStatus: "resolved" as const, item: cached, conflicts: [], confidence: 0.9, reason: "TMDb metadata cache hit" };
+    const result = { status: "matched" as const, identityStatus: "resolved" as const, item: cached, conflicts: [], descriptiveDisagreements: [], confidence: 0.9, reason: "TMDb metadata cache hit" };
     memo.set(cacheKey, result);
     return result;
   }
@@ -221,13 +238,13 @@ async function tmdbLookup(version: VersionRecord, stats: MetadataStats, options:
   else if (lookup.status === "configuration_unavailable") stats.tmdbConfigurationUnavailable++;
   if (lookup.status !== "matched" || !lookup.metadata) {
     if (/timed out/i.test(lookup.reason)) stats.tmdbTimeouts++;
-    const result: ResolutionResult = { status: lookup.status, identityStatus: (lookup.status === "ambiguous" || lookup.status === "configuration_unavailable" ? "uncertain" : "fallback") as IdentityResolutionStatus, conflicts: [], confidence: lookup.status === "ambiguous" ? Math.min(identity.confidence, 0.55) : identity.confidence, reason: lookup.reason };
+    const result: ResolutionResult = { status: lookup.status, identityStatus: (lookup.status === "ambiguous" || lookup.status === "configuration_unavailable" ? "uncertain" : "fallback") as IdentityResolutionStatus, conflicts: [], descriptiveDisagreements: [], confidence: lookup.status === "ambiguous" ? Math.min(identity.confidence, 0.55) : identity.confidence, reason: lookup.reason };
     memo.set(cacheKey, result);
     return result;
   }
   const metadata: MetadataItem = { title: lookup.metadata.title, year: lookup.metadata.year || identity.year, kind: type === "tv" ? "show" : "movie", tmdbId: lookup.metadata.tmdbId, imdbId: lookup.metadata.imdbId, tvdbId: lookup.metadata.tvdbId, originalLanguage: lookup.metadata.originalLanguage, source: "TMDB" };
   saveVersionManagerMetadataCache(cacheKey, "TMDB", metadata);
-  const result = { status: "matched" as const, identityStatus: "resolved" as const, item: metadata, conflicts: [], confidence: 0.9, reason: "TMDb metadata lookup" };
+  const result = { status: "matched" as const, identityStatus: "resolved" as const, item: metadata, conflicts: [], descriptiveDisagreements: [], confidence: 0.9, reason: "TMDb metadata lookup" };
   memo.set(cacheKey, result);
   return result;
 }
@@ -239,12 +256,14 @@ export function resolveVersionIdentity(version: VersionRecord, catalogs: Metadat
     const unavailable = results.find((result) => result.status === "configuration_unavailable" || result.status === "unavailable" || result.status === "authentication_failed");
     if (unavailable) return unavailable;
     const ambiguous = results.some((result) => result.status === "ambiguous");
-    return { status: ambiguous ? "ambiguous" : "not_matched", identityStatus: ambiguous ? "uncertain" : "fallback", conflicts: [], confidence: version.fingerprint.identity.confidence, reason: "No metadata source matched" };
+    return { status: ambiguous ? "ambiguous" : "not_matched", identityStatus: ambiguous ? "uncertain" : "fallback", conflicts: [], descriptiveDisagreements: [], confidence: version.fingerprint.identity.confidence, reason: "No metadata source matched" };
   }
   const items = matched.map((result) => result.item!);
   const strongMatch = matched.some((result) => result.strongMatch);
-  const conflicts = [...matched.flatMap((result) => result.conflicts), ...conflictsFor(items, version, strongMatch)];
-  return { status: "matched", identityStatus: conflicts.length ? "conflict" : "resolved", item: mergeItems(items), conflicts, confidence: conflicts.length ? 0.5 : Math.max(...matched.map((result) => result.confidence)), reason: conflicts.length ? "Metadata providers disagree" : "Metadata providers agree", strongMatch };
+  const cross = conflictsFor(items, version, strongMatch, hasStrongCanonicalAgreement(items, version));
+  const conflicts = [...matched.flatMap((result) => result.conflicts), ...cross.conflicts];
+  const descriptiveDisagreements = [...matched.flatMap((result) => result.descriptiveDisagreements), ...cross.disagreements];
+  return { status: "matched", identityStatus: conflicts.length ? "conflict" : "resolved", item: mergeItems(items), conflicts, descriptiveDisagreements, confidence: conflicts.length ? 0.5 : Math.max(...matched.map((result) => result.confidence)), reason: conflicts.length ? "Metadata providers disagree" : "Metadata providers agree", strongMatch };
 }
 
 export async function enrichVersionMetadata(versions: VersionRecord[], options: MetadataEnrichmentOptions = {}): Promise<MetadataStats> {

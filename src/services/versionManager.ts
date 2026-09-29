@@ -126,6 +126,7 @@ export interface MediaFingerprint {
     source: "filename" | "provider" | "unknown";
     resolutionStatus?: IdentityResolutionStatus;
     conflicts?: IdentityConflict[];
+    descriptiveDisagreements?: IdentityConflict[];
     provenance?: Record<string, Provenance>;
   };
   video: {

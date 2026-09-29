@@ -119,4 +119,88 @@ describe("version manager metadata identity", () => {
     invalidateVersionManagerMetadataCache("TMDB");
     expect(getCachedVersionManagerMetadata(cacheKey)).toBeUndefined();
   });
+
+  test("does not conflict on localized titles when canonical IDs agree", () => {
+    const item = version("Example.Movie.2020.mkv");
+    item.fingerprint.storage.path = "/media/example.mkv";
+    const result = resolveVersionIdentity(item, [
+      plex([{ title: "The Example", year: 2020, kind: "movie", tmdbId: "10", path: "/media/example.mkv", source: "PLEX" }]),
+      jellyfin([{ title: "L'esempio", year: 2020, kind: "movie", tmdbId: "10", path: "/media/example.mkv", source: "JELLYFIN" }]),
+    ]);
+    expect(result.identityStatus).toBe("resolved");
+    expect(result.conflicts).toHaveLength(0);
+    expect(result.descriptiveDisagreements.some((entry) => entry.field === "title")).toBe(true);
+  });
+
+  test("does not conflict on normalized or edition titles when canonical IDs agree", () => {
+    const item = version("Example.Movie.2020.mkv");
+    const result = resolveVersionIdentity(item, [
+      plex([{ title: "Example Movie", year: 2020, kind: "movie", tmdbId: "10", source: "PLEX" }]),
+      jellyfin([{ title: "Example Movie - Extended Edition", year: 2020, kind: "movie", tmdbId: "10", source: "JELLYFIN" }]),
+    ]);
+    expect(result.identityStatus).toBe("resolved");
+    expect(result.conflicts).toHaveLength(0);
+  });
+
+  test("ignores multiple weak Plex title candidates when another source has strong identity", () => {
+    const item = version("Example.Movie.2020.mkv");
+    const result = resolveVersionIdentity(item, [
+      plex([
+        { title: "Example Movie Release", year: 2020, kind: "movie", source: "PLEX" },
+        { title: "Example Movie Extended", year: 2020, kind: "movie", source: "PLEX" },
+      ]),
+      jellyfin([{ title: "Example Movie", year: 2020, kind: "movie", tmdbId: "10", source: "JELLYFIN" }]),
+    ]);
+    expect(result.identityStatus).toBe("resolved");
+    expect(result.conflicts).toHaveLength(0);
+  });
+
+  test("does not conflict when provider paths differ", () => {
+    const item = version("Example.Movie.2020.mkv");
+    const result = resolveVersionIdentity(item, [
+      plex([{ title: "Example Movie", year: 2020, kind: "movie", tmdbId: "10", path: "/plex/Example.mkv", source: "PLEX" }]),
+      jellyfin([{ title: "Example Movie", year: 2020, kind: "movie", tmdbId: "10", path: "/jellyfin/Example.mkv", source: "JELLYFIN" }]),
+    ]);
+    expect(result.identityStatus).toBe("resolved");
+  });
+
+  test("keeps strong canonical TMDb disagreement as conflict", () => {
+    const item = version("Example.Movie.2020.mkv");
+    item.fingerprint.storage.path = "/media/example.mkv";
+    const result = resolveVersionIdentity(item, [
+      plex([{ title: "Example Movie", year: 2020, kind: "movie", tmdbId: "10", path: "/media/example.mkv", source: "PLEX" }]),
+      jellyfin([{ title: "Example Movie", year: 2020, kind: "movie", tmdbId: "20", path: "/media/example.mkv", source: "JELLYFIN" }]),
+    ]);
+    expect(result.identityStatus).toBe("conflict");
+    expect(result.conflicts.some((entry) => entry.code === "PROVIDER_ID_MISMATCH")).toBe(true);
+  });
+
+  test("preserves Flow-like conflict/review behavior", () => {
+    const item = version("Flow.2024.mkv");
+    item.fingerprint.storage.path = "/media/flow.mkv";
+    const result = resolveVersionIdentity(item, [
+      plex([{ title: "Flow - Un mondo da salvare", year: 2024, kind: "movie", tmdbId: "823219", imdbId: "tt4772188", path: "/media/flow.mkv", source: "PLEX" }]),
+      jellyfin([{ title: "FLOW", year: 2024, kind: "movie", tmdbId: "1281775", imdbId: "tt4772188", path: "/media/flow.mkv", source: "JELLYFIN" }]),
+    ]);
+    expect(result.identityStatus).toBe("conflict");
+    expect(result.conflicts.find((entry) => entry.field === "tmdbId")?.code).toBe("PROVIDER_ID_MISMATCH");
+  });
+
+  test("keeps season and episode incompatibility conservative despite agreeing IDs", () => {
+    const item = version("Example.Show.S02E03.mkv");
+    item.fingerprint.storage.path = "/media/example-s02e03.mkv";
+    const result = resolveVersionIdentity(item, [
+      plex([{ title: "Example Show", year: 2020, kind: "episode", season: 2, episode: 3, tmdbId: "10", path: "/media/example-s02e03.mkv", source: "PLEX" }]),
+      jellyfin([{ title: "Esempio", year: 2020, kind: "episode", season: 2, episode: 4, tmdbId: "10", path: "/media/example-s02e03.mkv", source: "JELLYFIN" }]),
+    ]);
+    expect(result.identityStatus).toBe("conflict");
+    expect(result.conflicts.some((entry) => entry.code === "SEASON_EPISODE_MISMATCH")).toBe(true);
+  });
+
+  test("continues title/year fallback when no canonical IDs exist", () => {
+    const item = version("Example.Movie.2020.mkv");
+    const result = resolveVersionIdentity(item, [jellyfin([{ title: "Example Movie", year: 2020, kind: "movie", source: "JELLYFIN" }])]);
+    expect(result.identityStatus).toBe("resolved");
+    expect(result.item?.title).toBe("Example Movie");
+  });
 });
