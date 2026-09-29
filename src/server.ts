@@ -34,10 +34,10 @@ import { getBlacklistEntries, getBlacklistCount, addToBlacklist, removeFromBlack
 import { tokenRotator } from "./core/tokenRotator";
 import { decideOrganizerReview, filterOrganizerReviewsByParserStatus, listOrganizerReviewAudit, listOrganizerReviews, retryOrganizerReview, validateReviewOverride } from "./services/organizerReview";
 import { browseMountedFilesystem, FilesystemBrowserError } from "./core/filesystemBrowser";
-import { evaluateVersionGroups, fingerprintTorrent, validateRule } from "./services/versionManager";
+import { evaluateVersionGroups, fingerprintTorrent, validateRule, versionManagerPolicyHash } from "./services/versionManager";
 import { deriveAcquisitionNeeds } from "./services/acquisition";
 import { SeerrAcquisitionAdapter } from "./services/seerrAcquisitionAdapter";
-import { getLatestVersionManagerScan, getVersionManagerPolicy, getVersionProfiles, saveVersionManagerPolicy, saveVersionManagerScan, saveVersionProfiles } from "./services/versionManagerStore";
+import { getLatestVersionManagerScan, getVersionManagerPolicy, getVersionManagerPolicyHash, getVersionProfiles, saveVersionManagerPolicy, saveVersionManagerPreviewAudit, saveVersionManagerScan, saveVersionProfiles } from "./services/versionManagerStore";
 import { probeVersionRecords } from "./services/versionManagerProbe";
 import { enrichVersionMetadata } from "./services/versionManagerMetadata";
 import { exportMigrationLibrary, normalizeMigrationExportMode } from "./services/migrationExporter";
@@ -191,6 +191,7 @@ export function startServer() {
       mode: "dry-run",
       deleteExecutor: "not_implemented",
       policy: getVersionManagerPolicy(),
+      policyHash: getVersionManagerPolicyHash(),
       profiles: getVersionProfiles(),
       latestScan: getLatestVersionManagerScan() || null,
     });
@@ -212,9 +213,41 @@ export function startServer() {
       const policy = getVersionManagerPolicy();
       const groups = evaluateVersionGroups(versions, profiles, policy);
       const scanId = saveVersionManagerScan(groups, profiles);
-      res.json({ ok: true, mode: "dry-run", scanId, inventoryCount: versions.length, groupCount: groups.length, probe, metadata, groups });
+      res.json({ ok: true, mode: "dry-run", scanId, policyHash: versionManagerPolicyHash(policy), inventoryCount: versions.length, groupCount: groups.length, probe, metadata, groups });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message || "Version Manager preview failed" });
+    }
+  });
+
+  /** Read-only policy evaluation intended for cleanup review. It never calls provider delete. */
+  app.get("/api/version-manager/delete-preview", async (_req, res) => {
+    try {
+      const versions = (await Promise.all(registry.configured().map(async (provider) => {
+        const torrents = await provider.listTorrents();
+        return torrents.flatMap((torrent) => fingerprintTorrent(torrent, provider.id));
+      }))).flat();
+      await probeVersionRecords(versions);
+      await enrichVersionMetadata(versions);
+      const profiles = getVersionProfiles();
+      const policy = getVersionManagerPolicy();
+      const groups = evaluateVersionGroups(versions, profiles, policy);
+      const versionsFlat = groups.flatMap((group) => group.versions);
+      const counts = {
+        contents: groups.length,
+        versionGroups: groups.length,
+        versions: versionsFlat.length,
+        KEEP: versionsFlat.filter((version) => version.decision === "KEEP").length,
+        DELETE_CANDIDATE: versionsFlat.filter((version) => version.decision === "DELETE_CANDIDATE").length,
+        REVIEW: versionsFlat.filter((version) => version.decision === "REVIEW").length,
+        primaryMissing: groups.filter((group) => group.profileStatuses?.some((status) => status.profileId === "primary" && !status.satisfied)).length,
+        remoteMissing: policy.enableRemote ? groups.filter((group) => group.remote?.status === "REMOTE_MISSING").length : 0,
+      };
+      const evaluatedAt = new Date().toISOString();
+      const policyHash = versionManagerPolicyHash(policy);
+      saveVersionManagerPreviewAudit({ policyHash, evaluatedAt, contentCount: counts.contents, versionGroupCount: counts.versionGroups, versionCount: counts.versions, keepCount: counts.KEEP, deleteCandidateCount: counts.DELETE_CANDIDATE, reviewCount: counts.REVIEW, primaryMissing: counts.primaryMissing, remoteMissing: counts.remoteMissing });
+      res.json({ ok: true, readOnly: true, mode: "dry-run", deleteExecutor: "not_implemented", evaluatedAt, policyVersion: policy.policyVersion || "1", policyHash, counts, groups });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || "Delete preview failed" });
     }
   });
 
@@ -445,7 +478,16 @@ export function startServer() {
     try {
       if (!Array.isArray(req.body?.profiles) || req.body.profiles.length === 0) return res.status(400).json({ ok: false, error: "profiles must be a non-empty array" });
       const profiles = req.body.profiles.map((profile: any) => ({ ...profile, hardRequirements: profile.hardRequirements ? validateRule(profile.hardRequirements) : undefined }));
-      const policy = { enableRemote: req.body.policy?.enableRemote === true, acquireMissingRemote: req.body.policy?.acquireMissingRemote === true };
+      const policy = {
+        enableRemote: req.body.policy?.enableRemote === true,
+        acquireMissingRemote: req.body.policy?.acquireMissingRemote === true,
+        policyVersion: typeof req.body.policy?.policyVersion === "string" ? req.body.policy.policyVersion : "1",
+        safety: {
+          requireRecoverableBeforeDelete: req.body.policy?.safety?.requireRecoverableBeforeDelete !== false,
+          allowDeleteWhenIdentityUncertain: req.body.policy?.safety?.allowDeleteWhenIdentityUncertain === true,
+          allowDeleteWhenMetadataIncomplete: req.body.policy?.safety?.allowDeleteWhenMetadataIncomplete === true,
+        },
+      };
       saveVersionProfiles(profiles);
       saveVersionManagerPolicy(policy);
       res.json({ ok: true, profiles: getVersionProfiles(), policy });

@@ -130,4 +130,42 @@ describe("version manager", () => {
     const [group] = evaluateVersionGroups([version], [quality, remote], remotePolicy);
     expect(group.remote?.status).toBe("REMOTE_MISSING");
   });
+
+  test("keeps audio and subtitle requirements distinct and supports extended operators", () => {
+    const [version] = fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.ITA.mkv", 10_000), "alldebrid");
+    version.fingerprint.subtitles = [{ language: "eng" }];
+    const audioRule = validateRule({ op: "COMPARE", field: "audioLanguage", operator: "contains", value: "ita" });
+    const subtitleRule = validateRule({ op: "COMPARE", field: "subtitleLanguage", operator: "contains", value: "eng" });
+    expect(evaluateRule(audioRule, version)).toBe(true);
+    expect(evaluateRule(subtitleRule, version)).toBe(true);
+    const audioPolicy = profile({ languagePolicy: { required: { values: ["eng"], mode: "ALL" }, preferred: [], original: false, scope: "AUDIO" } });
+    const subtitlePolicy = profile({ languagePolicy: { required: { values: ["eng"], mode: "ALL" }, preferred: [], original: false, scope: "SUBTITLE" } });
+    expect(evaluateVersionGroups([version], [audioPolicy])[0].versions[0].decision).toBe("REVIEW");
+    expect(evaluateVersionGroups([version], [subtitlePolicy])[0].versions[0].decision).toBe("KEEP");
+  });
+
+  test("does not let a hard requirement failure be compensated by scoring", () => {
+    const [version] = fingerprintTorrent(torrent("Example.Movie.2025.2160p.WEB-DL.ITA.mkv", 10_000), "alldebrid");
+    const configured = profile({ scoring: { resolution: 10000 }, hardRequirements: { op: "COMPARE", field: "resolution", operator: "equals", value: "1080p" } });
+    const evaluation = evaluateVersionGroups([version], [configured])[0].versions[0];
+    expect(evaluation.decision).toBe("REVIEW");
+    expect(evaluation.evaluations[0].score).toBeUndefined();
+  });
+
+  test("requires recoverability before DELETE_CANDIDATE", () => {
+    const first = fingerprintTorrent(torrent("Example.Movie.2025.2160p.REMUX.ITA.mkv", 10_000), "alldebrid")[0];
+    const second = fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.ITA.mkv", 8_000), "alldebrid")[0];
+    first.fingerprint.storage.infoHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const group = evaluateVersionGroups([first, second], [profile()], { enableRemote: false, acquireMissingRemote: false })[0];
+    expect(group.versions.some((version) => version.decision === "DELETE_CANDIDATE")).toBe(false);
+    expect(group.versions.some((version) => version.reasons.some((reason) => reason.code === "recoverability_required"))).toBe(true);
+  });
+
+  test("records profile ownership when one version wins multiple profiles", () => {
+    const primary = profile({ languagePolicy: { required: { values: [], mode: "ALL" }, preferred: [], original: false } });
+    const remote = profile({ id: "remote", name: "REMOTE", target: "DIRECT_PLAY", preferredResolution: "1080p", languagePolicy: { required: { values: [], mode: "ALL" }, preferred: [], original: false } });
+    const [group] = evaluateVersionGroups(fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.ITA.mkv", 10_000), "alldebrid"), [primary, remote], remotePolicy);
+    const kept = group.versions.find((version) => version.decision === "KEEP");
+    expect(kept?.satisfiesProfiles).toEqual(["primary", "remote"]);
+  });
 });

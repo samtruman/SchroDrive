@@ -219,6 +219,19 @@ function runMigrations(database: Database): void {
       policy_json TEXT NOT NULL,
       updated_at TEXT NOT NULL
     )`,
+    `CREATE TABLE IF NOT EXISTS version_manager_preview_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      policy_hash TEXT NOT NULL,
+      evaluated_at TEXT NOT NULL,
+      content_count INTEGER NOT NULL,
+      version_group_count INTEGER NOT NULL,
+      version_count INTEGER NOT NULL,
+      keep_count INTEGER NOT NULL,
+      delete_candidate_count INTEGER NOT NULL,
+      review_count INTEGER NOT NULL,
+      primary_missing INTEGER NOT NULL,
+      remote_missing INTEGER NOT NULL
+    )`,
     `CREATE TABLE IF NOT EXISTS version_manager_items (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       scan_id TEXT NOT NULL,

@@ -22,7 +22,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 
 type View = "overview" | "library" | "migration" | "settings";
-type Profile = { id: string; name: string; enabled: boolean };
+type Profile = { id: string; name: string; enabled: boolean; priority?: number; preferredResolution?: string; languagePolicy?: any; hardRequirements?: any };
 
 const tone: Record<
   string,
@@ -398,6 +398,10 @@ function Library() {
     "/api/version-manager/preview",
     preset === "all",
   );
+  const deletePreview = useJson<any>(
+    "/api/version-manager/delete-preview",
+    preset === "delete-preview",
+  );
   const missing = useJson<any>(
     "/api/version-manager/missing",
     preset === "missing",
@@ -496,8 +500,11 @@ function Library() {
         >
           <Link href="/media-manager/library?view=review">Review</Link>
         </Button>
+        <Button asChild variant={preset === "delete-preview" ? "default" : "outline"} size="sm">
+          <Link href="/media-manager/library?view=delete-preview">Delete Preview</Link>
+        </Button>
       </div>
-      {preset !== "review" && (
+      {preset !== "review" && preset !== "delete-preview" && (
         <div className="grid gap-2 rounded-lg border p-3 sm:grid-cols-2 lg:grid-cols-5">
           <div className="relative">
             <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -549,6 +556,37 @@ function Library() {
             <option value="delete_candidate">DELETE_CANDIDATE</option>
           </select>
         </div>
+      )}
+      {preset === "delete-preview" && (
+        <>
+          <Card className="border-amber-500/50">
+            <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+              <div>
+                <p className="font-semibold">Delete Preview · read-only</p>
+                <p className="text-sm text-muted-foreground">Policy evaluation only. No provider delete operation is available.</p>
+              </div>
+              <StatusBadge value="DRY RUN" />
+            </CardContent>
+          </Card>
+          <ErrorBox error={deletePreview.error} />
+          {deletePreview.loading ? <p className="text-sm text-muted-foreground">Evaluating policy…</p> : (
+            <>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+                {Object.entries(deletePreview.data?.counts || {}).map(([label, value]) => <Stat key={label} label={label.replaceAll("_", " ")} value={String(value)} />)}
+              </div>
+              <div className="space-y-3">
+                {(deletePreview.data?.groups || []).slice(0, 200).map((group: any, index: number) => (
+                  <Card key={group.id || index} className="cursor-pointer hover:border-primary/50" onClick={() => setSelected(group)}>
+                    <CardContent className="space-y-3 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="font-medium">{group.identity?.title || "Unidentified content"}</p><p className="text-xs text-muted-foreground">{group.identity?.year || "—"} · {group.versions?.length || 0} versions · policy {deletePreview.data.policyHash}</p></div><StatusBadge value={group.versions?.some((v: any) => v.decision === "DELETE_CANDIDATE") ? "DELETE_CANDIDATE" : group.versions?.some((v: any) => v.decision === "REVIEW") ? "REVIEW" : "KEEP"} /></div>
+                      <div className="grid gap-2 md:grid-cols-2">{(group.versions || []).map((version: any) => <div key={version.id} className="rounded border p-2 text-xs"><div className="flex justify-between"><StatusBadge value={version.decision} /><span>{version.fingerprint?.storage?.provider || "provider"}</span></div><p className="mt-1 text-muted-foreground">{version.reasons?.map((reason: any) => reason.message).join("; ") || "No explanation"}</p><p className="text-muted-foreground">recoverability: {version.fingerprint?.storage?.infoHash ? "YES" : "UNKNOWN"}</p></div>)}</div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </>
+          )}
+        </>
       )}
       {preset === "all" && (
         <>
@@ -1166,10 +1204,12 @@ function Migration() {
 function SettingsView() {
   const status = useJson<any>("/api/version-manager/status");
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [policy, setPolicy] = useState<any>({ enableRemote: false, acquireMissingRemote: false, safety: { requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false } });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState("");
   useEffect(() => {
     if (status.data?.profiles) setProfiles(status.data.profiles);
+    if (status.data?.policy) setPolicy(status.data.policy);
   }, [status.data]);
   async function save() {
     setSaving(true);
@@ -1178,7 +1218,7 @@ function SettingsView() {
       const response = await fetch("/api/version-manager/profiles", {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ profiles, policy: status.data?.policy || {} }),
+        body: JSON.stringify({ profiles, policy }),
       });
       if (!response.ok) throw new Error("Unable to save profiles");
       setSaved("Saved");
@@ -1197,10 +1237,10 @@ function SettingsView() {
       />
       <div className="flex flex-wrap gap-2">
         <Button>Profiles</Button>
-        <Button variant="outline">Languages</Button>
-        <Button variant="outline">Rules</Button>
-        <Button variant="outline">Acquisition</Button>
-        <Button variant="outline">Safety</Button>
+        <Button variant="outline" onClick={() => document.getElementById("media-manager-languages")?.scrollIntoView({ behavior: "smooth" })}>Languages</Button>
+        <Button variant="outline" onClick={() => document.getElementById("media-manager-rules")?.scrollIntoView({ behavior: "smooth" })}>Rules</Button>
+        <Button variant="outline" onClick={() => document.getElementById("media-manager-acquisition")?.scrollIntoView({ behavior: "smooth" })}>Acquisition</Button>
+        <Button variant="outline" onClick={() => document.getElementById("media-manager-safety")?.scrollIntoView({ behavior: "smooth" })}>Safety</Button>
       </div>
       <Card>
         <CardHeader>
@@ -1213,12 +1253,15 @@ function SettingsView() {
               key={profile.id}
             >
               <div>
-                <p className="font-medium">{profile.name || profile.id}</p>
+                <input className="rounded border bg-background p-1 font-medium" value={profile.name || profile.id} onChange={(event) => setProfiles((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item))} aria-label={`${profile.id} name`} />
                 <p className="text-xs text-muted-foreground">
                   VersionProfile · requirements remain extensible
                 </p>
               </div>
-              <label className="flex items-center gap-2 text-sm">
+              <div className="flex flex-wrap items-center gap-3 text-sm">
+                <label>Priority <input className="ml-1 w-16 rounded border bg-background p-1" type="number" value={profile.priority ?? 0} onChange={(event) => setProfiles((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, priority: Number(event.target.value) } : item))} /></label>
+                <label>Resolution <input className="ml-1 w-20 rounded border bg-background p-1" value={profile.preferredResolution || ""} onChange={(event) => setProfiles((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, preferredResolution: event.target.value } : item))} /></label>
+                <label>
                 <input
                   type="checkbox"
                   checked={profile.enabled}
@@ -1233,7 +1276,8 @@ function SettingsView() {
                   }
                 />
                 Enabled
-              </label>
+                </label>
+              </div>
             </div>
           ))}
           <div className="flex items-center gap-3">
@@ -1246,28 +1290,36 @@ function SettingsView() {
           </div>
         </CardContent>
       </Card>
+      <Card id="media-manager-languages">
+        <CardHeader><CardTitle className="text-base">Languages</CardTitle></CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <p className="text-muted-foreground">Language rules are profile-scoped. Audio and subtitles remain distinct; ORIGINAL is resolved from identity metadata.</p>
+          {profiles.map((profile, index) => <div key={profile.id} className="grid gap-2 rounded border p-3 md:grid-cols-4">
+            <span className="font-medium">{profile.name || profile.id}</span>
+            <input className="rounded border bg-background p-2" placeholder="required: ita, eng" value={(profile.languagePolicy?.required?.values || []).join(", ")} onChange={(event) => setProfiles((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, languagePolicy: { ...(item.languagePolicy || {}), required: { ...(item.languagePolicy?.required || {}), values: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) } } } : item))} />
+            <select className="rounded border bg-background p-2" value={profile.languagePolicy?.required?.mode || "ALL"} onChange={(event) => setProfiles((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, languagePolicy: { ...(item.languagePolicy || {}), required: { ...(item.languagePolicy?.required || {}), mode: event.target.value } } } : item))}><option>ALL</option><option>ANY</option></select>
+            <select className="rounded border bg-background p-2" value={profile.languagePolicy?.scope || "AUDIO"} onChange={(event) => setProfiles((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, languagePolicy: { ...(item.languagePolicy || {}), scope: event.target.value } } : item))}><option>AUDIO</option><option>SUBTITLE</option><option>AUDIO_OR_SUBTITLE</option></select>
+          </div>)}
+        </CardContent>
+      </Card>
+      <Card id="media-manager-rules">
+        <CardHeader><CardTitle className="text-base">Rules</CardTitle></CardHeader>
+        <CardContent className="space-y-2 text-sm"><p className="text-muted-foreground">Hard requirements use the persisted nested AND/OR/NOT rule tree. Configure advanced nested rules through the API-compatible model; evaluation remains fail-closed.</p>{profiles.map((profile) => <details key={profile.id} className="rounded border p-3"><summary className="cursor-pointer font-medium">{profile.name || profile.id} hard requirements</summary><pre className="mt-2 overflow-auto text-xs text-muted-foreground">{JSON.stringify(profile.hardRequirements || { op: "AND", children: [] }, null, 2)}</pre></details>)}</CardContent>
+      </Card>
+      <Card id="media-manager-acquisition">
+        <CardHeader><CardTitle className="text-base">Acquisition</CardTitle></CardHeader>
+        <CardContent className="space-y-2 text-sm"><p>Acquisition execution remains disabled for this policy milestone.</p><p className="text-muted-foreground">Seerr credentials stay in global Settings and are not duplicated here.</p><Link className="text-primary" href="/settings">Open global provider settings <ChevronRight className="inline h-4 w-4" /></Link></CardContent>
+      </Card>
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Acquisition</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            <p>Missing-profile evaluation remains profile-aware.</p>
-            <p>Seerr credentials are managed in global Settings.</p>
-            <Link className="text-primary" href="/settings">
-              Open global provider settings{" "}
-              <ChevronRight className="inline h-4 w-4" />
-            </Link>
-          </CardContent>
-        </Card>
-        <Card>
+        <Card id="media-manager-safety">
           <CardHeader>
             <CardTitle className="text-base">Safety</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
-            <p>
-              <StatusBadge value="DRY RUN" /> Delete disabled / not implemented.
-            </p>
+            <p><StatusBadge value="DRY RUN" /> Delete disabled / not implemented.</p>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={policy.safety?.requireRecoverableBeforeDelete !== false} onChange={(event) => setPolicy((current: any) => ({ ...current, safety: { ...current.safety, requireRecoverableBeforeDelete: event.target.checked } }))} /> Require recoverability before candidate</label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={policy.safety?.allowDeleteWhenIdentityUncertain === true} onChange={(event) => setPolicy((current: any) => ({ ...current, safety: { ...current.safety, allowDeleteWhenIdentityUncertain: event.target.checked } }))} /> Allow uncertain identity (not recommended)</label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={policy.safety?.allowDeleteWhenMetadataIncomplete === true} onChange={(event) => setPolicy((current: any) => ({ ...current, safety: { ...current.safety, allowDeleteWhenMetadataIncomplete: event.target.checked } }))} /> Allow incomplete metadata (not recommended)</label>
             <p className="text-muted-foreground">
               Recoverability requirements remain fail-closed.
             </p>

@@ -1,17 +1,54 @@
 import { getDb } from "../core/db";
-import { defaultVersionManagerPolicy, defaultVersionProfiles, validateRule, type VersionGroup, type VersionManagerPolicy, type VersionProfile } from "./versionManager";
+import { defaultVersionManagerPolicy, defaultVersionProfiles, validateRule, versionManagerPolicyHash, type VersionGroup, type VersionManagerPolicy, type VersionProfile } from "./versionManager";
+
+function normalizePolicy(policy: Partial<VersionManagerPolicy>): VersionManagerPolicy {
+  return {
+    enableRemote: policy.enableRemote === true,
+    acquireMissingRemote: policy.acquireMissingRemote === true,
+    safety: {
+      requireRecoverableBeforeDelete: policy.safety?.requireRecoverableBeforeDelete ?? defaultVersionManagerPolicy.safety!.requireRecoverableBeforeDelete,
+      allowDeleteWhenIdentityUncertain: policy.safety?.allowDeleteWhenIdentityUncertain ?? defaultVersionManagerPolicy.safety!.allowDeleteWhenIdentityUncertain,
+      allowDeleteWhenMetadataIncomplete: policy.safety?.allowDeleteWhenMetadataIncomplete ?? defaultVersionManagerPolicy.safety!.allowDeleteWhenMetadataIncomplete,
+    },
+    policyVersion: policy.policyVersion || defaultVersionManagerPolicy.policyVersion,
+  };
+}
 
 export function getVersionManagerPolicy(): VersionManagerPolicy {
   const row = getDb().prepare("SELECT policy_json FROM version_manager_policy WHERE id = 'default'").get() as { policy_json: string } | undefined;
   if (!row) return { ...defaultVersionManagerPolicy };
   try {
     const policy = JSON.parse(row.policy_json) as Partial<VersionManagerPolicy>;
-    return { enableRemote: policy.enableRemote === true, acquireMissingRemote: policy.acquireMissingRemote === true };
+    return normalizePolicy(policy);
   } catch { return { ...defaultVersionManagerPolicy }; }
 }
 
 export function saveVersionManagerPolicy(policy: VersionManagerPolicy): void {
-  getDb().prepare("INSERT OR REPLACE INTO version_manager_policy (id, policy_json, updated_at) VALUES ('default', ?, ?)").run(JSON.stringify({ enableRemote: policy.enableRemote === true, acquireMissingRemote: policy.acquireMissingRemote === true }), new Date().toISOString());
+  getDb().prepare("INSERT OR REPLACE INTO version_manager_policy (id, policy_json, updated_at) VALUES ('default', ?, ?)").run(JSON.stringify(normalizePolicy(policy)), new Date().toISOString());
+}
+
+export function getVersionManagerPolicyHash(): string {
+  return versionManagerPolicyHash(getVersionManagerPolicy());
+}
+
+export interface VersionManagerPreviewAudit {
+  policyHash: string;
+  evaluatedAt: string;
+  contentCount: number;
+  versionGroupCount: number;
+  versionCount: number;
+  keepCount: number;
+  deleteCandidateCount: number;
+  reviewCount: number;
+  primaryMissing: number;
+  remoteMissing: number;
+}
+
+export function saveVersionManagerPreviewAudit(audit: VersionManagerPreviewAudit): void {
+  getDb().prepare(`INSERT INTO version_manager_preview_audit
+    (policy_hash, evaluated_at, content_count, version_group_count, version_count, keep_count, delete_candidate_count, review_count, primary_missing, remote_missing)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(audit.policyHash, audit.evaluatedAt, audit.contentCount, audit.versionGroupCount, audit.versionCount, audit.keepCount, audit.deleteCandidateCount, audit.reviewCount, audit.primaryMissing, audit.remoteMissing);
 }
 
 export function getVersionProfiles(): VersionProfile[] {

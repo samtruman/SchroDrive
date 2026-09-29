@@ -1,5 +1,6 @@
 import type { TorrentInfo } from "../providers";
 import { normalizeMediaTitle, parseMediaFilename } from "./mediaParser";
+import { createHash } from "node:crypto";
 
 export type VersionDecision = "KEEP" | "DELETE_CANDIDATE" | "REVIEW";
 export type VersionTarget = "QUALITY" | "DIRECT_PLAY" | string;
@@ -8,6 +9,14 @@ export type LanguageMode = "ANY" | "ALL";
 export interface VersionManagerPolicy {
   enableRemote: boolean;
   acquireMissingRemote: boolean;
+  safety?: SafetyPolicy;
+  policyVersion?: string;
+}
+
+export interface SafetyPolicy {
+  requireRecoverableBeforeDelete: boolean;
+  allowDeleteWhenIdentityUncertain: boolean;
+  allowDeleteWhenMetadataIncomplete: boolean;
 }
 
 export interface AcquisitionIntent {
@@ -29,12 +38,15 @@ export interface LanguagePolicy {
   required: { values: string[]; mode: LanguageMode };
   preferred: string[];
   original: boolean;
+  scope?: "AUDIO" | "SUBTITLE" | "AUDIO_OR_SUBTITLE";
 }
 
 export interface VersionProfile {
   id: string;
   name: string;
   enabled: boolean;
+  description?: string;
+  priority?: number;
   target: VersionTarget;
   preferredResolution: string;
   languagePolicy: LanguagePolicy;
@@ -44,6 +56,8 @@ export interface VersionProfile {
   hardRequirements?: RuleNode;
   maxBitrate?: number;
   maxSizeBytes?: number;
+  scoring?: Record<string, number>;
+  acquisitionBehavior?: "AUTOMATIC" | "APPROVAL_REQUIRED" | "DISABLED";
 }
 
 export type RuleNode =
@@ -53,9 +67,9 @@ export type RuleNode =
   | { op: "IN"; field: string; values: unknown[] }
   | { op: "HAS"; field: string; value: unknown };
 
-type CompareOperator = "eq" | "neq" | "gt" | "gte" | "lt" | "lte";
+type CompareOperator = "eq" | "neq" | "gt" | "gte" | "lt" | "lte" | "equals" | "not_equals" | "greater_than" | "greater_or_equal" | "less_than" | "less_or_equal" | "contains" | "not_contains" | "exists" | "not_exists";
 
-const RULE_FIELDS = new Set(["resolution", "source", "codec", "bitrate", "size", "audioCodec", "audioLanguage", "channels", "profileEligible"]);
+const RULE_FIELDS = new Set(["resolution", "source", "codec", "bitrate", "size", "fileSize", "audioCodec", "audioLanguage", "subtitleLanguage", "channels", "atmos", "hdr", "dolbyVision", "container", "originalLanguage", "identityConfidence", "mediaType", "profileEligible"]);
 
 export function validateRule(node: unknown, depth = 0): RuleNode {
   if (depth > 8 || !node || typeof node !== "object" || Array.isArray(node)) throw new Error("Invalid version rule");
@@ -66,7 +80,7 @@ export function validateRule(node: unknown, depth = 0): RuleNode {
     return { op, children: value.children.map((child) => validateRule(child, depth + 1)) };
   }
   if (op === "NOT") return { op, child: validateRule(value.child, depth + 1) };
-  if (op === "COMPARE" && RULE_FIELDS.has(String(value.field)) && ["eq", "neq", "gt", "gte", "lt", "lte"].includes(String(value.operator))) {
+  if (op === "COMPARE" && RULE_FIELDS.has(String(value.field)) && ["eq", "neq", "gt", "gte", "lt", "lte", "equals", "not_equals", "greater_than", "greater_or_equal", "less_than", "less_or_equal", "contains", "not_contains", "exists", "not_exists"].includes(String(value.operator))) {
     return { op, field: String(value.field), operator: value.operator as CompareOperator, value: value.value };
   }
   if (op === "IN" && RULE_FIELDS.has(String(value.field)) && Array.isArray(value.values)) return { op, field: String(value.field), values: value.values };
@@ -84,7 +98,16 @@ function ruleField(version: VersionRecord, field: string, profileEligible = true
     size: fingerprint.storage.size,
     audioCodec: fingerprint.audio[0]?.codec,
     audioLanguage: fingerprint.audio.map((stream) => stream.language),
+    subtitleLanguage: fingerprint.subtitles.map((stream) => stream.language),
     channels: fingerprint.audio[0]?.channels,
+    atmos: fingerprint.audio.some((stream) => stream.atmos),
+    hdr: Boolean(fingerprint.video.hdr10 || fingerprint.video.hdr10Plus || fingerprint.video.dolbyVision),
+    dolbyVision: fingerprint.video.dolbyVision,
+    container: fingerprint.video.container,
+    fileSize: fingerprint.storage.size,
+    originalLanguage: fingerprint.identity.originalLanguage,
+    identityConfidence: fingerprint.identity.confidence,
+    mediaType: fingerprint.identity.kind,
     profileEligible,
   } as Record<string, unknown>)[field];
 }
@@ -101,11 +124,17 @@ export function evaluateRule(node: RuleNode | undefined, version: VersionRecord,
   if (node.op === "IN") return node.values.includes(ruleField(version, node.field, profileEligible));
   const comparison = node as Extract<RuleNode, { op: "COMPARE" }>;
   const actual = ruleField(version, comparison.field, profileEligible);
-  if (comparison.operator === "eq") return actual === comparison.value;
-  if (comparison.operator === "neq") return actual !== comparison.value;
-  if (comparison.operator === "gt") return Number(actual) > Number(comparison.value);
-  if (comparison.operator === "gte") return Number(actual) >= Number(comparison.value);
-  if (comparison.operator === "lt") return Number(actual) < Number(comparison.value);
+  const operator = comparison.operator;
+  if (operator === "exists" || operator === "not_exists") return operator === "exists" ? actual !== undefined && actual !== null && actual !== "" : actual === undefined || actual === null || actual === "";
+  if (operator === "eq" || operator === "equals") return actual === comparison.value;
+  if (operator === "neq" || operator === "not_equals") return actual !== comparison.value;
+  if (operator === "contains" || operator === "not_contains") {
+    const result = Array.isArray(actual) ? actual.includes(comparison.value) : String(actual ?? "").toLowerCase().includes(String(comparison.value).toLowerCase());
+    return operator === "contains" ? result : !result;
+  }
+  if (operator === "gt" || operator === "greater_than") return Number(actual) > Number(comparison.value);
+  if (operator === "gte" || operator === "greater_or_equal") return Number(actual) >= Number(comparison.value);
+  if (operator === "lt" || operator === "less_than") return Number(actual) < Number(comparison.value);
   return Number(actual) <= Number(comparison.value);
 }
 
@@ -146,7 +175,7 @@ export interface MediaFingerprint {
   audio: Array<{ language: string; codec?: string; channels?: number; bitrate?: number; atmos?: boolean; provenance?: Record<string, Provenance> }>;
   subtitles: Array<{ language: string; codec?: string; forced?: boolean; provenance?: Record<string, Provenance> }>;
   release: { source?: string; group?: string; provenance?: Record<string, Provenance> };
-  storage: { provider: string; torrentId: string; fileId?: string; path: string; size: number; addedAt?: string; provenance?: Record<string, Provenance> };
+  storage: { provider: string; torrentId: string; fileId?: string; path: string; size: number; infoHash?: string; addedAt?: string; provenance?: Record<string, Provenance> };
   probe: { status: "not_requested" | "complete" | "unavailable" | "error"; tool: "filename" | "provider" | "ffprobe"; version?: string; error?: string };
 }
 
@@ -190,6 +219,7 @@ export interface VersionEvaluation extends VersionRecord {
   decision: VersionDecision;
   evaluations: ProfileEvaluation[];
   reasons: Reason[];
+  satisfiesProfiles?: string[];
 }
 
 export interface VersionGroup {
@@ -295,7 +325,7 @@ export function fingerprintTorrent(torrent: TorrentInfo, provider = "unknown"): 
         },
         audio: (languages.length > 0 ? languages : ["eng"]).map((language) => ({ language, ...audio, provenance: { language: "FILENAME", codec: "FILENAME", channels: "FILENAME", atmos: "FILENAME" } })),
         subtitles: [], release: { source: inferSource(name), group: name.match(/-([A-Za-z0-9]+)(?:\.[^.]+)?$/)?.[1], provenance: { source: "FILENAME", group: "FILENAME" } },
-        storage: { provider, torrentId: torrent.id, fileId: file.id, path, size: file.size || torrent.bytes, addedAt: torrent.addedAt?.toISOString(), provenance: { provider: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", torrentId: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", path: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", size: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN" } },
+        storage: { provider, torrentId: torrent.id, fileId: file.id, path, size: file.size || torrent.bytes, infoHash: torrent.infoHash || torrent.raw?.infoHash || torrent.raw?.infohash || torrent.raw?.hash, addedAt: torrent.addedAt?.toISOString(), provenance: { provider: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", torrentId: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", path: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", size: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", infoHash: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN" } },
         probe: { status: "not_requested", tool: "filename" },
       },
     };
@@ -320,14 +350,23 @@ export const defaultVersionProfiles: VersionProfile[] = [
 export const defaultVersionManagerPolicy: VersionManagerPolicy = {
   enableRemote: false,
   acquireMissingRemote: false,
+  safety: { requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false },
+  policyVersion: "1",
 };
 
 function hasRequiredLanguages(version: VersionRecord, policy: LanguagePolicy): boolean {
-  const available = new Set(version.fingerprint.audio.map((stream) => LANGUAGE_ALIASES[stream.language.toLowerCase()] || stream.language.toLowerCase()));
+  const scope = policy.scope || "AUDIO";
+  const audio = new Set(version.fingerprint.audio.map((stream) => LANGUAGE_ALIASES[stream.language.toLowerCase()] || stream.language.toLowerCase()));
+  const subtitles = new Set(version.fingerprint.subtitles.map((stream) => LANGUAGE_ALIASES[stream.language.toLowerCase()] || stream.language.toLowerCase()));
   const required = policy.required.values.map((value) => LANGUAGE_ALIASES[value.toLowerCase()] || value.toLowerCase());
   const original = version.fingerprint.identity.originalLanguage ? LANGUAGE_ALIASES[version.fingerprint.identity.originalLanguage.toLowerCase()] || version.fingerprint.identity.originalLanguage.toLowerCase() : undefined;
-  const hasOriginal = Boolean(original && available.has(original));
-  const matches = (value: string) => value === "original" ? hasOriginal : available.has(value);
+  const matches = (value: string) => {
+    const resolved = value === "original" ? original : value;
+    if (!resolved) return false;
+    const inAudio = audio.has(resolved);
+    const inSubtitles = subtitles.has(resolved);
+    return scope === "SUBTITLE" ? inSubtitles : scope === "AUDIO_OR_SUBTITLE" ? inAudio || inSubtitles : inAudio;
+  };
   return policy.required.mode === "ANY" ? required.length === 0 || required.some(matches) : required.every(matches);
 }
 
@@ -341,7 +380,7 @@ function evaluateProfile(version: VersionRecord, profile: VersionProfile): Profi
   const reasons: Reason[] = [];
   const breakdown: Record<string, number> = {};
   if (!hasRequiredLanguages(version, profile.languagePolicy)) {
-    reasons.push({ code: "required_language_missing", message: "Required audio language policy is not satisfied", facts: { required: profile.languagePolicy.required, available: version.fingerprint.audio.map((stream) => stream.language) } });
+    reasons.push({ code: "required_language_missing", message: `Required ${profile.languagePolicy.scope || "AUDIO"} language policy is not satisfied`, facts: { required: profile.languagePolicy.required, availableAudio: version.fingerprint.audio.map((stream) => stream.language), availableSubtitles: version.fingerprint.subtitles.map((stream) => stream.language) } });
   }
   if (!evaluateRule(profile.hardRequirements, version)) {
     reasons.push({ code: "hard_rule_failed", message: "Configured hard requirement rule is not satisfied", facts: { rule: profile.hardRequirements } });
@@ -356,6 +395,10 @@ function evaluateProfile(version: VersionRecord, profile: VersionProfile): Profi
   breakdown.audio = Math.max(0, 15 - rank(version.fingerprint.audio[0]?.codec, profile.audioOrder) * 3) + (version.fingerprint.audio[0]?.atmos ? 3 : 0);
   if (profile.target === "DIRECT_PLAY") {
     breakdown.bandwidth = version.fingerprint.storage.size > 0 ? Math.max(0, 20 - Math.log10(version.fingerprint.storage.size / 1_000_000_000 + 1) * 8) : 0;
+  }
+  for (const [criterion, weight] of Object.entries(profile.scoring || {})) {
+    const current = breakdown[criterion] || 0;
+    breakdown[criterion] = current + Number(weight || 0);
   }
   const eligible = reasons.length === 0;
   const score = eligible ? Math.round(Object.values(breakdown).reduce((sum, value) => sum + value, 0) * 100) / 100 : undefined;
@@ -380,15 +423,20 @@ export function evaluateVersionGroups(versions: VersionRecord[], profiles = defa
       const winner = [...eligible].sort((a, b) => (b.evaluations.find((e) => e.profileId === profile.id)?.score || 0) - (a.evaluations.find((e) => e.profileId === profile.id)?.score || 0))[0];
       if (winner) {
         winner.decision = "KEEP";
+        winner.satisfiesProfiles = [...new Set([...(winner.satisfiesProfiles || []), profile.id])];
         winner.reasons.push({ code: "profile_winner", message: `Best eligible version for ${profile.name}`, facts: { profile: profile.id, score: winner.evaluations.find((e) => e.profileId === profile.id)?.score } });
       }
     }
     for (const version of evaluations) {
       const hasHardRequirementFailure = version.evaluations.some((evaluation) => !evaluation.eligible);
-      if (version.decision === "REVIEW" && !hasHardRequirementFailure && version.fingerprint.identity.confidence >= 0.65 && evaluations.length > 1) {
+      const recoverable = Boolean(version.fingerprint.storage.infoHash);
+      const safeForDelete = (policy.safety?.requireRecoverableBeforeDelete ?? true) ? recoverable : true;
+      const hasSurvivingKeep = evaluations.some((candidate) => candidate.decision === "KEEP");
+      if (version.decision === "REVIEW" && !hasHardRequirementFailure && version.fingerprint.identity.confidence >= 0.65 && evaluations.length > 1 && hasSurvivingKeep && safeForDelete) {
         version.decision = "DELETE_CANDIDATE";
         version.reasons.push({ code: "no_profile_slot", message: "Does not win an enabled profile in this version group", facts: { groupId: id } });
       } else if (version.decision === "REVIEW") {
+        if (!safeForDelete && version.fingerprint.identity.confidence >= 0.65 && !hasHardRequirementFailure) version.reasons.push({ code: "recoverability_required", message: "Delete preview requires a recoverable provider item", facts: { infoHashAvailable: recoverable } });
         version.reasons.push({
           code: hasHardRequirementFailure ? "hard_requirement_failed" : "identity_uncertain",
           message: hasHardRequirementFailure ? "A profile hard requirement failed; operator review is required" : "Identity confidence is insufficient for an automatic candidate decision",
@@ -417,4 +465,9 @@ export function evaluateVersionGroups(versions: VersionRecord[], profiles = defa
     }));
     return { id, identity: members[0].fingerprint.identity, versions: evaluations, remote, profileStatuses };
   });
+}
+
+export function versionManagerPolicyHash(policy: VersionManagerPolicy): string {
+  const normalized = JSON.stringify({ ...policy, safety: { ...defaultVersionManagerPolicy.safety, ...(policy.safety || {}) } });
+  return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
 }
