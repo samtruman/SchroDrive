@@ -477,7 +477,6 @@ export class RealDebridProvider implements DebridProvider {
 
   /** Fetches complete file metadata from the RD detail endpoint. */
   async getTorrentFileTree(torrentId: string): Promise<TorrentFile[]> {
-    if (rateLimiter.isRateLimited(PROVIDER_NAME)) return [];
     await rateLimiter.throttle(PROVIDER_NAME);
     try {
       const base = getBaseUrl();

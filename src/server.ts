@@ -257,10 +257,11 @@ export function startServer() {
       const inventory = source
         ? await source.listTorrents()
         : (await Promise.all(registry.configured().map((provider) => provider.listTorrents()))).flat();
-      const exportInventory = source?.getTorrentFileTree
-        ? await Promise.all(inventory.map(async (item) => ({ ...item, files: await source.getTorrentFileTree!(item.id) })))
-        : inventory;
       const selectedProviderItemIds = typeof req.query.selected === "string" ? req.query.selected.split(",").map((value) => value.trim()).filter(Boolean) : undefined;
+      const selectedInventory = selectedProviderItemIds ? inventory.filter((item) => selectedProviderItemIds.includes(String(item.id))) : inventory;
+      const exportInventory = source?.getTorrentFileTree
+        ? await Promise.all(selectedInventory.map(async (item) => ({ ...item, files: await source.getTorrentFileTree!(item.id) })))
+        : selectedInventory;
       const exported = exportMigrationLibrary(exportInventory, [], { mode, selectedProviderItemIds, sourceProvider: source?.id });
       if (String(req.query.format || "preview") === "preview") {
         return res.json({ ok: true, readOnly: true, mode, providerItems: inventory.length, exportableItems: exported.manifest.exportableItemCount, magnetCount: exported.manifest.magnetCount, generatedAt: exported.manifest.generatedAt });

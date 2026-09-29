@@ -35,4 +35,11 @@ describe("Real-Debrid file tree capability", () => {
       { id: "2", name: "Alien.srt", path: "Alien/Alien.srt", size: 10, selected: false },
     ]);
   });
+
+  test("waits through an existing rate-limit window instead of returning an empty tree", async () => {
+    axiosIPv4.get = async () => ({ data: { files: [{ id: 1, path: "Alien.mkv", bytes: 100, selected: 1 }] } } as any);
+    rateLimiter.recordRateLimit("realdebrid", "fixture", 0.001);
+    const files = await new RealDebridProvider().getTorrentFileTree("NVTY3EO4Z2HQ2");
+    expect(files).toHaveLength(1);
+  });
 });
