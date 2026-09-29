@@ -553,6 +553,77 @@ existing Settings API fields and do not change provider integrations.
 
 ## Candidate summary
 
+## Seerr duplicate detection must include existing requests
+
+### Classification
+
+`GENERIC_UPSTREAM_FIX`
+
+### PR dependency
+
+`STANDALONE`
+
+### Component
+
+Acquisition / Seerr adapter
+
+### Problem
+
+The media-status endpoint can report no media request even when an equivalent
+request already exists in Seerr. A subsequent acquisition preflight could
+therefore issue a duplicate request.
+
+### Root cause
+
+Duplicate detection consulted only the media endpoint and did not inspect the
+read-only Seerr request listing keyed by canonical TMDb ID (and season scope
+for TV).
+
+### Previous behavior
+
+Toy Story 5 (TMDb 1084244) was classified `NOT_REQUESTED` although existing
+Seerr request 94 was present; request 97 was then accepted by Seerr.
+
+### Expected behavior
+
+Immediately before POST, consolidate media status with existing requests,
+block active equivalents, and protect concurrent local requests by a stable
+provider/media/scope key.
+
+### Fix
+
+Query Seerr's read-only request listing with bounded pagination, match
+canonical IDs and TV season scope, fail closed for active/unknown statuses,
+and retain the existing explicit single-request guard.
+
+### Files changed
+
+`src/services/seerrAcquisitionAdapter.ts`,
+`tests/unit/services/acquisition.test.ts`.
+
+### Commit
+
+Pending commit on the current feature branch.
+
+### Tests
+
+Movie request lookup, media/request disagreement, TV season-equivalent request,
+duplicate preflight, and request-disabled regressions.
+
+### Upstream applicability
+
+Provider-neutral Seerr adapter safety; not specific to the Version Manager
+deployment. Upstream comparison remains to be performed before proposing a PR.
+
+### Isolation
+
+Standalone adapter and regression-test change.
+
+### Proposed PR scope
+
+Consolidated Seerr request/media status and single-request duplicate guard;
+exclude the controlled E2E runtime configuration.
+
 | Candidate | Classification | Commit | Standalone | Tests | Upstream status | Priority |
 |-----------|----------------|--------|------------|-------|-----------------|----------|
 | Arr nested staging paths | ALREADY_FIXED_UPSTREAM | `a20b84f` | yes | regression present | present in upstream develop | low |
@@ -564,6 +635,7 @@ existing Settings API fields and do not change provider integrations.
 | Seerr canonical Settings keys | GENERIC_UPSTREAM_FIX | `2e6e4c9` | yes | config persistence | absent from fetched upstream develop | HIGH |
 | Seerr URL/API-root normalization | GENERIC_UPSTREAM_FIX | pending | yes | URL normalization unit test | needs upstream verification | HIGH |
 | Settings dotenv provenance | GENERIC_UPSTREAM_FIX | pending | yes | config provenance/persistence tests | present in fetched upstream develop | HIGH |
+| Seerr request duplicate detection | GENERIC_UPSTREAM_FIX | pending | yes | acquisition/Seerr unit tests | needs upstream verification | HIGH |
 
 No PR, upstream branch, existing PR, or commit history was modified by this
 tracking update.

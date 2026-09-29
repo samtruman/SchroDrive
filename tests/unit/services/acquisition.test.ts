@@ -109,6 +109,43 @@ describe("Seerr acquisition safety contract", () => {
     }
   });
 
+  test("blocks when media status is empty but request lookup contains the same TMDb movie", async () => {
+    const adapter = new SeerrAcquisitionAdapter();
+    const originalGet = axios.get;
+    const original = { overseerrUrl: config.overseerrUrl, overseerrApiKey: config.overseerrApiKey, overseerrAuth: config.overseerrAuth, acquisitionRequestsEnabled: config.acquisitionRequestsEnabled };
+    config.overseerrUrl = "http://seerr.test";
+    config.overseerrApiKey = "test-only";
+    config.overseerrAuth = "";
+    config.acquisitionRequestsEnabled = true;
+    try {
+      axios.get = (async (url: string) => url.endsWith("/request") ? ({ data: { results: [{ id: 94, status: 5, media: { mediaType: "movie", tmdbId: 1084244 } }] } }) : ({ data: {} })) as typeof axios.get;
+      const result = await adapter.status({ contentIdentity: { tmdbId: "1084244" }, mediaType: "movie" } as any);
+      expect(result.status).toBe("REQUESTED");
+      expect(result.providerRequestId).toBe("94");
+    } finally {
+      axios.get = originalGet;
+      Object.assign(config, original);
+    }
+  });
+
+  test("maps TV episode needs to an existing season request", async () => {
+    const adapter = new SeerrAcquisitionAdapter();
+    const originalGet = axios.get;
+    const original = { overseerrUrl: config.overseerrUrl, overseerrApiKey: config.overseerrApiKey, overseerrAuth: config.overseerrAuth };
+    config.overseerrUrl = "http://seerr.test";
+    config.overseerrApiKey = "test-only";
+    config.overseerrAuth = "";
+    try {
+      axios.get = (async (url: string) => url.endsWith("/request") ? ({ data: { results: [{ id: 12, status: "approved", media: { mediaType: "tv", tmdbId: 999, seasons: [{ seasonNumber: 2 }] } }] } }) : ({ data: {} })) as typeof axios.get;
+      const result = await adapter.status({ contentIdentity: { tmdbId: "999" }, mediaType: "tv", season: 2, episode: 3 } as any);
+      expect(result.status).toBe("REQUESTED");
+      expect(result.providerRequestId).toBe("12");
+    } finally {
+      axios.get = originalGet;
+      Object.assign(config, original);
+    }
+  });
+
   test("maps Seerr read-only media states without collapsing partial availability", async () => {
     const adapter = new SeerrAcquisitionAdapter();
     const originalGet = axios.get;

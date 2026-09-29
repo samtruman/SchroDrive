@@ -11,6 +11,8 @@ import type {
 
 type ProviderStatus = AcquisitionProviderStatus;
 
+const inFlightRequests = new Set<string>();
+
 function configured(): boolean {
   return Boolean(config.overseerrUrl && (config.overseerrApiKey || config.overseerrAuth));
 }
@@ -30,6 +32,27 @@ function providerId(need: AcquisitionNeed): string | undefined {
   // The current Seerr media endpoints are TMDb keyed. Other canonical IDs
   // remain valid for the generic core but require an explicit future mapping.
   return need.contentIdentity.tmdbId;
+}
+
+function requestScope(need: AcquisitionNeed): string {
+  return need.mediaType === "tv"
+    ? `tv:${providerId(need) || "unknown"}:season:${need.season ?? "unknown"}`
+    : `movie:${providerId(need) || "unknown"}`;
+}
+
+function requestIsActive(status: unknown): boolean {
+  const value = String(status ?? "").toLowerCase();
+  if (["failed", "declined", "cancelled", "canceled", "deleted", "rejected"].some((item) => value.includes(item))) return false;
+  if (/^\d+$/.test(value)) return true;
+  return ["pending", "approved", "requested", "processing", "available", "partially", "completed"].some((item) => value.includes(item));
+}
+
+function requestStatus(status: unknown): ProviderStatus {
+  const value = String(status ?? "").toLowerCase();
+  if (value.includes("partial")) return "PARTIALLY_AVAILABLE";
+  if (value.includes("process") || value.includes("downloading")) return "PROCESSING";
+  if (value.includes("pending")) return "PENDING";
+  return "REQUESTED";
 }
 
 function mediaStatus(data: any): ProviderStatus {
@@ -65,7 +88,35 @@ export class SeerrAcquisitionAdapter implements AcquisitionAdapter {
     const mediaType = need.mediaType === "movie" ? "movie" : "tv";
     try {
       const response = await axios.get(`${baseUrl()}/${mediaType}/${encodeURIComponent(id)}`, { headers: headers(), timeout: 15000 });
-      return { status: mediaStatus(response.data), providerRequestId: response.data?.request?.id ? String(response.data.request.id) : undefined };
+      const media = mediaStatus(response.data);
+      const requests: any[] = [];
+      for (let skip = 0; skip < 2000; skip += 100) {
+        const requestResponse = await axios.get(`${baseUrl()}/request`, {
+          params: { take: 100, skip, sort: "modified" },
+          headers: headers(),
+          timeout: 15000,
+        });
+        const page = Array.isArray(requestResponse.data?.results) ? requestResponse.data.results : [];
+        requests.push(...page);
+        if (page.length < 100) break;
+      }
+      const matching = requests.filter((item: any) => {
+        const requestMediaType = String(item?.media?.mediaType || item?.media?.type || "").toLowerCase();
+        const requestMediaId = String(item?.media?.tmdbId ?? item?.mediaId ?? "");
+        if (requestMediaType && requestMediaType !== mediaType) return false;
+        if (requestMediaId !== String(id)) return false;
+        if (mediaType !== "tv") return true;
+        const requestedSeason = need.season;
+        const seasons = item?.media?.seasons || item?.seasons || [];
+        if (requestedSeason === undefined || !Array.isArray(seasons) || seasons.length === 0) return true;
+        return seasons.some((season: any) => Number(season.seasonNumber ?? season.season ?? season) === requestedSeason);
+      });
+      const active = matching.find((item: any) => requestIsActive(item?.status));
+      if (active) {
+        const status = media === "AVAILABLE" || media === "PARTIALLY_AVAILABLE" ? media : requestStatus(active.status);
+        return { status, providerRequestId: active?.id !== undefined ? String(active.id) : undefined, detail: "Equivalent active Seerr request detected via request lookup" };
+      }
+      return { status: media, providerRequestId: response.data?.request?.id ? String(response.data.request.id) : undefined };
     } catch (error: any) {
       const status = Number(error?.response?.status);
       if (status === 404) return { status: "MEDIA_NOT_FOUND", detail: "Seerr media record was not found" };
@@ -120,23 +171,31 @@ export class SeerrAcquisitionAdapter implements AcquisitionAdapter {
     const id = providerId(need);
     if (!id) throw new Error("Acquisition need has no TMDb ID");
 
-    // Revalidate immediately before the only mutating call. Any existing
-    // Seerr state blocks the request and provides duplicate protection.
-    const current = await this.status(need);
-    if (current.status !== "NOT_REQUESTED") {
-      throw new Error(`Acquisition blocked by current Seerr status: ${current.status}`);
-    }
+    const scope = requestScope(need);
+    if (inFlightRequests.has(scope)) throw new Error("Equivalent Seerr request is already in flight");
+    inFlightRequests.add(scope);
+    try {
 
-    const response = await axios.post(`${baseUrl()}/request`, {
-      mediaType: "movie",
-      mediaId: Number(id),
-    }, { headers: { ...headers(), "Content-Type": "application/json" }, timeout: 30000 });
-    const requestId = response.data?.id || response.data?.request?.id;
-    return {
-      providerRequestId: requestId !== undefined ? String(requestId) : undefined,
-      status: "REQUESTED",
-      detail: "Single movie request accepted by Seerr",
-    };
+      // Revalidate immediately before the only mutating call. Any existing
+      // media state or active request blocks the request and provides duplicate protection.
+      const current = await this.status(need);
+      if (current.status !== "NOT_REQUESTED") {
+        throw new Error(`Equivalent Seerr request/status detected: ${current.status}${current.providerRequestId ? ` (${current.providerRequestId})` : ""}`);
+      }
+
+      const response = await axios.post(`${baseUrl()}/request`, {
+        mediaType: "movie",
+        mediaId: Number(id),
+      }, { headers: { ...headers(), "Content-Type": "application/json" }, timeout: 30000 });
+      const requestId = response.data?.id || response.data?.request?.id;
+      return {
+        providerRequestId: requestId !== undefined ? String(requestId) : undefined,
+        status: "REQUESTED",
+        detail: "Single movie request accepted by Seerr",
+      };
+    } finally {
+      inFlightRequests.delete(scope);
+    }
   }
 }
 
