@@ -78,13 +78,31 @@ export async function executeMigrationImportItem(item: unknown, provider: Debrid
 function inventoryHashes(inventory: TorrentInfo[]): Map<string, TorrentInfo[]> {
   const result = new Map<string, TorrentInfo[]>();
   for (const item of inventory) {
-    const hash = canonicalInfoHash(item.infoHash) || hashFromMagnet(item.magnetUri);
+    const hash = torrentInfoHash(item);
     if (!hash) continue;
     const entries = result.get(hash) || [];
     entries.push(item);
     result.set(hash, entries);
   }
   return result;
+}
+
+function torrentInfoHash(item: TorrentInfo): string | undefined {
+  const direct = canonicalInfoHash(item.infoHash) || hashFromMagnet(item.magnetUri);
+  if (direct) return direct;
+  const find = (value: unknown): string | undefined => {
+    if (!value || typeof value !== "object") return undefined;
+    for (const [key, nested] of Object.entries(value)) {
+      if (/^(infohash|info_hash|hash|hashString)$/i.test(key) && typeof nested === "string") {
+        const hash = canonicalInfoHash(nested) || hashFromMagnet(nested);
+        if (hash) return hash;
+      }
+      const child = find(nested);
+      if (child) return child;
+    }
+    return undefined;
+  };
+  return find(item.raw);
 }
 
 function classify(source: ImportPlanItem["source"], index: number, hash: string | undefined, providerItemId: string | undefined, originalName: string | undefined, inventoryByHash: Map<string, TorrentInfo[]>): ImportPlanItem {

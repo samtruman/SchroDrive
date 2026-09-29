@@ -24,6 +24,12 @@ describe("migration importer preview", () => {
     expect(plan.counts.ALREADY_PRESENT_EQUIVALENT_HASH).toBe(1);
   });
 
+  test("uses provider-raw infohash evidence when normalized fields are absent", () => {
+    const plan = analyzeMigrationImport({ magnetsText: `magnet:?xt=urn:btih:${"a".repeat(40)}` }, [{ ...torrent("rd-item"), raw: { hashString: "a".repeat(40) } }]);
+    expect(plan.counts.ALREADY_PRESENT_EQUIVALENT_HASH).toBe(1);
+    expect(plan.counts.READY_TO_IMPORT).toBe(0);
+  });
+
   test("classifies new, missing, invalid and duplicate magnet inputs without mutation", () => {
     const hash = "c".repeat(40);
     const plan = analyzeMigrationImport({ magnetsText: [
