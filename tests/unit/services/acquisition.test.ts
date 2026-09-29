@@ -62,10 +62,51 @@ describe("Seerr acquisition safety contract", () => {
     expect(seerrApiBaseUrl("http://seerr:5055/api/v1/")).toBe("http://seerr:5055/api/v1");
   });
 
-  test("does not enable or send requests in this milestone", async () => {
+  test("keeps requests disabled unless explicitly enabled", async () => {
     const adapter = new SeerrAcquisitionAdapter();
     expect((await adapter.capabilities()).canRequest).toBe(false);
     await expect(adapter.request({} as any)).rejects.toThrow("disabled");
+  });
+
+  test("sends one revalidated movie request only when explicitly enabled", async () => {
+    const adapter = new SeerrAcquisitionAdapter();
+    const originalGet = axios.get;
+    const originalPost = axios.post;
+    const original = { overseerrUrl: config.overseerrUrl, overseerrApiKey: config.overseerrApiKey, overseerrAuth: config.overseerrAuth, acquisitionRequestsEnabled: config.acquisitionRequestsEnabled };
+    config.overseerrUrl = "http://seerr.test";
+    config.overseerrApiKey = "test-only";
+    config.overseerrAuth = "";
+    config.acquisitionRequestsEnabled = true;
+    const need: any = { id: "need:movie:123:remote", status: "ACQUISITION_ELIGIBLE", acquisitionEligibility: { eligible: true }, contentIdentity: { tmdbId: "123" }, mediaType: "movie" };
+    let posted: any;
+    try {
+      axios.get = (async () => ({ data: {} })) as typeof axios.get;
+      axios.post = (async (_url: string, body: any) => { posted = body; return { data: { id: 77 } }; }) as typeof axios.post;
+      const result = await adapter.request(need);
+      expect(posted).toEqual({ mediaType: "movie", mediaId: 123 });
+      expect(result).toEqual({ providerRequestId: "77", status: "REQUESTED", detail: "Single movie request accepted by Seerr" });
+    } finally {
+      axios.get = originalGet;
+      axios.post = originalPost;
+      Object.assign(config, original);
+    }
+  });
+
+  test("blocks a duplicate request when Seerr already reports requested", async () => {
+    const adapter = new SeerrAcquisitionAdapter();
+    const originalGet = axios.get;
+    const original = { overseerrUrl: config.overseerrUrl, overseerrApiKey: config.overseerrApiKey, overseerrAuth: config.overseerrAuth, acquisitionRequestsEnabled: config.acquisitionRequestsEnabled };
+    config.overseerrUrl = "http://seerr.test";
+    config.overseerrApiKey = "test-only";
+    config.overseerrAuth = "";
+    config.acquisitionRequestsEnabled = true;
+    try {
+      axios.get = (async () => ({ data: { status: "requested", request: { id: 77 } } })) as typeof axios.get;
+      await expect(adapter.request({ status: "ACQUISITION_ELIGIBLE", acquisitionEligibility: { eligible: true }, contentIdentity: { tmdbId: "123" }, mediaType: "movie" } as any)).rejects.toThrow("REQUESTED");
+    } finally {
+      axios.get = originalGet;
+      Object.assign(config, original);
+    }
   });
 
   test("maps Seerr read-only media states without collapsing partial availability", async () => {

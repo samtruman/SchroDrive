@@ -44,10 +44,6 @@ function mediaStatus(data: any): ProviderStatus {
   return "NOT_REQUESTED";
 }
 
-/**
- * Read-only Seerr adapter. The request method is intentionally unavailable in
- * this milestone; no POST/PUT/DELETE is issued by this module.
- */
 export class SeerrAcquisitionAdapter implements AcquisitionAdapter {
   async capabilities(): Promise<AcquisitionAdapterCapabilities> {
     return {
@@ -58,7 +54,7 @@ export class SeerrAcquisitionAdapter implements AcquisitionAdapter {
       // Seerr exposes media/request state for TV, but a request is normally
       // scoped to a season/series. We never hide that limitation as episode support.
       tvScope: "season",
-      canRequest: false,
+      canRequest: config.acquisitionRequestsEnabled,
     };
   }
 
@@ -114,8 +110,33 @@ export class SeerrAcquisitionAdapter implements AcquisitionAdapter {
     };
   }
 
-  async request(_need: AcquisitionNeed): Promise<never> {
-    throw new Error("Seerr acquisition requests are disabled in this milestone; preview is read-only");
+  async request(need: AcquisitionNeed): Promise<{ providerRequestId?: string; status: string; detail?: string }> {
+    if (!config.acquisitionRequestsEnabled) throw new Error("Seerr acquisition requests are disabled");
+    if (!configured()) throw new Error("Seerr is not configured");
+    if (need.mediaType !== "movie") throw new Error("Controlled single-request path currently supports movies only");
+    if (need.status !== "ACQUISITION_ELIGIBLE" || !need.acquisitionEligibility.eligible) {
+      throw new Error("Acquisition need is not eligible");
+    }
+    const id = providerId(need);
+    if (!id) throw new Error("Acquisition need has no TMDb ID");
+
+    // Revalidate immediately before the only mutating call. Any existing
+    // Seerr state blocks the request and provides duplicate protection.
+    const current = await this.status(need);
+    if (current.status !== "NOT_REQUESTED") {
+      throw new Error(`Acquisition blocked by current Seerr status: ${current.status}`);
+    }
+
+    const response = await axios.post(`${baseUrl()}/request`, {
+      mediaType: "movie",
+      mediaId: Number(id),
+    }, { headers: { ...headers(), "Content-Type": "application/json" }, timeout: 30000 });
+    const requestId = response.data?.id || response.data?.request?.id;
+    return {
+      providerRequestId: requestId !== undefined ? String(requestId) : undefined,
+      status: "REQUESTED",
+      detail: "Single movie request accepted by Seerr",
+    };
   }
 }
 

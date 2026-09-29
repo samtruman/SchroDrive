@@ -312,6 +312,25 @@ export function startServer() {
     }
   });
 
+  /** Explicit single Seerr request. Bulk acquisition has no route. */
+  app.post("/api/version-manager/acquisition/request", async (req, res) => {
+    try {
+      if (req.body?.confirm !== "REQUEST_ONE") return res.status(400).json({ ok: false, error: "Explicit REQUEST_ONE confirmation is required" });
+      if (!config.acquisitionRequestsEnabled) return res.status(403).json({ ok: false, error: "Acquisition requests are disabled" });
+      const need = req.body?.need;
+      if (!need || typeof need !== "object") return res.status(400).json({ ok: false, error: "A single acquisition need is required" });
+      const adapter = new SeerrAcquisitionAdapter();
+      recordAcquisitionAudit({ needId: String(need.id || "unknown"), identity: need.contentIdentity, profileId: String(need.missingProfileId || ""), adapterId: "seerr", phase: "REVALIDATION", status: "REVALIDATED", detail: "Immediate status check performed by adapter" });
+      const result = await adapter.request(need);
+      recordAcquisitionAudit({ needId: String(need.id || "unknown"), identity: need.contentIdentity, profileId: String(need.missingProfileId || ""), adapterId: "seerr", phase: "REQUEST", status: result.status, providerRequestId: result.providerRequestId, detail: result.detail });
+      return res.json({ ok: true, requestExecuted: true, result });
+    } catch (err: any) {
+      const need = req.body?.need;
+      if (need && typeof need === "object") recordAcquisitionAudit({ needId: String(need.id || "unknown"), identity: need.contentIdentity, profileId: String(need.missingProfileId || ""), adapterId: "seerr", phase: "REQUEST", status: "FAILED", detail: err?.message || "Seerr request failed" });
+      return res.status(502).json({ ok: false, requestExecuted: false, error: err?.message || "Seerr request failed" });
+    }
+  });
+
   app.put("/api/version-manager/profiles", (req, res) => {
     try {
       if (!Array.isArray(req.body?.profiles) || req.body.profiles.length === 0) return res.status(400).json({ ok: false, error: "profiles must be a non-empty array" });

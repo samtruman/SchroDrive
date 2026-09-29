@@ -164,7 +164,7 @@ export interface AcquisitionAdapter {
   capabilities(): Promise<AcquisitionAdapterCapabilities>;
   status(need: AcquisitionNeed): Promise<{ status: AcquisitionStatus | AcquisitionProviderStatus; providerRequestId?: string; detail?: string }>;
   preview(need: AcquisitionNeed): Promise<AcquisitionPreview>;
-  request(need: AcquisitionNeed): Promise<never>;
+  request(need: AcquisitionNeed): Promise<{ providerRequestId?: string; status: string; detail?: string }>;
 }
 
 export function profileStatus(profileId: string, satisfied: boolean): ProfileStatus {
