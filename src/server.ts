@@ -225,6 +225,25 @@ export function startServer() {
     });
   });
 
+  /** Evaluates unsaved profile changes against the latest valid snapshot only. */
+  app.post("/api/version-manager/profiles/preview", (req, res) => {
+    try {
+      if (!Array.isArray(req.body?.profiles) || req.body.profiles.length === 0) return res.status(400).json({ ok: false, error: "profiles must be a non-empty array" });
+      const snapshot = getLatestVersionManagerSnapshot();
+      if (!snapshot || snapshot.status !== "VALID") return res.status(409).json({ ok: false, error: "No valid inventory snapshot is available" });
+      const profiles = req.body.profiles.map((profile: any) => ({ ...profile, hardRequirements: profile.hardRequirements ? validateRule(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? validateScoringRules(profile.scoringRules) : undefined }));
+      const policy = { ...getVersionManagerPolicy(), ...(req.body.policy || {}), safety: { ...getVersionManagerPolicy().safety, ...(req.body.policy?.safety || {}) } };
+      const records = applyManualIdentityOverrides(getLatestVersionManagerRecords());
+      const current = evaluateVersionGroups(records, getVersionProfiles(), getVersionManagerPolicy());
+      const proposed = evaluateVersionGroups(records, profiles, policy);
+      const decisions = (groups: any[]) => groups.flatMap((group) => group.versions).reduce((counts: Record<string, number>, version: any) => { counts[version.decision] = (counts[version.decision] || 0) + 1; return counts; }, {});
+      const currentDecisions = decisions(current); const proposedDecisions = decisions(proposed);
+      const currentById = new Map(current.flatMap((group) => group.versions).map((version: any) => [version.id, version.decision]));
+      const changed = proposed.flatMap((group) => group.versions).filter((version: any) => currentById.get(version.id) !== version.decision).map((version: any) => ({ id: version.id, from: currentById.get(version.id), to: version.decision, identity: version.fingerprint.identity }));
+      return res.json({ ok: true, readOnly: true, snapshotId: snapshot.id, current: { decisions: currentDecisions }, proposed: { decisions: proposedDecisions, policyHash: versionManagerPolicyHash(policy, profiles) }, changed, missingProfiles: proposed.flatMap((group) => group.remote?.status === "REMOTE_MISSING" ? [group] : []).length });
+    } catch (err: any) { return res.status(400).json({ ok: false, error: err?.message || "Unable to preview profile impact" }); }
+  });
+
   /** POST /api/version-manager/scan — starts or joins the canonical scan job. */
   app.post("/api/version-manager/scan", (_req, res) => {
     const job = startVersionManagerScan();

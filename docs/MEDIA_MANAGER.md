@@ -14,6 +14,13 @@ Review is a deduplicated projection and may contain overlapping identity,
 policy, and recoverability reasons. Missing acquisition previews are only
 generated when the REMOTE policy is enabled.
 
+Settings keeps retention profiles in SchröDrive while acquisition remains
+owned by the configured ARR/Seerr integrations. The profile editor includes
+profile-scoped language and rule controls and a read-only `Preview impact`
+operation (`POST /api/version-manager/profiles/preview`) that evaluates
+unsaved configuration against the latest valid snapshot without persisting it
+or rescanning providers.
+
 ## Library
 
 Library supports movie and TV scopes, search, decision/profile filters,
@@ -56,8 +63,10 @@ Magnet Backup uses the same exporter through:
 - `GET /api/version-manager/magnet-backup/:id`
 
 Backups are written atomically under the configured data directory, checksummed
-and retained historically. Incrementals preserve added, modified, and removed
-references; a removal never erases an older magnet. A magnet is recovery
+and retained historically. Incrementals are always compared with the latest
+verified FULL baseline, so their `baseBackupId` remains reconstructible even
+when another incremental backup was created in between. A removal never erases
+an older magnet. A magnet is recovery
 evidence, not a guarantee that the content remains available.
 
 The existing migration preview and importer are reused. Explicit migration
@@ -87,8 +96,16 @@ because it reconciles against target inventory.
 - Automatic backup scheduling is disabled by default. When enabled it uses the
   existing process scheduler, the configured Europe/Rome timezone by default,
   and configurable retention values; it never adds a cron container.
-- Pack preference is persisted and surfaced. Uncertain or incomplete pack
-  coverage remains blocked until a complete per-episode impact plan exists.
+- Pack preference is persisted and surfaced. The current physical impact
+  projection still blocks uncertain or incomplete pack coverage; complete
+  multi-season pack preference evaluation remains a follow-up before delete
+  execution can be enabled.
+- ARR quality profiles are presented as an integration concern when the
+  corresponding ARR capability is configured; SchröDrive does not recreate
+  ARR custom formats or direct-mode indexer search.
+- Missing selection and exclusion are read-model operations. Real acquisition
+  remains explicitly guarded by the existing Seerr/ARR configuration and is
+  not enabled by this read-only milestone.
 - Browser and provider validation must use isolated fixtures before deployment;
   production data is not modified by these read-only projections.
 

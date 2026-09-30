@@ -1591,13 +1591,12 @@ function validateUiRule(node: any): string | undefined {
 
 function SettingsView({ section = "profiles" }: { section?: string }) {
   const status = useJson<any>("/api/version-manager/status");
-  const pathname = usePathname();
-  const sectionIds = ["profiles", "languages", "rules", "acquisition", "safety"];
-  const [activeSection, setActiveSection] = useState(sectionIds.includes(section) ? section : "profiles");
+  const sectionIds = ["profiles", "acquisition", "safety"];
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [policy, setPolicy] = useState<any>({ enableRemote: false, acquireMissingRemote: false, preferCompletePack: false, safety: { requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false } });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState("");
+  const [impact, setImpact] = useState<any>(null);
   useEffect(() => {
     if (status.data?.profiles) setProfiles(status.data.profiles);
     if (status.data?.policy) setPolicy(status.data.policy);
@@ -1605,19 +1604,13 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
   useEffect(() => {
     const applyHash = () => {
       const hash = window.location.hash.slice(1);
-      const next = sectionIds.includes(hash) ? hash : section;
-      setActiveSection(next);
+      const next = sectionIds.includes(hash) ? hash : ["languages", "rules"].includes(hash) ? "profiles" : section;
       requestAnimationFrame(() => document.getElementById(`media-manager-${next}`)?.scrollIntoView({ behavior: "smooth", block: "start" }));
     };
     applyHash();
     window.addEventListener("hashchange", applyHash);
     return () => window.removeEventListener("hashchange", applyHash);
   }, [section]);
-  function navigateSection(next: string) {
-    setActiveSection(next);
-    window.history.replaceState(null, "", `${pathname}#${next}`);
-    requestAnimationFrame(() => document.getElementById(`media-manager-${next}`)?.scrollIntoView({ behavior: "smooth", block: "start" }));
-  }
   async function save() {
     setSaving(true);
     setSaved("");
@@ -1644,18 +1637,24 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
       setSaving(false);
     }
   }
+  async function previewImpact() {
+    setSaved("");
+    try {
+      const response = await fetch("/api/version-manager/profiles/preview", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ profiles, policy }) });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Impact preview unavailable");
+      setImpact(payload);
+    } catch (value: any) { setSaved(value.message || "Impact preview unavailable"); }
+  }
   function updateProfile(index: number, patch: Partial<Profile>) { setProfiles((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item)); }
   function addProfile() { const id = `custom-${Date.now()}`; setProfiles((current) => [...current, { id, name: "Custom profile", enabled: true, priority: 0, preferredResolution: "1080p", languagePolicy: { required: { values: [], mode: "ALL" }, preferred: [], original: false, scope: "AUDIO" }, sourceOrder: [], codecOrder: [], audioOrder: [], hardRequirements: { op: "AND", children: [] }, scoring: {}, acquisitionBehavior: "DISABLED" } as any]); }
   return (
-    <div className="space-y-6">
+    <div className="mx-auto max-w-5xl space-y-8">
       <Header
         view="settings"
         title="Media Manager Settings"
         description="Configure profiles, acquisition behavior and safety without duplicating global provider credentials."
       />
-      <div className="sticky top-2 z-10 flex flex-wrap gap-2 rounded-md bg-background/95 p-1 backdrop-blur">
-        {[["Profiles", "profiles"], ["Languages", "languages"], ["Rules", "rules"], ["Acquisition", "acquisition"], ["Safety", "safety"]].map(([label, id]) => <Button key={id} type="button" variant={activeSection === id ? "default" : "outline"} onClick={() => navigateSection(id)}>{label}</Button>)}
-      </div>
       <Card id="media-manager-profiles" className="scroll-mt-20">
         <CardHeader>
           <CardTitle className="text-base">Profiles</CardTitle>
@@ -1694,10 +1693,12 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
             <Button onClick={() => void save()} disabled={saving}>
               {saving ? "Saving…" : "Save profiles"}
             </Button>
+            <Button variant="outline" onClick={() => void previewImpact()}>Preview impact</Button>
             {saved && (
               <span className="text-sm text-muted-foreground">{saved}</span>
             )}
           </div>
+          {impact && <div className="rounded border bg-muted/20 p-3 text-sm"><p className="font-medium">Read-only impact preview</p><p>Changed decisions: {impact.changed?.length || 0}. Proposed policy hash: {impact.proposed?.policyHash || "—"}</p><p className="text-muted-foreground">The active configuration and inventory were not modified.</p></div>}
           <div className="space-y-2 rounded border p-3"><p className="font-medium">Scoring</p><p className="text-xs text-muted-foreground">Scoring runs only after hard requirements pass. Field, operator, value and weight are persisted per profile.</p>{profiles.map((profile, index) => <details key={`score-${profile.id}`} className="rounded border p-2"><summary className="cursor-pointer text-sm">{profile.name || profile.id}</summary><div className="mt-2 space-y-2">{(profile.scoringRules || []).map((rule, ruleIndex) => <ScoringRuleEditor key={ruleIndex} rule={rule} onChange={(next) => updateProfile(index, { scoringRules: (profile.scoringRules || []).map((item, itemIndex) => itemIndex === ruleIndex ? next : item) })} onRemove={() => updateProfile(index, { scoringRules: (profile.scoringRules || []).filter((_, itemIndex) => itemIndex !== ruleIndex) })} />)}<Button size="sm" variant="outline" onClick={() => updateProfile(index, { scoringRules: [...(profile.scoringRules || []), { op: "COMPARE", field: "resolution", operator: "equals", value: "2160p", weight: 0 }] })}>Add scoring rule</Button>{Object.keys(profile.scoring || {}).length > 0 && <p className="text-xs text-muted-foreground">Legacy field weights are preserved for compatibility; new rules use the structured editor above.</p>}</div></details>)}</div>
         </CardContent>
       </Card>

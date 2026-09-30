@@ -218,6 +218,30 @@ function startServer() {
             scanJob: (0, versionManagerScanJob_1.getVersionManagerScanRuntimeStatus)(),
         });
     });
+    /** Evaluates unsaved profile changes against the latest valid snapshot only. */
+    app.post("/api/version-manager/profiles/preview", (req, res) => {
+        try {
+            if (!Array.isArray(req.body?.profiles) || req.body.profiles.length === 0)
+                return res.status(400).json({ ok: false, error: "profiles must be a non-empty array" });
+            const snapshot = (0, versionManagerStore_1.getLatestVersionManagerSnapshot)();
+            if (!snapshot || snapshot.status !== "VALID")
+                return res.status(409).json({ ok: false, error: "No valid inventory snapshot is available" });
+            const profiles = req.body.profiles.map((profile) => ({ ...profile, hardRequirements: profile.hardRequirements ? (0, versionManager_1.validateRule)(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? (0, versionManager_1.validateScoringRules)(profile.scoringRules) : undefined }));
+            const policy = { ...(0, versionManagerStore_1.getVersionManagerPolicy)(), ...(req.body.policy || {}), safety: { ...(0, versionManagerStore_1.getVersionManagerPolicy)().safety, ...(req.body.policy?.safety || {}) } };
+            const records = (0, manualIdentity_1.applyManualIdentityOverrides)((0, versionManagerStore_1.getLatestVersionManagerRecords)());
+            const current = (0, versionManager_1.evaluateVersionGroups)(records, (0, versionManagerStore_1.getVersionProfiles)(), (0, versionManagerStore_1.getVersionManagerPolicy)());
+            const proposed = (0, versionManager_1.evaluateVersionGroups)(records, profiles, policy);
+            const decisions = (groups) => groups.flatMap((group) => group.versions).reduce((counts, version) => { counts[version.decision] = (counts[version.decision] || 0) + 1; return counts; }, {});
+            const currentDecisions = decisions(current);
+            const proposedDecisions = decisions(proposed);
+            const currentById = new Map(current.flatMap((group) => group.versions).map((version) => [version.id, version.decision]));
+            const changed = proposed.flatMap((group) => group.versions).filter((version) => currentById.get(version.id) !== version.decision).map((version) => ({ id: version.id, from: currentById.get(version.id), to: version.decision, identity: version.fingerprint.identity }));
+            return res.json({ ok: true, readOnly: true, snapshotId: snapshot.id, current: { decisions: currentDecisions }, proposed: { decisions: proposedDecisions, policyHash: (0, versionManager_1.versionManagerPolicyHash)(policy, profiles) }, changed, missingProfiles: proposed.flatMap((group) => group.remote?.status === "REMOTE_MISSING" ? [group] : []).length });
+        }
+        catch (err) {
+            return res.status(400).json({ ok: false, error: err?.message || "Unable to preview profile impact" });
+        }
+    });
     /** POST /api/version-manager/scan — starts or joins the canonical scan job. */
     app.post("/api/version-manager/scan", (_req, res) => {
         const job = (0, versionManagerScanJob_1.startVersionManagerScan)();

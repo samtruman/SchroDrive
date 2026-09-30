@@ -20,7 +20,7 @@ function mapItems(manifest: MigrationManifest): Map<string, MigrationManifest["i
 export async function createMagnetBackup(providerId: string, mode: MagnetBackupMode = "FULL"): Promise<MagnetBackupRecord> {
   const provider = registry.get(providerId); if (!provider || !provider.isConfigured()) throw new Error("Source provider is not configured");
   const manifest = await sourceManifest(provider); const now = new Date().toISOString(); const id = `magnet-backup-${Date.now()}`; const records = readIndex();
-  const previous = records.filter((record) => record.provider === provider.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  const previous = records.filter((record) => record.provider === provider.id && record.mode === "FULL").sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
   let document: MagnetBackupDocument = { schemaVersion: "1.0", kind: "MAGNET_BACKUP", mode, provider: provider.id, createdAt: now, manifest }; let added = manifest.items.length; let modified = 0; let removed = 0;
   if (mode === "INCREMENTAL" && previous) { const oldDocument = readMagnetBackup(previous.id); const oldItems = oldDocument?.manifest ? mapItems(oldDocument.manifest) : new Map(); const current = mapItems(manifest); const changes = { added: [] as MigrationManifest["items"], modified: [] as MigrationManifest["items"], removed: [] as MigrationManifest["items"] }; for (const [key, item] of current) { const old = oldItems.get(key); if (!old) changes.added.push(item); else if (digest(old) !== digest(item)) changes.modified.push(item); } for (const [key, item] of oldItems) if (!current.has(key)) changes.removed.push(item); added = changes.added.length; modified = changes.modified.length; removed = changes.removed.length; document = { schemaVersion: "1.0", kind: "MAGNET_BACKUP", mode, provider: provider.id, createdAt: now, baseBackupId: previous.id, changes }; }
   const file = path.join(root(), `${id}.json`); const content = JSON.stringify(document, null, 2); const sha256 = crypto.createHash("sha256").update(content).digest("hex"); atomicWrite(file, document);
@@ -29,5 +29,37 @@ export async function createMagnetBackup(providerId: string, mode: MagnetBackupM
 export function listMagnetBackups(providerId?: string): MagnetBackupRecord[] { return readIndex().filter((record) => !providerId || record.provider === providerId).map((record) => ({ ...record, file: path.basename(record.file) })); }
 export function readMagnetBackup(id: string): MagnetBackupDocument | undefined { const record = readIndex().find((item) => item.id === id); if (!record) return undefined; try { return JSON.parse(fs.readFileSync(record.file, "utf8")) as MagnetBackupDocument; } catch { return undefined; } }
 export function verifyMagnetBackup(id: string): { valid: boolean; reason?: string; sha256?: string } { const record = readIndex().find((item) => item.id === id); if (!record) return { valid: false, reason: "Backup not found" }; try { const sha256 = crypto.createHash("sha256").update(fs.readFileSync(record.file)).digest("hex"); return sha256 === record.sha256 ? { valid: true, sha256 } : { valid: false, sha256, reason: "Manifest checksum mismatch" }; } catch { return { valid: false, reason: "Manifest unavailable" }; } }
-let scheduler: ReturnType<typeof setInterval> | undefined; let lastScheduledKey = "";
-export function startMagnetBackupScheduler(): void { if (!config.magnetBackupEnabled || scheduler) return; scheduler = setInterval(async () => { const now = new Date(); const parts = new Intl.DateTimeFormat("en-CA", { timeZone: config.magnetBackupTimezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now); const time = `${parts.find((part) => part.type === "hour")?.value}:${parts.find((part) => part.type === "minute")?.value}`; const key = now.toISOString().slice(0, 10); if (time !== "03:00" || key === lastScheduledKey) return; lastScheduledKey = key; const provider = registry.configured()[0]; if (provider) { try { await createMagnetBackup(provider.id, "FULL"); } catch { /* preserve last valid backup */ } } }, 60_000); }
+function cronTime(): string {
+  const fields = config.magnetBackupSchedule.trim().split(/\s+/);
+  if (fields.length < 2 || !/^\d+$/.test(fields[0]) || !/^\d+$/.test(fields[1])) return "03:00";
+  const minute = Math.max(0, Math.min(59, Number(fields[0])));
+  const hour = Math.max(0, Math.min(23, Number(fields[1])));
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
+/** Remove only unreferenced local manifests; provider data is never touched. */
+export function applyMagnetBackupRetention(providerId?: string): { removed: number } {
+  const records = readIndex();
+  const byProvider = new Map<string, MagnetBackupRecord[]>();
+  for (const record of records) if (!providerId || record.provider === providerId) byProvider.set(record.provider, [...(byProvider.get(record.provider) || []), record]);
+  const keep = new Set<string>();
+  for (const providerRecords of byProvider.values()) {
+    const sorted = providerRecords.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    sorted.slice(0, Math.max(0, config.magnetBackupDailyRetention)).forEach((record) => keep.add(record.id));
+    const monthly = new Map<string, MagnetBackupRecord>();
+    for (const record of sorted) {
+      const month = record.createdAt.slice(0, 7);
+      if (!monthly.has(month)) monthly.set(month, record);
+    }
+    [...monthly.values()].slice(0, Math.max(0, config.magnetBackupMonthlyRetention)).forEach((record) => keep.add(record.id));
+    for (const record of sorted) if (record.baseBackupId) keep.add(record.baseBackupId);
+  }
+  const retained = records.filter((record) => !byProvider.has(record.provider) || keep.has(record.id));
+  const removable = records.filter((record) => byProvider.has(record.provider) && !keep.has(record.id));
+  for (const record of removable) { try { fs.unlinkSync(record.file); } catch { /* index remains authoritative */ } }
+  if (removable.length) atomicWrite(indexPath(), retained);
+  return { removed: removable.length };
+}
+
+let scheduler: ReturnType<typeof setInterval> | undefined; let lastScheduledKey = ""; let scheduledRun: Promise<void> | undefined;
+export function startMagnetBackupScheduler(): void { if (!config.magnetBackupEnabled || scheduler) return; scheduler = setInterval(async () => { const now = new Date(); const parts = new Intl.DateTimeFormat("en-CA", { timeZone: config.magnetBackupTimezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now); const time = `${parts.find((part) => part.type === "hour")?.value}:${parts.find((part) => part.type === "minute")?.value}`; const key = now.toISOString().slice(0, 10); if (time !== cronTime() || key === lastScheduledKey || scheduledRun) return; lastScheduledKey = key; const provider = registry.configured()[0]; if (!provider) return; scheduledRun = createMagnetBackup(provider.id, "FULL").then(() => { applyMagnetBackupRetention(provider.id); }).catch(() => { /* preserve last valid backup */ }).finally(() => { scheduledRun = undefined; }); await scheduledRun; }, 60_000); }
