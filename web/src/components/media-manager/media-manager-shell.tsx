@@ -49,6 +49,22 @@ function StatusBadge({ value }: { value?: string }) {
     <Badge variant={tone[text] || "outline"}>{text.replaceAll("_", " ")}</Badge>
   );
 }
+
+function displayIdentity(item: any): any {
+  const identity = item?.identity || item?.contentIdentity || {};
+  const version = item?.versions?.[0] || item?.existingVersions?.[0];
+  const fingerprint = version?.fingerprint || {};
+  const storage = fingerprint.storage || {};
+  const source = String(storage.path || version?.releaseName || version?.filename || "");
+  const basename = source.split(/[\\/]/).pop() || source;
+  const numericMovie = basename.match(/^(\d{1,4})[._ -]+((?:19|20|21)\d{2})(?:[._ -]|$)/);
+  const identityLooksLikeRelease = /(?:proper|repack|bluray|web[-. ]?dl|webrip|hdtv|1080p|2160p|x26[45]|remux)/i.test(String(identity.title || ""));
+  if (identity.kind === "movie" && numericMovie && identityLooksLikeRelease) {
+    return { ...identity, title: numericMovie[1], year: Number(numericMovie[2]) };
+  }
+  return { ...identity, title: identity.title || item?.title || "Unidentified content", year: identity.year, kind: identity.kind };
+}
+
 function ErrorBox({ error }: { error?: string }) {
   return error ? (
     <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
@@ -307,9 +323,23 @@ function Header({
 function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; onClose: () => void; onReviewAction?: (id: string, body: Record<string, unknown>, item?: any) => void; onSaved?: () => void }) {
   const review = item.review || (item.parsed ? item : undefined);
   const identity = item.identity || item.contentIdentity || (review ? { title: review.parsed?.title, year: review.parsed?.year, kind: review.parsed?.kind, confidence: review.parsed?.confidence, source: review.override ? "manual" : "unknown" } : {});
+  const shownIdentity = displayIdentity(item);
   const versions = item.versions || item.existingVersions || [];
   const reviewStatus = review?.parsed?.status;
   const identityAction = review?.override ? "Change Match" : reviewStatus === "ambiguous" || reviewStatus === "unmatched" || reviewStatus === "fallback" || reviewStatus === "conflict" ? "Resolve Identity" : "Change Match";
+  const leafName = (value: unknown) => String(value || "").split(/[\\/]/).pop() || "—";
+  const versionDetails = (version: any) => {
+    const fingerprint = version.fingerprint || {};
+    const video = fingerprint.video || {};
+    const storage = fingerprint.storage || {};
+    const release = fingerprint.release || {};
+    const audio = [...new Set((fingerprint.audio || []).map((item: any) => item.language).filter(Boolean))].join(", ");
+    return { fingerprint, video, storage, release, audio, name: leafName(storage.path || version.releaseName || version.filename) };
+  };
+  const decisionVersions = versions.filter((version: any) => ["KEEP", "REVIEW", "DELETE_CANDIDATE"].includes(version.decision));
+  const candidates = decisionVersions.filter((version: any) => version.decision === "DELETE_CANDIDATE");
+  const keeps = decisionVersions.filter((version: any) => version.decision === "KEEP");
+  const isDeleteImpact = Array.isArray(item.alternativeVersions) || item.providerItemId !== undefined;
   return (
     <Card className="border-primary/40">
       <CardHeader className="flex flex-row items-start justify-between">
@@ -324,10 +354,10 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
           <dl className="space-y-1 text-muted-foreground">
             <p>
               <b className="text-foreground">Title:</b>{" "}
-              {identity.title || item.title || "—"}
+              {shownIdentity.title}
             </p>
             <p>
-              <b className="text-foreground">Year:</b> {identity.year || "—"}
+              <b className="text-foreground">Year:</b> {shownIdentity.year || "—"}
             </p>
             <p>
               <b className="text-foreground">Type:</b>{" "}
@@ -351,6 +381,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
             </p>
           </dl>
           {review && <div className="mt-4 rounded border bg-muted/20 p-3"><h3 className="mb-2 font-semibold">Detected identity</h3><p><b>Title:</b> {review.parsed?.title || "—"}</p><p><b>Type:</b> {review.parsed?.kind || "—"}</p><p><b>Status:</b> {review.parsed?.status || "—"}</p><p><b>Confidence:</b> {review.parsed?.confidence ?? "—"}</p><p><b>Reason:</b> {review.parsed?.reason || "—"}</p></div>}
+          {review && <div className="mt-4 rounded border border-amber-500/40 bg-amber-500/5 p-3"><h3 className="mb-2 font-semibold">Problem and required action</h3><p>{(item.blockers || item.reasonCodes || []).join(" · ") || "The item requires operator review before an automatic decision is safe."}</p><p className="mt-1 text-xs text-muted-foreground">Identity confidence: {identity.confidence ?? "unknown"} · Recoverability: {item.recoverability?.status || "unknown"}</p><p className="mt-1 break-all text-xs text-muted-foreground">Source: {item.sourceBasename || review.sourceBasename || review.sourcePath || "not available"}</p></div>}
           {(identity.title || item.title) && (review || item.allowIdentityActions !== false) && <div className="mt-4"><h3 className="mb-2 font-semibold">Identity actions</h3><IdentityResolver reviewId={item.reviewId || review?.id} identity={{ title: identity.title || item.title, year: identity.year, kind: identity.kind, mediaType: identity.mediaType, tmdbId: identity.tmdbId }} initialQuery={identity.title || item.title} initialType={identity.kind === "episode" || identity.mediaType === "tv" ? "tv" : "movie"} initialYear={identity.year} existingOverride={item.override || review?.override || (identity.source === "manual" ? { tmdbId: identity.tmdbId } : undefined)} actionLabel={identityAction} onSaved={onSaved} /></div>}
           {review && onReviewAction && <div className="mt-4 flex flex-wrap gap-2">{review.decision === "dismissed" ? <Button size="sm" onClick={() => onReviewAction(review.id, { action: "retry" }, review)}>Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => onReviewAction(review.id, { decision: "accepted" }, review)}>Accept as detected</Button><Button size="sm" variant="outline" onClick={() => onReviewAction(review.id, { action: "retry" }, review)}>Retry / Resume</Button><Button size="sm" variant="destructive" onClick={() => onReviewAction(review.id, { decision: "dismissed" }, review)}>Dismiss</Button></>}</div>}
         </section>
@@ -379,23 +410,15 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
           <div className="space-y-2">
             {versions.length ? (
               versions.map((version: any, index: number) => (
-                <div className="rounded border p-2" key={version.id || index}>
-                  <p>
-                    {version.fingerprint?.media?.resolution ||
-                      version.resolution ||
-                      "media"}{" "}
-                    ·{" "}
-                    {version.fingerprint?.media?.videoCodec ||
-                      version.codec ||
-                      "codec unknown"}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {version.fingerprint?.storage?.provider ||
-                      version.provider ||
-                      "provider"}{" "}
-                    · score {version.score ?? "—"} · {version.decision || "—"}
-                  </p>
-                </div>
+                (() => { const detail = versionDetails(version); return <div className="rounded border p-2" key={version.id || index}>
+                  <p className="font-medium">{detail.video.resolution || version.resolution || "Resolution unknown"} · {detail.video.codec || version.codec || "Codec unknown"} · {detail.video.dolbyVision || detail.video.hdr10 ? "HDR" : "SDR"}</p>
+                  <p className="text-xs text-muted-foreground">{detail.name} · {detail.storage.provider || version.provider || "Provider unknown"} · {detail.storage.torrentId || version.providerItemId || "ProviderItem unknown"}</p>
+                  <p className="text-xs text-muted-foreground">{detail.audio ? `Audio: ${detail.audio} · ` : ""}{detail.storage.size ? `${Math.round(Number(detail.storage.size) / 1_000_000)} MB · ` : ""}{version.decision || "Decision unknown"}</p>
+                  <p className="mt-1 text-xs">Version ID: {version.id || "—"}</p>
+                  <p className="text-xs">Release: {detail.name}</p>
+                  {detail.storage.path && <p className="break-all text-xs text-muted-foreground">Path: {detail.storage.path}</p>}
+                  {detail.fingerprint.subtitles?.length > 0 && <p className="text-xs text-muted-foreground">Subtitles: {[...new Set(detail.fingerprint.subtitles.map((subtitle: any) => subtitle.language).filter(Boolean))].join(", ")}</p>}
+                </div>; })()
               ))
             ) : (
               <p className="text-muted-foreground">
@@ -407,11 +430,14 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
         <section>
           <h3 className="mb-2 font-semibold">Policy / Decision</h3>
           <p><b>Decision:</b> <StatusBadge value={item.decision || versions[0]?.decision || "REVIEW"} /></p>
+          <p className="mt-2"><b>Matched slot:</b> {versions.flatMap((version: any) => version.satisfiesProfiles || []).join(", ") || "none"}</p>
+          {candidates.length > 0 && <div className="mt-3 rounded border border-amber-500/50 bg-amber-500/5 p-3"><p className="font-semibold">Decision comparison</p>{candidates.map((version: any, index: number) => <div key={version.id || index} className="mt-2"><p><b>Delete candidate:</b> {versionDetails(version).name}</p><p className="text-xs text-muted-foreground">{(version.reasons || []).join(" · ") || "Policy marked this version as redundant or lower priority."}</p></div>)}{(keeps.length > 0 || item.alternativeVersions?.length > 0) && <div className="mt-2">{keeps.map((version: any, index: number) => <div key={version.id || index}><p><b>Kept instead:</b> {versionDetails(version).name}</p><p className="text-xs text-muted-foreground">{(version.reasons || []).join(" · ") || "Winning version for the matched retention slot."}</p></div>)}{item.alternativeVersions?.map((version: any, index: number) => <div key={version.id || index}><p><b>Alternative KEEP:</b> {version.title || "Content"} · ProviderItem {version.providerItemId}</p><p className="text-xs text-muted-foreground">{(version.reasons || []).join(" · ") || "Alternative KEEP version identified."}</p></div>)}</div>}</div>}
           <p className="mt-2 text-muted-foreground">Winning profiles: {versions.flatMap((version: any) => version.satisfiesProfiles || []).join(", ") || "none"}</p>
           <div className="mt-2 space-y-1 text-xs text-muted-foreground">{versions.flatMap((version: any) => (version.reasons || []).map((reason: any) => <p key={`${version.id}-${reason.code}`}>• {reason.message}</p>))}</div>
         </section>
         <section>
           <h3 className="mb-2 font-semibold">Safety</h3>
+          {isDeleteImpact && <><p><b>Physical resource:</b> ProviderItem {item.providerItemId || "unknown"}</p><p><b>Physical deletion:</b> {item.protectedByKeep ? "PROTECTED" : item.state === "READY" ? "ELIGIBLE (executor disabled)" : "BLOCKED"}</p>{item.protectedByKeep && <p className="text-amber-700">Protection reason: this ProviderItem is also referenced by a KEEP version or shared content.</p>}</>}
           {versions.length ? versions.map((version: any, index: number) => <p key={version.id || index} className="text-sm text-muted-foreground">{version.fingerprint?.storage?.provider || "provider"} · recoverability: {version.fingerprint?.storage?.infoHash ? "YES · infohash available" : "UNKNOWN · review required"}</p>) : <p className="text-muted-foreground">No safety details available.</p>}
         </section>
         <details className="rounded border p-3 lg:col-span-2">
@@ -657,6 +683,10 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     `/api/version-manager/delete?scope=${encodeURIComponent(deleteScope)}&q=${encodeURIComponent(query)}`,
     preset === "delete-preview" || preset === "delete",
   );
+  const reviewPreview = useJson<any>(
+    "/api/version-manager/preview",
+    preset === "review",
+  );
   const missing = useJson<any>(
     "/api/version-manager/missing",
     preset === "missing",
@@ -745,7 +775,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const libraryRows = useMemo(() => {
     const rows = new Map<string, { kind: "movie" | "show" | "unknown"; title: string; year?: number; groups: any[] }>();
     for (const group of groups) {
-      const identity = group.identity || {};
+      const identity = displayIdentity(group);
       const isEpisode = identity.kind === "episode";
       const key = isEpisode && (identity.tmdbId || identity.tvdbId) ? `show:${identity.tmdbId || identity.tvdbId}` : `group:${group.id}`;
       const current: { kind: "movie" | "show" | "unknown"; title: string; year?: number; groups: any[] } = rows.get(key) || { kind: isEpisode ? "show" : identity.kind === "movie" ? "movie" : "unknown", title: identity.title || group.title || "Unidentified content", year: identity.year, groups: [] };
@@ -757,6 +787,11 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const needs = (missing.data?.previews || []).filter((item: any) =>
     JSON.stringify(item).toLowerCase().includes(query.toLowerCase()),
   );
+  const enrichReviewEntry = (entry: any) => {
+    const ids = new Set(entry.versionIds || []);
+    const versions = (reviewPreview.data?.groups || []).flatMap((group: any) => group.versions || []).filter((version: any) => ids.has(version.id));
+    return { ...entry, versions, review: entry.review || entry.organizerReview };
+  };
   return (
     <div className="space-y-6">
       <Header
@@ -865,7 +900,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 {Object.entries(deletePreview.data?.counts || {}).map(([label, value]) => <Stat key={label} label={label.replaceAll("_", " ")} value={String(value)} />)}
               </div>
-              <div className="space-y-3">{(deleteImpact.data?.items || []).slice(0, 200).map((item: any) => <Card key={`${item.provider}-${item.providerItemId}`}><CardContent className="space-y-2 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="font-medium">ProviderItem {item.providerItemId}</p><p className="text-xs text-muted-foreground">{item.versions.length} logical versions · {item.affectedGroups.length} affected contents · {item.physicalSize ? `${Math.round(item.physicalSize / 1_000_000)} MB physical` : "size unknown"}</p></div><StatusBadge value={item.onlyCopy ? "ONLY COPY" : item.state} /></div><p className="text-sm">{item.reasons.join(" · ")}</p><p className="text-xs text-muted-foreground">{item.versions.map((version: any) => `${version.title || "Unresolved"}${version.season !== undefined ? ` S${version.season}` : ""}${version.episode !== undefined ? ` E${version.episode}` : ""} · ${version.decision || "—"}`).join("; ")}</p>{item.alternativeVersions?.length > 0 && <p className="text-xs text-muted-foreground">Alternative KEEP: {item.alternativeVersions.map((version: any) => `${version.title || "Unresolved"}${version.episode !== undefined ? ` E${version.episode}` : ""} · ProviderItem ${version.providerItemId}`).join("; ")}</p>}{item.protectedByKeep && <p className="text-xs font-medium text-amber-700">Protected: deleting this physical ProviderItem would also remove a KEEP version.</p>}</CardContent></Card>)}</div>
+              <div className="space-y-2">{(deleteImpact.data?.items || []).slice(0, 200).map((item: any) => { const candidate = item.versions.find((version: any) => version.decision === "DELETE_CANDIDATE") || item.versions[0]; const kept = [...item.versions.filter((version: any) => version.decision === "KEEP"), ...(item.alternativeVersions || [])]; const title = candidate?.title || kept[0]?.title || "Unresolved content"; const versionLabel = (version: any) => `${version?.season !== undefined ? `S${String(version.season).padStart(2, "0")}E${String(version.episode || 0).padStart(2, "0")} · ` : ""}${version?.files?.[0]?.path?.split(/[\\/]/).pop() || "Version details unavailable"}`; return <Card key={`${item.provider}-${item.providerItemId}`} className="cursor-pointer transition-colors hover:border-primary/50" onClick={() => setSelected(item)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelected(item); } }}><CardContent className="space-y-2 p-3"><div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-medium">{title}</p><p className="text-xs text-muted-foreground">Candidate for removal · {item.versions.length} physical-file references · {item.physicalSize ? `${Math.round(item.physicalSize / 1_000_000)} MB physical` : "size unknown"}</p></div><StatusBadge value={item.onlyCopy ? "ONLY COPY" : item.protectedByKeep ? "PROTECTED" : item.state === "READY" ? "ELIGIBLE" : "BLOCKED"} /></div><div className="rounded border border-destructive/20 bg-destructive/5 p-2 text-sm"><p className="font-medium">What would be removed?</p><p>{versionLabel(candidate)}</p><p className="text-xs text-muted-foreground">{candidate?.reasons?.join(" · ") || "Marked as a candidate by the retention policy."}</p></div>{kept.length > 0 && <div className="rounded border border-emerald-500/30 bg-emerald-500/5 p-2 text-sm"><p className="font-medium">Kept instead</p><p>{versionLabel(kept[0])}</p><p className="text-xs text-muted-foreground">{kept[0]?.reasons?.join(" · ") || "Required by an enabled retention slot."}</p></div>}<div className="text-sm"><p className="font-medium">Physical deletion</p><p>{item.protectedByKeep ? "Protected from physical deletion" : item.onlyCopy ? "Blocked — only copy identified" : "Eligible in dry run; executor is disabled"}</p><p className="text-xs text-muted-foreground">{item.protectedByKeep ? "The same physical item also contains a version that must be kept." : item.reasons.join(" · ")}</p></div><details onClick={(event) => event.stopPropagation()} className="text-xs text-muted-foreground"><summary className="cursor-pointer">Technical details</summary><p className="mt-1">ProviderItem: {item.providerItemId}</p><p>Provider: {item.provider || "—"}</p><p>Physical references: {item.versions.length}</p></details></CardContent></Card>; })}</div>
             </>
           )}
         </>
@@ -879,12 +914,12 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
             <div className="space-y-3">
               {libraryRows.slice(0, 200).map((row, index) => (
                 <Card key={`${row.kind}-${row.title}-${index}`} className="cursor-pointer transition-colors hover:border-primary/50" onClick={() => row.kind !== "show" && setSelected(row.groups[0])} onKeyDown={(event) => { if (row.kind !== "show" && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setSelected(row.groups[0]); } }} role={row.kind === "show" ? undefined : "button"} tabIndex={row.kind === "show" ? undefined : 0}>
-                  <CardContent className="space-y-3 p-4">
+                  <CardContent className="space-y-2 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div><p className="font-medium">{row.title}</p><p className="text-xs text-muted-foreground">{row.year || "—"} · {row.kind === "show" ? "TV show" : row.kind === "movie" ? "Movie" : "Unresolved"} · {row.groups.reduce((count, group) => count + group.versions.length, 0)} versions</p></div>
                       <StatusBadge value={row.kind === "show" ? "SERIES" : row.kind === "movie" ? "MOVIE" : "UNRESOLVED"} />
                     </div>
-                    {row.kind === "show" ? <div className="space-y-2 border-l-2 pl-3">{[...new Map(row.groups.map((group) => [group.identity?.season || 0, row.groups.filter((candidate) => (candidate.identity?.season || 0) === (group.identity?.season || 0))])).entries()].sort(([a], [b]) => a - b).map(([season, seasonGroups]) => <details key={season} className="rounded border p-2"><summary className="cursor-pointer text-sm font-medium">Season {season || "unknown"} · {seasonGroups.length} episodes</summary><div className="mt-2 space-y-2">{seasonGroups.sort((a, b) => (a.identity?.episode || 0) - (b.identity?.episode || 0)).map((group) => <div key={group.id} className="rounded border p-2 text-sm"><button className="font-medium hover:underline" onClick={() => setSelected(group)}>Episode {group.identity?.episode || "unknown"} · {group.versions.length} versions</button><div className="mt-1 flex flex-wrap gap-1">{group.versions.map((version: any) => <StatusBadge key={version.id} value={version.decision} />)}</div></div>)}</div></details>)}</div> : <div className="flex flex-wrap gap-2">{row.groups.flatMap((group) => group.versions).slice(0, 8).map((version: any) => <button key={version.id} onClick={() => setSelected(row.groups.find((group) => group.versions.some((candidate: any) => candidate.id === version.id)))}><StatusBadge value={version.decision || "VERSION"} /></button>)}</div>}
+                    {row.kind === "show" ? <div className="space-y-2 border-l-2 pl-3">{[...new Map(row.groups.map((group) => [group.identity?.season || 0, row.groups.filter((candidate) => (candidate.identity?.season || 0) === (group.identity?.season || 0))])).entries()].sort(([a], [b]) => a - b).map(([season, seasonGroups]) => <details key={season} className="rounded border p-2"><summary className="cursor-pointer text-sm font-medium">Season {season || "unknown"} · {seasonGroups.length} episodes</summary><div className="mt-2 space-y-2">{seasonGroups.sort((a, b) => (a.identity?.episode || 0) - (b.identity?.episode || 0)).map((group) => <div key={group.id} className="rounded border p-2 text-sm"><button className="font-medium hover:underline" onClick={() => setSelected(group)}>Episode {group.identity?.episode || "unknown"} · {group.versions.length} versions</button><div className="mt-1 flex flex-wrap gap-1">{group.versions.map((version: any) => <StatusBadge key={version.id} value={version.decision} />)}</div></div>)}</div></details>)}</div> : <div className="grid gap-2 sm:grid-cols-2">{row.groups.flatMap((group) => group.versions).slice(0, 8).map((version: any) => { const fingerprint = version.fingerprint || {}; const storage = fingerprint.storage || {}; const video = fingerprint.video || {}; return <button className="rounded border p-2 text-left text-xs hover:border-primary/50" key={version.id} onClick={() => setSelected(row.groups.find((group) => group.versions.some((candidate: any) => candidate.id === version.id)))}><p className="font-medium">{video.resolution || "Resolution unknown"} · {video.codec || "Codec unknown"} · {video.dolbyVision || video.hdr10 ? "HDR" : "SDR"}</p><p className="text-muted-foreground">{String(storage.path || version.releaseName || version.filename || "Release unknown").split(/[\\/]/).pop()} · {version.decision || "REVIEW"}</p></button>; })}</div>}
                   </CardContent>
                 </Card>
               ))}
@@ -1004,7 +1039,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                     {entry.organizerReview && entry.decision !== "dismissed" && <IdentityResolver reviewId={entry.organizerReview.id} identity={entry.identity} initialQuery={entry.title} initialType={entry.kind === "episode" ? "tv" : "movie"} initialYear={entry.year} existingOverride={entry.organizerReview.override} actionLabel={entry.organizerReview.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />}
                     <div className="flex flex-wrap gap-2">
                       {entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "accepted" }, entry.organizerReview)}><Check className="mr-2 h-4 w-4" />Accept as detected</Button><Button size="sm" variant="destructive" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "dismissed" }, entry.organizerReview)}><X className="mr-2 h-4 w-4" />Dismiss</Button><Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry.organizerReview)}><RefreshCw className="mr-2 h-4 w-4" />Retry / Resume</Button></>)}
-                      <Button size="sm" variant="ghost" onClick={() => setSelected(entry)}>
+                      <Button size="sm" variant="ghost" onClick={() => setSelected(enrichReviewEntry(entry))}>
                         <ExternalLink className="mr-2 h-4 w-4" />Details
                       </Button>
                     </div>
@@ -1141,7 +1176,7 @@ function Migration({ section = "export" }: { section?: string }) {
         <Button asChild variant={section === "import" ? "default" : "outline"}>
           <Link href="/media-manager/migration/import">
           <FileUp className="mr-2 h-4 w-4" />
-          Import preview
+          Migration Preview
           </Link>
         </Button>
         <Button asChild variant={section === "history" ? "default" : "outline"}>
@@ -1316,14 +1351,15 @@ function Migration({ section = "export" }: { section?: string }) {
       </Card>
       <Card id="import">
         <CardHeader>
-          <CardTitle className="text-base">Import preview</CardTitle>
+          <CardTitle className="text-base">Migration Preview</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {!importSupported && <ErrorBox error="Import preview is unavailable for the selected target provider because its declared capabilities are unsupported." />}
+          {!importSupported && <ErrorBox error="Migration preview is unavailable for the selected target provider because its declared capabilities are unsupported." />}
           <p className="text-sm text-muted-foreground">
-            Analyze a manifest or magnets file, select eligible items, then use
-            the explicit confirmation to start a persistent target-provider job.
-            The source provider is never modified.
+            Analyze a manifest or magnets file, reconcile it with the target,
+            select eligible items, then use the explicit confirmation to start
+            a persistent target-provider migration job. The source provider
+            is never modified.
           </p>
           <input
             type="file"
@@ -1403,7 +1439,7 @@ function Migration({ section = "export" }: { section?: string }) {
               </div>
               <ErrorBox error={migrationStartError} />
               {migrationJob && <div className="rounded border p-3 text-sm"><div className="flex flex-wrap justify-between gap-2"><b>Migration job {migrationJob.status}</b><span>{migrationJob.processed}/{migrationJob.total}</span></div><p className="mt-1 text-muted-foreground">Imported {migrationJob.imported} · skipped {migrationJob.skipped} · failed {migrationJob.failed}</p></div>}
-              <Button disabled={!selectedImport.size || !importSupported || Boolean(migrationJob && ["QUEUED", "RUNNING"].includes(migrationJob.status))} onClick={() => void startMigration()}>START MIGRATION</Button>
+              <Button disabled={!selectedImport.size || !importSupported || Boolean(migrationJob && ["QUEUED", "RUNNING"].includes(migrationJob.status))} onClick={() => void startMigration()}>Execute Migration</Button>
             </>
           )}
         </CardContent>
