@@ -1372,6 +1372,7 @@ function Migration({ section = "export" }: { section?: string }) {
           />
           <div className="flex flex-wrap items-center gap-2"><select className="rounded border bg-background p-2 text-sm" value={backupToImport} onChange={(event) => { setBackupToImport(event.target.value); void previewMagnetBackup(event.target.value); }}><option value="">Import from Magnet Backup…</option>{(magnetBackups.data?.backups || []).map((backup: any) => <option key={backup.id} value={backup.id}>{backup.mode} · {backup.createdAt}</option>)}</select><span className="text-xs text-muted-foreground">Read-only preview; no import starts here.</span></div>
           <ErrorBox error={fileError} />
+          {!importPlan && <div className="flex flex-wrap items-center gap-2"><Button disabled>Execute Migration</Button><span className="text-xs text-muted-foreground">Generate a valid migration preview and select eligible items to enable execution.</span></div>}
           {importPlan && (
             <>
               <div className="flex flex-wrap items-center gap-2">
