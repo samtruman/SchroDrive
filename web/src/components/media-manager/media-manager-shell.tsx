@@ -344,7 +344,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
     <Card className="border-primary/40">
       <CardHeader className="flex flex-row items-start justify-between">
         <CardTitle className="text-base">Content Detail</CardTitle>
-        <Button variant="ghost" size="sm" onClick={onClose}>
+        <Button aria-label="Close details" variant="ghost" size="sm" onClick={onClose}>
           <X className="h-4 w-4" />
         </Button>
       </CardHeader>
