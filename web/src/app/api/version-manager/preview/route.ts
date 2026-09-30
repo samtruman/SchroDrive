@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server"
+import { backendUnavailable, readBackendJson } from "../_lib/proxy"
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8978"
 
 export async function GET() {
   try {
     const response = await fetch(`${BACKEND_URL}/api/version-manager/preview`, { cache: "no-store" })
-    return NextResponse.json(await response.json(), { status: response.status })
+    return readBackendJson(response)
   } catch (error) {
-    return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Backend unavailable" }, { status: 502 })
+    return backendUnavailable(error)
   }
 }

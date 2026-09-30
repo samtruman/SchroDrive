@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server"
+import { backendUnavailable, readBackendJson } from "../../_lib/proxy"
 
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8978"
 
@@ -9,8 +10,8 @@ export async function POST(request: NextRequest) {
       headers: { "content-type": "application/json" },
       body: JSON.stringify(await request.json()),
     })
-    return NextResponse.json(await response.json(), { status: response.status })
+    return readBackendJson(response)
   } catch (error) {
-    return NextResponse.json({ ok: false, error: error instanceof Error ? error.message : "Backend unavailable" }, { status: 502 })
+    return backendUnavailable(error)
   }
 }
