@@ -93,6 +93,9 @@ tool was not added solely for this audit.
   the expected unified schema; browser navigation passed. Migration State
   returned HTTP 503 with the explicit configuration error expected from an
   unconfigured isolated provider set.
+- A second isolated run with a deterministic provider fixture populated
+  Content Detail and returned Migration State HTTP 200 (`ALREADY_PRESENT`);
+  Playwright verified both interactions with no unexpected network failures.
 
 ## Recommended Cleanup
 
