@@ -974,6 +974,8 @@ export class WebDAVBridge {
   private readonly cache: BridgeCache;
   private server: http.Server | null = null;
   private lastRefresh: string | null = null;
+  /** Shares one refresh among concurrent PROPFIND requests for this bridge. */
+  private directoriesInFlight: Promise<VirtualDirectory[]> | null = null;
 
   /** Per-torrent consecutive failure counter for dead torrent detection. */
   private torrentFailures: Map<string, number> = new Map();
@@ -1601,6 +1603,18 @@ export class WebDAVBridge {
   private async getDirectories(): Promise<VirtualDirectory[]> {
     const cached = this.cache.getTorrentList();
     if (cached) return cached;
+
+    if (this.directoriesInFlight) return this.directoriesInFlight;
+
+    this.directoriesInFlight = this.refreshDirectories();
+    try {
+      return await this.directoriesInFlight;
+    } finally {
+      this.directoriesInFlight = null;
+    }
+  }
+
+  private async refreshDirectories(): Promise<VirtualDirectory[]> {
 
     let dirs: VirtualDirectory[] = [];
 

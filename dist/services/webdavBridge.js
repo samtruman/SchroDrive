@@ -774,6 +774,8 @@ class WebDAVBridge {
     constructor(options) {
         this.server = null;
         this.lastRefresh = null;
+        /** Shares one refresh among concurrent PROPFIND requests for this bridge. */
+        this.directoriesInFlight = null;
         /** Per-torrent consecutive failure counter for dead torrent detection. */
         this.torrentFailures = new Map();
         /** Torrents flagged as dead due to persistent download failures. */
@@ -1290,6 +1292,17 @@ class WebDAVBridge {
         const cached = this.cache.getTorrentList();
         if (cached)
             return cached;
+        if (this.directoriesInFlight)
+            return this.directoriesInFlight;
+        this.directoriesInFlight = this.refreshDirectories();
+        try {
+            return await this.directoriesInFlight;
+        }
+        finally {
+            this.directoriesInFlight = null;
+        }
+    }
+    async refreshDirectories() {
         let dirs = [];
         try {
             // Use the provider registry to fetch directories — provider-agnostic

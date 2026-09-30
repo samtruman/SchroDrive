@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { getVersionProfiles, saveVersionProfiles } from "../../../src/services/versionManagerStore";
+import { createVersionManagerScanJob, getLatestVersionManagerSnapshot, getVersionProfiles, getVersionManagerScanJob, recoverInterruptedVersionManagerScanJobs, saveVersionManagerSnapshot, saveVersionProfiles } from "../../../src/services/versionManagerStore";
 import { defaultVersionManagerPolicy, versionManagerPolicyHash, type VersionProfile } from "../../../src/services/versionManager";
 
 describe("version manager policy persistence", () => {
@@ -24,5 +24,13 @@ describe("version manager policy persistence", () => {
     expect(reloaded[0].hardRequirements).toEqual(profile.hardRequirements);
     expect(reloaded[0].scoringRules).toEqual(profile.scoringRules);
     expect(versionManagerPolicyHash(defaultVersionManagerPolicy, [profile])).toBe(versionManagerPolicyHash(defaultVersionManagerPolicy, reloaded));
+  });
+
+  test("persists a valid snapshot atomically and recovers interrupted jobs", () => {
+    saveVersionManagerSnapshot([], [], { policyHash: "fixture-hash", status: "VALID" });
+    expect(getLatestVersionManagerSnapshot()?.status).toBe("VALID");
+    const job = createVersionManagerScanJob();
+    recoverInterruptedVersionManagerScanJobs();
+    expect(getVersionManagerScanJob(job.id)?.status).toBe("FAILED");
   });
 });

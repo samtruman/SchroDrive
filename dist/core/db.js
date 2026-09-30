@@ -46,6 +46,7 @@ exports.getAllBlacklistBackup = getAllBlacklistBackup;
 exports.recoverBlacklistFromDb = recoverBlacklistFromDb;
 exports.setCacheEntry = setCacheEntry;
 exports.getCacheEntry = getCacheEntry;
+exports.deleteCacheEntry = deleteCacheEntry;
 exports.pruneExpiredCache = pruneExpiredCache;
 exports.getOverseerrRequest = getOverseerrRequest;
 exports.upsertOverseerrRequest = upsertOverseerrRequest;
@@ -236,7 +237,23 @@ function runMigrations(database) {
       group_count INTEGER NOT NULL,
       version_count INTEGER NOT NULL,
       profiles_json TEXT NOT NULL,
+      groups_json TEXT,
+      policy_hash TEXT,
+      snapshot_status TEXT NOT NULL DEFAULT 'UNKNOWN',
       created_at TEXT NOT NULL
+    )`,
+        `CREATE TABLE IF NOT EXISTS version_manager_scan_jobs (
+      id TEXT PRIMARY KEY,
+      status TEXT NOT NULL,
+      phase TEXT NOT NULL,
+      completed INTEGER NOT NULL DEFAULT 0,
+      total INTEGER,
+      started_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      finished_at TEXT,
+      last_error TEXT,
+      snapshot_id TEXT,
+      snapshot_valid INTEGER NOT NULL DEFAULT 0
     )`,
         `CREATE TABLE IF NOT EXISTS version_manager_profiles (
       profile_id TEXT PRIMARY KEY,
@@ -331,6 +348,23 @@ function runMigrations(database) {
         catch (err) {
             if (!/duplicate column name/i.test(String(err?.message || ""))) {
                 console.error(`[${new Date().toISOString()}][db] Migration failed: ${err?.message}`);
+            }
+        }
+    }
+    // These columns were added after the first Media Manager release. Keep the
+    // migration additive and conservative: legacy scans remain UNKNOWN and are
+    // never promoted to a valid snapshot automatically.
+    for (const sql of [
+        "ALTER TABLE version_manager_scans ADD COLUMN groups_json TEXT",
+        "ALTER TABLE version_manager_scans ADD COLUMN policy_hash TEXT",
+        "ALTER TABLE version_manager_scans ADD COLUMN snapshot_status TEXT NOT NULL DEFAULT 'UNKNOWN'",
+    ]) {
+        try {
+            database.exec(sql);
+        }
+        catch (err) {
+            if (!/duplicate column name/i.test(String(err?.message || ""))) {
+                console.error(`[${new Date().toISOString()}][db] Scan migration failed: ${err?.message}`);
             }
         }
     }
@@ -755,6 +789,12 @@ function getCacheEntry(key) {
         console.error(`[${new Date().toISOString()}][db] getCacheEntry error: ${err?.message}`);
         return null;
     }
+}
+function deleteCacheEntry(key) {
+    try {
+        getDb().prepare('DELETE FROM response_cache WHERE cache_key = ?').run(key);
+    }
+    catch { }
 }
 /**
  * Removes all expired entries from the response cache table.

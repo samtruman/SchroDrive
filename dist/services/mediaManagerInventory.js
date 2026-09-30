@@ -42,7 +42,7 @@ function providerItemWithFiles(item, files, source) {
  * files. File-tree resolution is performed once per provider per scan and the
  * result is reused for every derived fingerprint/version.
  */
-async function loadMediaManagerInventory(providers = providers_1.registry.configured(), stats) {
+async function loadMediaManagerInventory(providers = providers_1.registry.configured(), stats, onProgress) {
     const startedAt = Date.now();
     const metrics = stats?.recoverability || { requested: 0, cacheHits: 0, providerLookups: 0, resolved: 0, unknown: 0 };
     if (stats) {
@@ -52,13 +52,16 @@ async function loadMediaManagerInventory(providers = providers_1.registry.config
     const resolved = [];
     const recoverabilityCache = new Map();
     for (const provider of providers) {
+        onProgress?.({ phase: "provider_listing", completed: 0 });
         if (stats)
             stats.providerListCalls++;
         const items = await provider.listTorrents();
         if (stats)
             stats.providerItems += items.length;
+        onProgress?.({ phase: "provider_listing", completed: items.length, total: items.length });
         if (stats)
             stats.fileTreeFetches++;
+        onProgress?.({ phase: "file_tree", completed: 0, total: items.length });
         const directories = await provider.fetchDirectories();
         const directoriesByItem = new Map();
         for (const directory of directories) {
@@ -66,10 +69,12 @@ async function loadMediaManagerInventory(providers = providers_1.registry.config
             if (!directoriesByItem.has(key))
                 directoriesByItem.set(key, directory);
         }
-        for (const item of items) {
+        for (const [index, item] of items.entries()) {
             await (0, migrationExporter_1.resolveProviderItemRecoverability)(item, provider, recoverabilityCache, metrics);
+            onProgress?.({ phase: "identity", completed: index + 1, total: items.length });
             const treeFiles = normalizeDirectoryFiles(directoriesByItem.get(String(item.id)));
             if (treeFiles.length > 0) {
+                onProgress?.({ phase: "fingerprint", completed: index + 1, total: items.length });
                 if (stats) {
                     stats.fileTreeItems++;
                     stats.mediaFiles += treeFiles.length;
@@ -79,6 +84,7 @@ async function loadMediaManagerInventory(providers = providers_1.registry.config
             }
             const inlineFiles = dedupeFiles(Array.isArray(item.files) ? item.files : []);
             if (inlineFiles.length > 0) {
+                onProgress?.({ phase: "fingerprint", completed: index + 1, total: items.length });
                 if (stats) {
                     stats.inlineFileItems++;
                     stats.mediaFiles += inlineFiles.length;
@@ -88,6 +94,7 @@ async function loadMediaManagerInventory(providers = providers_1.registry.config
             }
             if (stats)
                 stats.nameFallbackItems++;
+            onProgress?.({ phase: "fingerprint", completed: index + 1, total: items.length });
             resolved.push(...(0, versionManager_1.fingerprintTorrent)(providerItemWithFiles(item, [], "ITEM_NAME_FALLBACK"), provider.id));
         }
     }

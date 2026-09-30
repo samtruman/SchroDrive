@@ -43,8 +43,6 @@ const mediaManagerInventory_1 = require("./services/mediaManagerInventory");
 const acquisition_1 = require("./services/acquisition");
 const seerrAcquisitionAdapter_1 = require("./services/seerrAcquisitionAdapter");
 const versionManagerStore_1 = require("./services/versionManagerStore");
-const versionManagerProbe_1 = require("./services/versionManagerProbe");
-const versionManagerMetadata_1 = require("./services/versionManagerMetadata");
 const tmdbService_1 = require("./services/tmdbService");
 const manualIdentity_1 = require("./services/manualIdentity");
 const migrationExporter_1 = require("./services/migrationExporter");
@@ -53,11 +51,25 @@ const migrationState_1 = require("./services/migrationState");
 const providerMigrationCapabilities_1 = require("./services/providerMigrationCapabilities");
 const db_1 = require("./core/db");
 const unifiedReview_1 = require("./services/unifiedReview");
+const versionManagerScanJob_1 = require("./services/versionManagerScanJob");
 // ===========================================================================
 // Server Initialisation
 // ===========================================================================
 async function loadVersionManagerInventory(stats) {
     return (0, mediaManagerInventory_1.loadMediaManagerInventory)(undefined, stats);
+}
+function readVersionManagerGroups() {
+    const snapshot = (0, versionManagerStore_1.getLatestVersionManagerSnapshot)();
+    if (!snapshot)
+        return null;
+    const storedVersions = snapshot.groups.flatMap((group) => (group.versions || []).map((version) => ({ id: version.id, fingerprint: version.fingerprint })));
+    const evaluated = (0, manualIdentity_1.applyManualIdentityOverrides)(storedVersions);
+    return {
+        groups: (0, versionManager_1.evaluateVersionGroups)(evaluated, (0, versionManagerStore_1.getVersionProfiles)(), (0, versionManagerStore_1.getVersionManagerPolicy)()),
+        snapshotId: snapshot.id,
+        snapshotCreatedAt: snapshot.createdAt,
+        snapshotPolicyHash: snapshot.policyHash,
+    };
 }
 /**
  * Initialises and starts the Express HTTP server with all API routes,
@@ -200,7 +212,23 @@ function startServer() {
             policyHash: (0, versionManager_1.versionManagerPolicyHash)(policy, profiles),
             profiles,
             latestScan: (0, versionManagerStore_1.getLatestVersionManagerScan)() || null,
+            scanJob: (0, versionManagerScanJob_1.getVersionManagerScanRuntimeStatus)(),
         });
+    });
+    /** POST /api/version-manager/scan — starts or joins the canonical scan job. */
+    app.post("/api/version-manager/scan", (_req, res) => {
+        const job = (0, versionManagerScanJob_1.startVersionManagerScan)();
+        res.status(202).json({ ok: true, job, statusUrl: `/api/version-manager/scan/${encodeURIComponent(job.id)}`, resultUrl: "/api/version-manager/preview" });
+    });
+    /** GET /api/version-manager/scan — returns the current scan job, if any. */
+    app.get("/api/version-manager/scan", (_req, res) => {
+        res.json({ ok: true, ...(0, versionManagerScanJob_1.getVersionManagerScanRuntimeStatus)() });
+    });
+    app.get("/api/version-manager/scan/:id", (req, res) => {
+        const job = (0, versionManagerScanJob_1.getVersionManagerScanStatus)(String(req.params.id));
+        if (!job)
+            return res.status(404).json({ ok: false, error: "Scan job not found" });
+        return res.json({ ok: true, job, resultUrl: "/api/version-manager/preview" });
     });
     /**
      * GET /api/version-manager/preview — Builds a live, read-only inventory
@@ -208,40 +236,29 @@ function startServer() {
      */
     app.get("/api/version-manager/preview", async (_req, res) => {
         try {
-            const versions = await loadVersionManagerInventory();
-            const evaluatedVersions = (0, manualIdentity_1.applyManualIdentityOverrides)(versions);
-            const probe = await (0, versionManagerProbe_1.probeVersionRecords)(evaluatedVersions);
-            const metadata = await (0, versionManagerMetadata_1.enrichVersionMetadata)(evaluatedVersions);
-            const profiles = (0, versionManagerStore_1.getVersionProfiles)();
+            const snapshot = readVersionManagerGroups();
+            if (!snapshot)
+                return res.status(503).json({ ok: false, snapshotAvailable: false, error: "No valid inventory snapshot is available; start a scan" });
+            const groups = snapshot.groups;
             const policy = (0, versionManagerStore_1.getVersionManagerPolicy)();
-            const groups = (0, versionManager_1.evaluateVersionGroups)(evaluatedVersions, profiles, policy);
-            const scanId = (0, versionManagerStore_1.saveVersionManagerScan)(groups, profiles);
-            res.json({ ok: true, mode: "dry-run", scanId, policyHash: (0, versionManager_1.versionManagerPolicyHash)(policy, profiles), inventoryCount: versions.length, groupCount: groups.length, probe, metadata, groups });
+            const profiles = (0, versionManagerStore_1.getVersionProfiles)();
+            const versions = groups.flatMap((group) => group.versions || []);
+            return res.json({ ok: true, mode: "dry-run", scanId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, policyHash: (0, versionManager_1.versionManagerPolicyHash)(policy, profiles), inventoryCount: versions.length, groupCount: groups.length, groups });
         }
         catch (err) {
-            res.status(500).json({ ok: false, error: err?.message || "Version Manager preview failed" });
+            return res.status(500).json({ ok: false, error: err?.message || "Version Manager preview failed" });
         }
     });
     /** Read-only policy evaluation intended for cleanup review. It never calls provider delete. */
     app.get("/api/version-manager/delete-preview", async (_req, res) => {
         try {
             const startedAt = Date.now();
-            const inventoryStats = { durationMs: 0, providers: 0, providerListCalls: 0, fileTreeFetches: 0, providerItems: 0, fileTreeItems: 0, inlineFileItems: 0, nameFallbackItems: 0, mediaFiles: 0, versions: 0, recoverability: { requested: 0, cacheHits: 0, providerLookups: 0, resolved: 0, unknown: 0 } };
-            const inventoryStartedAt = Date.now();
-            const versions = await loadVersionManagerInventory(inventoryStats);
-            const inventoryMs = Date.now() - inventoryStartedAt;
-            const evaluatedVersions = (0, manualIdentity_1.applyManualIdentityOverrides)(versions);
-            const probeStartedAt = Date.now();
-            const probe = await (0, versionManagerProbe_1.probeVersionRecords)(evaluatedVersions);
-            const probeMs = Date.now() - probeStartedAt;
-            const metadataStartedAt = Date.now();
-            const metadata = await (0, versionManagerMetadata_1.enrichVersionMetadata)(evaluatedVersions);
-            const metadataMs = Date.now() - metadataStartedAt;
-            const profiles = (0, versionManagerStore_1.getVersionProfiles)();
+            const snapshot = readVersionManagerGroups();
+            if (!snapshot)
+                return res.status(503).json({ ok: false, snapshotAvailable: false, error: "No valid inventory snapshot is available; start a scan" });
+            const groups = snapshot.groups;
             const policy = (0, versionManagerStore_1.getVersionManagerPolicy)();
-            const policyStartedAt = Date.now();
-            const groups = (0, versionManager_1.evaluateVersionGroups)(evaluatedVersions, profiles, policy);
-            const policyMs = Date.now() - policyStartedAt;
+            const profiles = (0, versionManagerStore_1.getVersionProfiles)();
             const versionsFlat = groups.flatMap((group) => group.versions);
             const counts = {
                 contents: groups.length,
@@ -256,7 +273,7 @@ function startServer() {
             const evaluatedAt = new Date().toISOString();
             const policyHash = (0, versionManager_1.versionManagerPolicyHash)(policy, profiles);
             (0, versionManagerStore_1.saveVersionManagerPreviewAudit)({ policyHash, evaluatedAt, contentCount: counts.contents, versionGroupCount: counts.versionGroups, versionCount: counts.versions, keepCount: counts.KEEP, deleteCandidateCount: counts.DELETE_CANDIDATE, reviewCount: counts.REVIEW, primaryMissing: counts.primaryMissing, remoteMissing: counts.remoteMissing });
-            res.json({ ok: true, readOnly: true, mode: "dry-run", deleteExecutor: "not_implemented", evaluatedAt, policyVersion: policy.policyVersion || "1", policyHash, counts, groups, performance: { totalMs: Date.now() - startedAt, inventoryMs, probeMs, metadataMs, policyMs, inventory: inventoryStats, probe, metadata } });
+            return res.json({ ok: true, readOnly: true, mode: "dry-run", deleteExecutor: "not_implemented", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, evaluatedAt, policyVersion: policy.policyVersion || "1", policyHash, counts, groups, performance: { totalMs: Date.now() - startedAt, source: "persisted-snapshot" } });
         }
         catch (err) {
             res.status(500).json({ ok: false, error: err?.message || "Delete preview failed" });
@@ -267,11 +284,10 @@ function startServer() {
         try {
             const requestedStatus = String(req.query.status || "pending");
             const status = requestedStatus === "dismissed" || requestedStatus === "all" ? requestedStatus : "pending";
-            const versions = await loadVersionManagerInventory();
-            const evaluatedVersions = (0, manualIdentity_1.applyManualIdentityOverrides)(versions);
-            await (0, versionManagerProbe_1.probeVersionRecords)(evaluatedVersions);
-            await (0, versionManagerMetadata_1.enrichVersionMetadata)(evaluatedVersions);
-            const groups = (0, versionManager_1.evaluateVersionGroups)(evaluatedVersions, (0, versionManagerStore_1.getVersionProfiles)(), (0, versionManagerStore_1.getVersionManagerPolicy)());
+            const snapshot = readVersionManagerGroups();
+            if (!snapshot)
+                return res.status(503).json({ ok: false, snapshotAvailable: false, error: "No valid inventory snapshot is available; start a scan" });
+            const groups = snapshot.groups;
             const organizerStatus = status === "all" ? undefined : status;
             const organizers = (0, organizerReview_1.listOrganizerReviews)(true, organizerStatus);
             res.json({ ok: true, readOnly: true, ...(0, unifiedReview_1.buildUnifiedReviewQueue)(groups, organizers, status) });
@@ -286,13 +302,14 @@ function startServer() {
      */
     app.get("/api/version-manager/missing", async (_req, res) => {
         try {
-            const versions = await loadVersionManagerInventory();
-            const evaluatedVersions = (0, manualIdentity_1.applyManualIdentityOverrides)(versions);
-            const probe = await (0, versionManagerProbe_1.probeVersionRecords)(evaluatedVersions);
-            await (0, versionManagerMetadata_1.enrichVersionMetadata)(evaluatedVersions);
+            const snapshot = readVersionManagerGroups();
+            if (!snapshot)
+                return res.status(503).json({ ok: false, snapshotAvailable: false, error: "No valid inventory snapshot is available; start a scan" });
+            const groups = snapshot.groups;
+            const versions = groups.flatMap((group) => group.versions || []);
+            const probe = { source: "persisted-snapshot" };
             const profiles = (0, versionManagerStore_1.getVersionProfiles)();
             const policy = (0, versionManagerStore_1.getVersionManagerPolicy)();
-            const groups = (0, versionManager_1.evaluateVersionGroups)(evaluatedVersions, profiles, policy);
             const needs = policy.enableRemote ? (0, acquisition_1.deriveAcquisitionNeeds)(groups, profiles, { adapterId: "seerr", acquisitionEnabled: policy.acquireMissingRemote }) : [];
             const adapter = new seerrAcquisitionAdapter_1.SeerrAcquisitionAdapter();
             const previews = await Promise.all(needs.map(async (need) => {
@@ -300,7 +317,7 @@ function startServer() {
                 (0, db_1.recordAcquisitionAudit)({ needId: need.id, identity: need.contentIdentity, profileId: need.missingProfileId, adapterId: preview.adapterId, phase: "PREVIEW", status: preview.status, providerRequestId: preview.providerRequestId, detail: [preview.providerStatusSource, preview.mappingWarning].filter(Boolean).join("; ") });
                 return preview;
             }));
-            return res.json({ ok: true, readOnly: true, mode: "dry-run", inventoryCount: versions.length, groupCount: groups.length, probe, needs, previews, adapter: await adapter.capabilities() });
+            return res.json({ ok: true, readOnly: true, mode: "dry-run", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, inventoryCount: versions.length, groupCount: groups.length, probe, needs, previews, adapter: await adapter.capabilities() });
         }
         catch (err) {
             return res.status(500).json({ ok: false, error: err?.message || "Missing profile preview failed" });

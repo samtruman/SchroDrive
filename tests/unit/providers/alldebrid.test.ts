@@ -3,6 +3,7 @@ import { axiosIPv4 } from '../../../src/core/httpClient';
 import { config } from '../../../src/core/config';
 import { rateLimiter } from '../../../src/core/rateLimiter';
 import { AllDebridProvider } from '../../../src/providers/alldebrid';
+import { createHash } from 'node:crypto';
 
 const originalPost = axiosIPv4.post;
 
@@ -16,13 +17,15 @@ describe('AllDebrid current magnet API', () => {
   beforeEach(() => {
     calls = [];
     config.alldebridApiKey = 'unit-test-key';
+    rateLimiter.clearCache(`alldebrid_torrents:${createHash('sha256').update('unit-test-key').digest('hex').slice(0, 16)}`);
     rateLimiter.setThrottleDelay('alldebrid', 0);
   });
 
-  afterEach(() => {
-    axiosIPv4.post = originalPost;
-    config.alldebridApiKey = '';
-  });
+afterEach(() => {
+  axiosIPv4.post = originalPost;
+  config.alldebridApiKey = '';
+  rateLimiter.clearCache(`alldebrid_torrents:${createHash('sha256').update('unit-test-key').digest('hex').slice(0, 16)}`);
+});
 
   test('adds a magnet without calling the obsolete selectFiles endpoint', async () => {
     axiosIPv4.post = async (url: string, body: any) => {
@@ -79,6 +82,57 @@ describe('AllDebrid current magnet API', () => {
       expect.stringContaining('/v4/magnet/files'),
     ]);
     expect(String(calls[1].body)).toContain('id%5B%5D=789');
+  });
+
+  test('coalesces concurrent list and directory status requests', async () => {
+    let statusCalls = 0;
+    let fileTreeCalls = 0;
+    axiosIPv4.post = async (url: string) => {
+      calls.push({ url, body: null });
+      if (url.includes('/magnet/status')) {
+        statusCalls++;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return response({ magnets: [{ id: 789, filename: 'Release', statusCode: 4 }] });
+      }
+      fileTreeCalls++;
+      return response({ magnets: [{ id: 789, files: [{ n: 'Movie.mkv', s: 10 }] }] });
+    };
+
+    const provider = new AllDebridProvider();
+    await Promise.all([provider.listTorrents(), provider.fetchDirectories()]);
+    expect(statusCalls).toBe(1);
+    expect(fileTreeCalls).toBe(1);
+  });
+
+  test('cleans the in-flight status request after a timeout', async () => {
+    let statusCalls = 0;
+    axiosIPv4.post = async (url: string) => {
+      if (url.includes('/magnet/status')) {
+        statusCalls++;
+        throw new Error('fixture timeout');
+      }
+      return response({ magnets: [] });
+    };
+    const provider = new AllDebridProvider();
+    await provider.listTorrents();
+    expect((provider as any).magnetStatusInFlight).toBeNull();
+    expect(statusCalls).toBe(1);
+  });
+
+  test('permits a new status request after a non-rate-limit error', async () => {
+    let statusCalls = 0;
+    axiosIPv4.post = async (url: string) => {
+      if (url.includes('/magnet/status')) {
+        statusCalls++;
+        if (statusCalls === 1) throw new Error('fixture failure');
+        return response({ magnets: [] });
+      }
+      return response({ magnets: [] });
+    };
+    const provider = new AllDebridProvider();
+    await provider.listTorrents();
+    await provider.listTorrents();
+    expect(statusCalls).toBe(2);
   });
 
   test('exposes the provider file tree for migration manifests', async () => {

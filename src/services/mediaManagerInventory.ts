@@ -18,6 +18,12 @@ export interface MediaManagerInventoryStats {
   recoverability: RecoverabilityResolutionMetrics;
 }
 
+export interface MediaManagerInventoryProgress {
+  phase: "provider_listing" | "file_tree" | "fingerprint" | "identity";
+  completed: number;
+  total?: number;
+}
+
 function fileKey(file: Pick<TorrentFile, "path" | "name" | "size">): string {
   return `${String(file.path || file.name).trim().toLowerCase()}\u0000${file.size || 0}`;
 }
@@ -58,7 +64,11 @@ function providerItemWithFiles(item: TorrentInfo, files: TorrentFile[], source: 
  * files. File-tree resolution is performed once per provider per scan and the
  * result is reused for every derived fingerprint/version.
  */
-export async function loadMediaManagerInventory(providers: DebridProvider[] = registry.configured(), stats?: MediaManagerInventoryStats): Promise<VersionRecord[]> {
+export async function loadMediaManagerInventory(
+  providers: DebridProvider[] = registry.configured(),
+  stats?: MediaManagerInventoryStats,
+  onProgress?: (progress: MediaManagerInventoryProgress) => void,
+): Promise<VersionRecord[]> {
   const startedAt = Date.now();
   const metrics = stats?.recoverability || { requested: 0, cacheHits: 0, providerLookups: 0, resolved: 0, unknown: 0 };
   if (stats) {
@@ -69,10 +79,13 @@ export async function loadMediaManagerInventory(providers: DebridProvider[] = re
   const recoverabilityCache = new Map<string, Awaited<ReturnType<typeof resolveProviderItemRecoverability>>>();
 
   for (const provider of providers) {
+    onProgress?.({ phase: "provider_listing", completed: 0 });
     if (stats) stats.providerListCalls++;
     const items = await provider.listTorrents();
     if (stats) stats.providerItems += items.length;
+    onProgress?.({ phase: "provider_listing", completed: items.length, total: items.length });
     if (stats) stats.fileTreeFetches++;
+    onProgress?.({ phase: "file_tree", completed: 0, total: items.length });
     const directories = await provider.fetchDirectories();
     const directoriesByItem = new Map<string, VirtualDirectory>();
     for (const directory of directories) {
@@ -80,11 +93,13 @@ export async function loadMediaManagerInventory(providers: DebridProvider[] = re
       if (!directoriesByItem.has(key)) directoriesByItem.set(key, directory);
     }
 
-    for (const item of items) {
+    for (const [index, item] of items.entries()) {
       await resolveProviderItemRecoverability(item, provider, recoverabilityCache, metrics);
+      onProgress?.({ phase: "identity", completed: index + 1, total: items.length });
 
       const treeFiles = normalizeDirectoryFiles(directoriesByItem.get(String(item.id)));
       if (treeFiles.length > 0) {
+        onProgress?.({ phase: "fingerprint", completed: index + 1, total: items.length });
         if (stats) { stats.fileTreeItems++; stats.mediaFiles += treeFiles.length; }
         resolved.push(...fingerprintTorrent(providerItemWithFiles(item, treeFiles, "PROVIDER_FILE_TREE"), provider.id));
         continue;
@@ -92,12 +107,14 @@ export async function loadMediaManagerInventory(providers: DebridProvider[] = re
 
       const inlineFiles = dedupeFiles(Array.isArray(item.files) ? item.files : []);
       if (inlineFiles.length > 0) {
+        onProgress?.({ phase: "fingerprint", completed: index + 1, total: items.length });
         if (stats) { stats.inlineFileItems++; stats.mediaFiles += inlineFiles.length; }
         resolved.push(...fingerprintTorrent(providerItemWithFiles(item, inlineFiles, "INLINE_PROVIDER_FILES"), provider.id));
         continue;
       }
 
       if (stats) stats.nameFallbackItems++;
+      onProgress?.({ phase: "fingerprint", completed: index + 1, total: items.length });
       resolved.push(...fingerprintTorrent(providerItemWithFiles(item, [], "ITEM_NAME_FALLBACK"), provider.id));
     }
   }

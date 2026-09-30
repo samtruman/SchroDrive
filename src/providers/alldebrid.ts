@@ -22,6 +22,7 @@
  */
 
 import { axiosIPv4 } from '../core/httpClient';
+import { createHash } from 'node:crypto';
 import { sanitiseName } from '../core/utils';
 import { config } from '../core/config';
 import { rateLimiter } from '../core/rateLimiter';
@@ -227,6 +228,13 @@ function getMagnetEntries(data: any): any[] {
 export class AllDebridProvider implements DebridProvider {
   readonly id = 'alldebrid' as const;
   readonly displayName = 'AllDebrid';
+  /** Coalesces the status request shared by listTorrents/fetchDirectories. */
+  private magnetStatusInFlight: Promise<any[]> | null = null;
+
+  private torrentListCacheKey(): string {
+    const account = createHash('sha256').update(getApiKey()).digest('hex').slice(0, 16);
+    return `${TORRENT_LIST_CACHE_KEY}:${account}`;
+  }
 
   // -------------------------------------------------------------------------
   // Status
@@ -264,6 +272,31 @@ export class AllDebridProvider implements DebridProvider {
   // Torrent Operations
   // -------------------------------------------------------------------------
 
+  private async fetchMagnetStatus(): Promise<any[]> {
+    if (this.magnetStatusInFlight) return this.magnetStatusInFlight;
+
+    const cached = rateLimiter.getCache<any[]>(this.torrentListCacheKey());
+    if (cached) return cached;
+    if (rateLimiter.isRateLimited(PROVIDER_NAME)) return [];
+
+    this.magnetStatusInFlight = (async () => {
+      await rateLimiter.throttle(PROVIDER_NAME);
+      const url = buildUrl('/v4.1/magnet/status');
+      const res = await axiosIPv4.post(url, null, { headers: authHeaders(), timeout: 30000 });
+      rateLimiter.recordSuccess(PROVIDER_NAME);
+      const data = unwrapResponse(res, 'list magnets');
+      const magnets = getMagnetEntries(data);
+      rateLimiter.setCache(this.torrentListCacheKey(), magnets);
+      return magnets;
+    })();
+
+    try {
+      return await this.magnetStatusInFlight;
+    } finally {
+      this.magnetStatusInFlight = null;
+    }
+  }
+
   /**
    * Fetches the complete list of magnets from AllDebrid.
    * Returns cached data when rate-limited or on error.
@@ -279,7 +312,7 @@ export class AllDebridProvider implements DebridProvider {
     // Return cached data if rate-limited
     if (rateLimiter.isRateLimited(PROVIDER_NAME)) {
       const waitTime = rateLimiter.getWaitTimeSeconds(PROVIDER_NAME);
-      const cached = rateLimiter.getCache<any[]>(TORRENT_LIST_CACHE_KEY);
+      const cached = rateLimiter.getCache<any[]>(this.torrentListCacheKey());
       if (cached) {
         console.warn(`[${new Date().toISOString()}][ad] rate limited, returning cached list (${cached.length} items, wait ${waitTime}s)`);
         return this.normaliseTorrents(cached);
@@ -288,23 +321,14 @@ export class AllDebridProvider implements DebridProvider {
       return [];
     }
 
-    await rateLimiter.throttle(PROVIDER_NAME);
-
     try {
-      const url = buildUrl('/v4.1/magnet/status');
-      const res = await axiosIPv4.post(url, null, { headers: authHeaders(), timeout: 30000 });
-      rateLimiter.recordSuccess(PROVIDER_NAME);
-
-      const data = unwrapResponse(res, 'list magnets');
-      const magnets = getMagnetEntries(data);
-
-      rateLimiter.setCache(TORRENT_LIST_CACHE_KEY, magnets);
+      const magnets = await this.fetchMagnetStatus();
       console.log(`[${new Date().toISOString()}][ad] fetched ${magnets.length} magnets`);
       return this.normaliseTorrents(magnets);
     } catch (err: any) {
       this.handleError(err, 'list torrents');
 
-      const cached = rateLimiter.getCache<any[]>(TORRENT_LIST_CACHE_KEY);
+      const cached = rateLimiter.getCache<any[]>(this.torrentListCacheKey());
       if (cached) {
         console.log(`[${new Date().toISOString()}][ad] returning cached list on error (${cached.length} items)`);
         return this.normaliseTorrents(cached);
@@ -496,7 +520,7 @@ export class AllDebridProvider implements DebridProvider {
    */
   async getInfoHash(torrentId: string): Promise<string | null> {
     // Check cached torrent list first (avoid unnecessary API call)
-    const cached = rateLimiter.getCache<any[]>(TORRENT_LIST_CACHE_KEY);
+    const cached = rateLimiter.getCache<any[]>(this.torrentListCacheKey());
     if (cached) {
       const magnet = cached.find((m: any) => String(m.id) === String(torrentId));
       if (magnet?.hash) return magnet.hash;
@@ -660,15 +684,8 @@ export class AllDebridProvider implements DebridProvider {
       return [];
     }
 
-    await rateLimiter.throttle(PROVIDER_NAME);
-
     try {
-      const url = buildUrl('/v4.1/magnet/status');
-      const res = await axiosIPv4.post(url, null, { headers: authHeaders(), timeout: 30000 });
-      rateLimiter.recordSuccess(PROVIDER_NAME);
-
-      const data = unwrapResponse(res, 'fetch directories');
-      const magnets: any[] = getMagnetEntries(data);
+      const magnets: any[] = await this.fetchMagnetStatus();
 
       // Only include fully downloaded magnets (statusCode 4 = finished)
       const completed = magnets.filter((m) => {

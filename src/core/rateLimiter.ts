@@ -21,6 +21,7 @@ import {
   loadAllRateLimitStates,
   setCacheEntry,
   getCacheEntry,
+  deleteCacheEntry,
   type RateLimitStateRecord,
 } from './db';
 
@@ -508,6 +509,12 @@ class RateLimiter {
     }
 
     return null;
+  }
+
+  /** Clears one response cache entry; primarily useful for bounded revalidation/tests. */
+  clearCache(key: string): void {
+    this.cache.delete(key);
+    deleteCacheEntry(key);
   }
 
   // ---------------------------------------------------------------------------

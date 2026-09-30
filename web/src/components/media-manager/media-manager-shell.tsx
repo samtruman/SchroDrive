@@ -57,6 +57,21 @@ function ErrorBox({ error }: { error?: string }) {
   ) : null;
 }
 
+async function readJsonResponse<T>(response: Response, operation: string): Promise<T> {
+  const contentType = response.headers.get("content-type") || "";
+  const text = await response.text();
+  let body: any;
+  try {
+    body = text ? JSON.parse(text) : null;
+  } catch {
+    throw new Error(`${operation} failed (HTTP ${response.status}; server returned ${contentType || "non-JSON"})`);
+  }
+  if (!response.ok || body?.ok === false) {
+    throw new Error(body?.error || `${operation} failed (HTTP ${response.status})`);
+  }
+  return body as T;
+}
+
 function IdentityResolver({
   reviewId,
   identity,
@@ -95,8 +110,7 @@ function IdentityResolver({
       const params = new URLSearchParams({ query: query.trim(), type });
       if (year.trim()) params.set("year", year.trim());
       const response = await fetch(`/api/version-manager/identity/search?${params}`, { cache: "no-store" });
-      const body = await response.json();
-      if (!response.ok || !body.ok) throw new Error(body.error || "TMDb search failed");
+      const body = await readJsonResponse<any>(response, "TMDb search");
       setResults(body.results || []);
     } catch (error: any) { setMessage(error.message || "TMDb search failed"); }
     finally { setBusy(false); }
@@ -115,13 +129,11 @@ function IdentityResolver({
         method: "POST", headers: { "content-type": "application/json" },
         body: JSON.stringify(reviewId ? { decision: "accepted", override } : { identity, override }),
       });
-      const body = await response.json();
-      if (!response.ok || !body.ok) throw new Error(body.error || "Unable to save identity match");
+      const body = await readJsonResponse<any>(response, "Saving identity match");
       let evaluation = body;
       if (reviewId && identity) {
         const reevaluate = await fetch("/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ identity, override }) });
-        evaluation = await reevaluate.json();
-        if (!reevaluate.ok || !evaluation.ok) throw new Error(evaluation.error || "Unable to reevaluate identity");
+        evaluation = await readJsonResponse<any>(reevaluate, "Re-evaluating identity");
       }
       setMessage(evaluation.reevaluated ? "Manual match saved and policy reevaluated." : "Manual match saved; it will be applied on the next cached evaluation.");
       onSaved?.();
@@ -134,13 +146,11 @@ function IdentityResolver({
     setBusy(true); setMessage("");
     try {
       const response = await fetch(reviewId ? `/api/organizer/review/${encodeURIComponent(reviewId)}` : "/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(reviewId ? { action: "clear-match" } : { action: "clear", identity }) });
-      const body = await response.json();
-      if (!response.ok || !body.ok) throw new Error(body.error || "Unable to clear manual match");
+      const body = await readJsonResponse<any>(response, "Clearing manual identity");
       let evaluation = body;
       if (reviewId && identity) {
         const reevaluate = await fetch("/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "clear", identity }) });
-        evaluation = await reevaluate.json();
-        if (!reevaluate.ok || !evaluation.ok) throw new Error(evaluation.error || "Unable to reevaluate identity");
+        evaluation = await readJsonResponse<any>(reevaluate, "Re-evaluating identity");
       }
       setMessage(evaluation.reevaluated ? "Manual match cleared and policy reevaluated." : "Manual match cleared; automatic resolver will be used on the next evaluation.");
       onSaved?.();
@@ -224,9 +234,7 @@ function useJson<T>(url: string, enabled = true) {
     setError("");
     try {
       const response = await fetch(url, { cache: "no-store" });
-      const body = await response.json();
-      if (!response.ok || body.ok === false)
-        throw new Error(body.error || "Request failed");
+      const body = await readJsonResponse<T>(response, "Media Manager request");
       setData(body);
     } catch (value: any) {
       setError(value.message || "Request failed");
@@ -431,19 +439,52 @@ function Overview() {
   const identityIssues = reviewQueue.data?.summary?.identityIssues ?? 0;
   const latestScan = status.data?.latestScan;
   const [scan, setScan] = useState<any>(null);
-  const [scanning, setScanning] = useState(false);
+  const [scanJob, setScanJob] = useState<any>(status.data?.scanJob?.job || null);
+  const [scanError, setScanError] = useState("");
+  const scanning = ["SCANNING", "ENRICHING", "EVALUATING", "PERSISTING"].includes(scanJob?.status);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadJob = async () => {
+      try {
+        const response = await fetch("/api/version-manager/scan", { cache: "no-store" });
+        const body = await readJsonResponse<any>(response, "Scan status");
+        if (!cancelled) setScanJob(body.job || null);
+      } catch (value: any) {
+        if (!cancelled) setScanError(value.message || "Unable to read scan status");
+      }
+    };
+    void loadJob();
+    return () => { cancelled = true; };
+  }, []);
+
+  useEffect(() => {
+    if (!scanning || !scanJob?.id) return;
+    const timer = window.setInterval(async () => {
+      try {
+        const response = await fetch(`/api/version-manager/scan/${encodeURIComponent(scanJob.id)}`, { cache: "no-store" });
+        const body = await readJsonResponse<any>(response, "Scan status");
+        setScanJob(body.job);
+        if (["COMPLETED", "FAILED", "PARTIAL"].includes(body.job?.status)) {
+          await status.reload();
+          if (body.job.status === "COMPLETED") {
+            const result = await fetch("/api/version-manager/preview", { cache: "no-store" });
+            setScan(await readJsonResponse<any>(result, "Inventory snapshot"));
+          }
+        }
+      } catch (value: any) { setScanError(value.message || "Unable to read scan status"); }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [scanJob?.id, scanning, status.reload]);
+
   async function runScan() {
-    setScanning(true);
+    setScanError("");
     try {
-      const response = await fetch("/api/version-manager/preview", {
-        cache: "no-store",
-      });
-      const body = await response.json();
-      setScan(response.ok ? body : { error: body.error || "Scan failed" });
+      const response = await fetch("/api/version-manager/scan", { method: "POST", cache: "no-store" });
+      const body = await readJsonResponse<any>(response, "Starting library scan");
+      setScanJob(body.job);
     } catch (value: any) {
-      setScan({ error: value.message });
-    } finally {
-      setScanning(false);
+      setScanError(value.message || "Unable to start scan");
     }
   }
   return (
@@ -458,7 +499,9 @@ function Overview() {
         <div>
           <p className="font-medium">Library status</p>
           <p className="text-sm text-muted-foreground">
-            {scan
+            {scanJob?.status && scanJob.status !== "COMPLETED"
+              ? `${scanJob.status}${scanJob.phase ? ` · ${scanJob.phase}` : ""}${scanJob.total ? ` · ${scanJob.completed}/${scanJob.total}` : ` · ${scanJob.completed} processed`}`
+              : scan
               ? `${scan.groupCount} content groups in last scan`
               : status.data?.latestScan
                 ? "Last scan available"
@@ -472,7 +515,7 @@ function Overview() {
           Run Scan
         </Button>
       </div>
-      <ErrorBox error={scan?.error || status.error} />
+      <ErrorBox error={scanError || scan?.error || status.error} />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
           label="Library contents"
@@ -614,8 +657,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
         `/api/version-manager/review?status=${reviewStatus}`,
         { cache: "no-store" },
       );
-      const body = await response.json();
-      if (!response.ok || !body.ok) throw new Error(body.error);
+      const body = await readJsonResponse<any>(response, "Review queue request");
       setReview(body);
     } catch (value: any) {
       setReviewError(value.message || "Unable to load review");
@@ -1008,9 +1050,7 @@ function Migration({ section = "export" }: { section?: string }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body),
       });
-      const data = await response.json();
-      if (!response.ok || !data.ok)
-        throw new Error(data.error || "Import preview failed");
+      const data = await readJsonResponse<any>(response, "Import preview");
       setImportPlan(data);
       setSelectedImport(new Set());
     } catch (value: any) {

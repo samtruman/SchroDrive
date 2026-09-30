@@ -441,6 +441,11 @@ class RateLimiter {
         }
         return null;
     }
+    /** Clears one response cache entry; primarily useful for bounded revalidation/tests. */
+    clearCache(key) {
+        this.cache.delete(key);
+        (0, db_1.deleteCacheEntry)(key);
+    }
     // ---------------------------------------------------------------------------
     // Status Reporting
     // ---------------------------------------------------------------------------
