@@ -62,7 +62,7 @@ function displayIdentity(item: any): any {
   if (identity.kind === "movie" && numericMovie && identityLooksLikeRelease) {
     return { ...identity, title: numericMovie[1], year: Number(numericMovie[2]) };
   }
-  return { ...identity, title: identity.title || item?.title || "Unidentified content", year: identity.year, kind: identity.kind };
+  return { ...identity, title: identity.title || item?.title || item?.versions?.[0]?.title || item?.alternativeVersions?.[0]?.title || "Unidentified content", year: identity.year, kind: identity.kind };
 }
 
 function ErrorBox({ error }: { error?: string }) {
