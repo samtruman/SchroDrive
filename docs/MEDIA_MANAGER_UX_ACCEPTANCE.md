@@ -7,6 +7,27 @@ runtime. The isolated run used temporary data and an explicit ARR discovery
 fixture. No provider, acquisition, scan, delete, or migration mutation was
 performed.
 
+## Remediation gate — final deployed runtime
+
+The remediation runtime was deployed only to `schrodrive` from commit
+`c8d27be` and image digest `sha256:4c6f1a6a09d26e921e018818847aa8c218906e8fae9cf9a2776e21da33c13698`.
+The browser runner used Chromium from the isolated Playwright container.
+
+| Requirement | Runtime assertion | Visual evidence | Result |
+|---|---|---|---|
+| Content identity | `1917` is the primary title; the release name is subordinate to its version row | `artifacts/media-manager-ux-live/library-after.png` | PASS |
+| Compact Library | informative compact version rows and no opaque ProviderItem title | `artifacts/media-manager-ux-live/library-after.png` | PASS |
+| Version details | clicking the version opens `Content Detail` with identity, version, physical and policy sections | `artifacts/media-manager-ux-live/version-details-after.png` | PASS |
+| Multiversion grouping | Alien Romulus is one content row with two version rows | `artifacts/media-manager-ux-live/library-after.png` | PASS |
+| Review explanation | Details opens a real panel with problem, confidence, source, versions and policy context | `artifacts/media-manager-ux-live/review-comparison-after.png` | PASS |
+| Delete decision explanation | cards show content, candidate/kept interpretation, reason and physical status | `artifacts/media-manager-ux-live/delete-dry-run-after.png` | PASS |
+| Shared-resource protection | protected physical resource explains why it cannot be deleted; ProviderItem is technical detail | `artifacts/media-manager-ux-live/protected-provider-item-after.png` | PASS |
+| Migration workflow | Migration Preview, guarded Execute Migration, confirmation and completed fixture report | `artifacts/media-manager-ux-live/migration-completed.png` | PASS |
+
+The final Playwright run recorded no console errors or failed network requests.
+The migration execution assertion used only intercepted synthetic APIs and a
+synthetic manifest; no provider or production mutation was performed.
+
 ## ARR settings journey
 
 | Step | Result | Evidence |
