@@ -5,6 +5,12 @@
 This is a read-only assessment. No Seerr, Radarr, Sonarr, Prowlarr, provider,
 download, import, or delete operation was executed.
 
+The deployed read-only verification confirmed Seerr 3.4.1 and four runtime
+ARR profiles: two Radarr and two Sonarr profiles. The application endpoint
+returned the original server and profile identifiers. Direct unauthenticated
+probes to the ARR APIs returned 401 as expected; no credentials were exposed
+or copied into the test harness.
+
 ## Current chain
 
 `Media Manager Missing` derives needs from the canonical inventory and calls
@@ -35,6 +41,9 @@ Seerr request parameter.
 - TV status matching can identify a requested season, but the request scope is
   not episode-level.
 - The current executor is disabled in the deployed product.
+- The deployed UI can select and persist mappings containing the real ARR
+  server/profile identifiers; the original live settings were restored after
+  the test.
 
 ### INFERRED FROM IMPLEMENTATION
 
@@ -61,6 +70,11 @@ Seerr request parameter.
 - A real second-version acquisition test is blocked by the no-mutation rule.
 - Direct raw Seerr media/request inspection was not used to create requests;
   only read-only application behavior and installed code were considered.
+
+The exact behavior of a real second-version request remains blocked by the
+no-mutation constraint. A disposable ARR/Seerr environment with separate
+libraries and fixture media is required to verify preservation of an existing
+file through import and collision handling.
 
 ## Scenario matrix
 
