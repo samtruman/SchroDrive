@@ -1,0 +1,33 @@
+import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { config } from "../core/config";
+import { registry, type DebridProvider } from "../providers";
+import { exportMigrationLibrary, type MigrationManifest } from "./migrationExporter";
+
+export type MagnetBackupMode = "FULL" | "INCREMENTAL";
+export interface MagnetBackupRecord { id: string; mode: MagnetBackupMode; provider: string; createdAt: string; itemCount: number; magnetCount: number; sha256: string; file: string; baseBackupId?: string; added: number; modified: number; removed: number; valid: boolean; }
+export interface MagnetBackupDocument { schemaVersion: "1.0"; kind: "MAGNET_BACKUP"; mode: MagnetBackupMode; provider: string; createdAt: string; baseBackupId?: string; manifest?: MigrationManifest; changes?: { added: MigrationManifest["items"]; modified: MigrationManifest["items"]; removed: MigrationManifest["items"] }; }
+function root(): string { return path.join(config.dataDir, "magnet-backups"); }
+function indexPath(): string { return path.join(root(), "index.json"); }
+function readIndex(): MagnetBackupRecord[] { try { return JSON.parse(fs.readFileSync(indexPath(), "utf8")) as MagnetBackupRecord[]; } catch { return []; } }
+function atomicWrite(file: string, value: unknown): void { fs.mkdirSync(path.dirname(file), { recursive: true }); const temporary = `${file}.${process.pid}.tmp`; fs.writeFileSync(temporary, JSON.stringify(value, null, 2), { mode: 0o600 }); fs.renameSync(temporary, file); }
+function digest(value: unknown): string { return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
+function itemKey(item: { infoHash?: string; providerItemId: string }): string { return (item.infoHash || item.providerItemId).toLowerCase(); }
+async function sourceManifest(provider: DebridProvider): Promise<MigrationManifest> { const inventory = await provider.listTorrents(); const withFiles = provider.getTorrentFileTree ? await Promise.all(inventory.map(async (item) => ({ ...item, files: await provider.getTorrentFileTree!(item.id) }))) : inventory; return exportMigrationLibrary(withFiles, [], { mode: "FULL_LIBRARY", sourceProvider: provider.id }).manifest; }
+function mapItems(manifest: MigrationManifest): Map<string, MigrationManifest["items"][number]> { return new Map(manifest.items.map((item) => [itemKey(item), item])); }
+
+export async function createMagnetBackup(providerId: string, mode: MagnetBackupMode = "FULL"): Promise<MagnetBackupRecord> {
+  const provider = registry.get(providerId); if (!provider || !provider.isConfigured()) throw new Error("Source provider is not configured");
+  const manifest = await sourceManifest(provider); const now = new Date().toISOString(); const id = `magnet-backup-${Date.now()}`; const records = readIndex();
+  const previous = records.filter((record) => record.provider === provider.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+  let document: MagnetBackupDocument = { schemaVersion: "1.0", kind: "MAGNET_BACKUP", mode, provider: provider.id, createdAt: now, manifest }; let added = manifest.items.length; let modified = 0; let removed = 0;
+  if (mode === "INCREMENTAL" && previous) { const oldDocument = readMagnetBackup(previous.id); const oldItems = oldDocument?.manifest ? mapItems(oldDocument.manifest) : new Map(); const current = mapItems(manifest); const changes = { added: [] as MigrationManifest["items"], modified: [] as MigrationManifest["items"], removed: [] as MigrationManifest["items"] }; for (const [key, item] of current) { const old = oldItems.get(key); if (!old) changes.added.push(item); else if (digest(old) !== digest(item)) changes.modified.push(item); } for (const [key, item] of oldItems) if (!current.has(key)) changes.removed.push(item); added = changes.added.length; modified = changes.modified.length; removed = changes.removed.length; document = { schemaVersion: "1.0", kind: "MAGNET_BACKUP", mode, provider: provider.id, createdAt: now, baseBackupId: previous.id, changes }; }
+  const file = path.join(root(), `${id}.json`); const content = JSON.stringify(document, null, 2); const sha256 = crypto.createHash("sha256").update(content).digest("hex"); atomicWrite(file, document);
+  const record: MagnetBackupRecord = { id, mode, provider: provider.id, createdAt: now, itemCount: manifest.items.length, magnetCount: manifest.magnetCount, sha256, file, baseBackupId: document.baseBackupId, added, modified, removed, valid: true }; atomicWrite(indexPath(), [record, ...records].slice(0, 1000)); return record;
+}
+export function listMagnetBackups(providerId?: string): MagnetBackupRecord[] { return readIndex().filter((record) => !providerId || record.provider === providerId).map((record) => ({ ...record, file: path.basename(record.file) })); }
+export function readMagnetBackup(id: string): MagnetBackupDocument | undefined { const record = readIndex().find((item) => item.id === id); if (!record) return undefined; try { return JSON.parse(fs.readFileSync(record.file, "utf8")) as MagnetBackupDocument; } catch { return undefined; } }
+export function verifyMagnetBackup(id: string): { valid: boolean; reason?: string; sha256?: string } { const record = readIndex().find((item) => item.id === id); if (!record) return { valid: false, reason: "Backup not found" }; try { const sha256 = crypto.createHash("sha256").update(fs.readFileSync(record.file)).digest("hex"); return sha256 === record.sha256 ? { valid: true, sha256 } : { valid: false, sha256, reason: "Manifest checksum mismatch" }; } catch { return { valid: false, reason: "Manifest unavailable" }; } }
+let scheduler: ReturnType<typeof setInterval> | undefined; let lastScheduledKey = "";
+export function startMagnetBackupScheduler(): void { if (!config.magnetBackupEnabled || scheduler) return; scheduler = setInterval(async () => { const now = new Date(); const parts = new Intl.DateTimeFormat("en-CA", { timeZone: config.magnetBackupTimezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now); const time = `${parts.find((part) => part.type === "hour")?.value}:${parts.find((part) => part.type === "minute")?.value}`; const key = now.toISOString().slice(0, 10); if (time !== "03:00" || key === lastScheduledKey) return; lastScheduledKey = key; const provider = registry.configured()[0]; if (provider) { try { await createMagnetBackup(provider.id, "FULL"); } catch { /* preserve last valid backup */ } } }, 60_000); }

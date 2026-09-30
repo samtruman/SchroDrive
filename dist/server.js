@@ -52,6 +52,9 @@ const providerMigrationCapabilities_1 = require("./services/providerMigrationCap
 const db_1 = require("./core/db");
 const unifiedReview_1 = require("./services/unifiedReview");
 const versionManagerScanJob_1 = require("./services/versionManagerScanJob");
+const magnetBackup_1 = require("./services/magnetBackup");
+const deleteImpact_1 = require("./services/deleteImpact");
+const migrationJob_1 = require("./services/migrationJob");
 // ===========================================================================
 // Server Initialisation
 // ===========================================================================
@@ -279,6 +282,20 @@ function startServer() {
             res.status(500).json({ ok: false, error: err?.message || "Delete preview failed" });
         }
     });
+    /** Read-only physical delete-unit impact. The provider executor remains disabled. */
+    app.get("/api/version-manager/delete", (_req, res) => {
+        try {
+            const snapshot = readVersionManagerGroups();
+            if (!snapshot)
+                return res.status(503).json({ ok: false, snapshotAvailable: false, error: "No valid inventory snapshot is available; start a scan" });
+            const query = typeof _req.query.q === "string" ? _req.query.q : "";
+            const scope = typeof _req.query.scope === "string" ? _req.query.scope : "all";
+            return res.json({ ok: true, readOnly: true, executorEnabled: false, scope, snapshotId: snapshot.snapshotId, items: (0, deleteImpact_1.buildDeleteImpact)(snapshot.groups, query, scope) });
+        }
+        catch (error) {
+            return res.status(500).json({ ok: false, error: error?.message || "Delete impact unavailable" });
+        }
+    });
     /** Read-only operator queue combining Organizer and policy/recoverability review. */
     app.get("/api/version-manager/review", async (req, res) => {
         try {
@@ -359,6 +376,29 @@ function startServer() {
         catch (err) {
             res.status(500).json({ ok: false, error: err?.message || "Migration export failed" });
         }
+    });
+    /** Read-only magnet backup snapshots. These contain provider references, never media bytes. */
+    app.get("/api/version-manager/magnet-backup", (req, res) => {
+        res.json({ ok: true, readOnly: true, backups: (0, magnetBackup_1.listMagnetBackups)(typeof req.query.provider === "string" ? req.query.provider : undefined) });
+    });
+    app.post("/api/version-manager/magnet-backup", async (req, res) => {
+        try {
+            const provider = typeof req.body?.provider === "string" ? req.body.provider.trim().toLowerCase() : "";
+            const mode = req.body?.mode === "INCREMENTAL" ? "INCREMENTAL" : "FULL";
+            if (!provider)
+                return res.status(400).json({ ok: false, error: "A source provider is required" });
+            const record = await (0, magnetBackup_1.createMagnetBackup)(provider, mode);
+            res.status(201).json({ ok: true, readOnly: true, record });
+        }
+        catch (error) {
+            res.status(503).json({ ok: false, error: error?.message || "Magnet backup failed" });
+        }
+    });
+    app.get("/api/version-manager/magnet-backup/:id", (req, res) => {
+        const document = (0, magnetBackup_1.readMagnetBackup)(String(req.params.id));
+        if (!document)
+            return res.status(404).json({ ok: false, error: "Magnet backup not found" });
+        return res.json({ ok: true, readOnly: true, integrity: (0, magnetBackup_1.verifyMagnetBackup)(String(req.params.id)), document });
     });
     /**
      * Read-only effective migration state. Provider inventory alone cannot
@@ -451,6 +491,28 @@ function startServer() {
         catch (err) {
             res.status(400).json({ ok: false, error: err?.message || "Migration import preview failed" });
         }
+    });
+    /** Starts the existing migration executor as a persistent asynchronous job. */
+    app.post("/api/version-manager/migration/jobs", (req, res) => {
+        try {
+            if (req.body?.confirm !== "START_MIGRATION")
+                return res.status(400).json({ ok: false, error: "Explicit START_MIGRATION confirmation is required" });
+            const source = String(req.body?.sourceProvider || "").trim().toLowerCase();
+            const target = String(req.body?.targetProvider || "").trim().toLowerCase();
+            const items = Array.isArray(req.body?.items) ? req.body.items : [];
+            if (!source || !target)
+                return res.status(400).json({ ok: false, error: "Source and target providers are required" });
+            const job = (0, migrationJob_1.startMigrationJob)(source, target, items);
+            return res.status(202).json({ ok: true, readOnly: false, job, statusUrl: `/api/version-manager/migration/jobs/${encodeURIComponent(job.id)}` });
+        }
+        catch (error) {
+            return res.status(503).json({ ok: false, error: error?.message || "Unable to start migration" });
+        }
+    });
+    app.get("/api/version-manager/migration/jobs", (_req, res) => res.json({ ok: true, readOnly: true, jobs: (0, migrationJob_1.listMigrationJobs)() }));
+    app.get("/api/version-manager/migration/jobs/:id", (req, res) => {
+        const job = (0, migrationJob_1.getMigrationJob)(String(req.params.id));
+        return job ? res.json({ ok: true, readOnly: true, job }) : res.status(404).json({ ok: false, error: "Migration job not found" });
     });
     /** Explicit one-item migration execution; no bulk or UI execution path. */
     app.post("/api/version-manager/import/execute", async (req, res) => {
@@ -552,6 +614,7 @@ function startServer() {
             const policy = {
                 enableRemote: req.body.policy?.enableRemote === true,
                 acquireMissingRemote: req.body.policy?.acquireMissingRemote === true,
+                preferCompletePack: req.body.policy?.preferCompletePack === true,
                 policyVersion: typeof req.body.policy?.policyVersion === "string" ? req.body.policy.policyVersion : "1",
                 safety: {
                     requireRecoverableBeforeDelete: req.body.policy?.safety?.requireRecoverableBeforeDelete !== false,
@@ -1537,6 +1600,7 @@ function startServer() {
     (0, autoUpdate_1.startAutoUpdater)();
     // Start the download token daily reset cron (midnight in configured timezone)
     tokenRotator_1.tokenRotator.startDailyReset();
+    (0, magnetBackup_1.startMagnetBackupScheduler)();
 }
 // ===========================================================================
 // Webhook Payload Parser

@@ -1,0 +1,4 @@
+import { NextResponse } from "next/server";
+const BACKEND_URL = process.env.BACKEND_URL || "http://schrodrive:8090";
+export async function GET() { try { const response = await fetch(`${BACKEND_URL}/api/version-manager/migration/jobs`, { cache: "no-store" }); return NextResponse.json(await response.json(), { status: response.status }); } catch (error: any) { return NextResponse.json({ ok: false, error: error?.message || "Backend unavailable" }, { status: 502 }); } }
+export async function POST(request: Request) { try { const response = await fetch(`${BACKEND_URL}/api/version-manager/migration/jobs`, { method: "POST", headers: { "content-type": "application/json" }, body: await request.text(), cache: "no-store" }); return NextResponse.json(await response.json(), { status: response.status }); } catch (error: any) { return NextResponse.json({ ok: false, error: error?.message || "Backend unavailable" }, { status: 502 }); } }

@@ -282,6 +282,11 @@ exports.config = {
     preemptiveRepairStallMinutes: Number(process.env.PREEMPTIVE_REPAIR_STALL_MIN || 30),
     // --- Data Directory & Database ---
     dataDir: process.env.DATA_DIR || './data',
+    magnetBackupEnabled: (0, utils_1.asBool)(process.env.MAGNET_BACKUP_ENABLED, false),
+    magnetBackupSchedule: process.env.MAGNET_BACKUP_SCHEDULE || "0 3 * * *",
+    magnetBackupTimezone: process.env.MAGNET_BACKUP_TIMEZONE || "Europe/Rome",
+    magnetBackupDailyRetention: (0, utils_1.asNumber)(process.env.MAGNET_BACKUP_DAILY_RETENTION, 90),
+    magnetBackupMonthlyRetention: (0, utils_1.asNumber)(process.env.MAGNET_BACKUP_MONTHLY_RETENTION, 24),
     dbPath: process.env.DB_PATH || path_1.default.join(process.env.DATA_DIR || './data', 'schrodrive.db'),
     // =========================================================================
     // Cloud Storage Mounts

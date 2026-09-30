@@ -44,7 +44,14 @@ async function execute(job) {
         const evaluatedVersions = (0, manualIdentity_1.applyManualIdentityOverrides)(versions);
         (0, versionManagerStore_1.updateVersionManagerScanJob)(job.id, { status: "ENRICHING", phase: "identity", completed: 0, total: evaluatedVersions.length });
         await (0, versionManagerProbe_1.probeVersionRecords)(evaluatedVersions);
-        await (0, versionManagerMetadata_1.enrichVersionMetadata)(evaluatedVersions);
+        await (0, versionManagerMetadata_1.enrichVersionMetadata)(evaluatedVersions, {
+            onProgress: (progress) => (0, versionManagerStore_1.updateVersionManagerScanJob)(job.id, {
+                status: "ENRICHING",
+                phase: "identity",
+                completed: progress.index,
+                total: progress.total,
+            }),
+        });
         (0, versionManagerStore_1.updateVersionManagerScanJob)(job.id, { status: "EVALUATING", phase: "policy", completed: 0, total: evaluatedVersions.length });
         const profiles = (0, versionManagerStore_1.getVersionProfiles)();
         const policy = (0, versionManagerStore_1.getVersionManagerPolicy)();

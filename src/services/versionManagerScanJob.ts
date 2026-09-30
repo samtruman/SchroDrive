@@ -55,7 +55,14 @@ async function execute(job: VersionManagerScanJob): Promise<void> {
 
     updateVersionManagerScanJob(job.id, { status: "ENRICHING", phase: "identity", completed: 0, total: evaluatedVersions.length });
     await probeVersionRecords(evaluatedVersions);
-    await enrichVersionMetadata(evaluatedVersions);
+    await enrichVersionMetadata(evaluatedVersions, {
+      onProgress: (progress) => updateVersionManagerScanJob(job.id, {
+        status: "ENRICHING",
+        phase: "identity",
+        completed: progress.index,
+        total: progress.total,
+      }),
+    });
 
     updateVersionManagerScanJob(job.id, { status: "EVALUATING", phase: "policy", completed: 0, total: evaluatedVersions.length });
     const profiles = getVersionProfiles();

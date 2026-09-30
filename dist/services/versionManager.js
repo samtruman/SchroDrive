@@ -255,6 +255,7 @@ exports.defaultVersionProfiles = [
 exports.defaultVersionManagerPolicy = {
     enableRemote: false,
     acquireMissingRemote: false,
+    preferCompletePack: false,
     safety: { requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false },
     policyVersion: "1",
 };
@@ -461,6 +462,7 @@ function versionManagerPolicyHash(policy, profiles = exports.defaultVersionProfi
         policy: {
             enableRemote: policy.enableRemote === true,
             acquireMissingRemote: policy.acquireMissingRemote === true,
+            preferCompletePack: policy.preferCompletePack === true,
             safety: { ...exports.defaultVersionManagerPolicy.safety, ...(policy.safety || {}) },
         },
         profiles: profiles.map(canonicalProfile),

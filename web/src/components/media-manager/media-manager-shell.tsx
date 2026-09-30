@@ -438,6 +438,7 @@ function Overview() {
   const profiles = status.data?.profiles || [];
   const identityIssues = reviewQueue.data?.summary?.identityIssues ?? 0;
   const latestScan = status.data?.latestScan;
+  const migrationValue = (value: unknown): string | number => migration.loading ? "…" : migration.error ? "Unavailable" : typeof value === "string" || typeof value === "number" ? value : "Not calculated";
   const [scan, setScan] = useState<any>(null);
   const [scanJob, setScanJob] = useState<any>(status.data?.scanJob?.job || null);
   const [scanError, setScanError] = useState("");
@@ -581,16 +582,17 @@ function Overview() {
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
             <p>
-              Source items <b>{migration.data?.sourceItems ?? "—"}</b>
+              Source items <b>{migrationValue(migration.data?.sourceItems)}</b>
             </p>
             <p>
               Rejected legal{" "}
-              <b>{migration.data?.effective?.rejectedLegal ?? "—"}</b>
+              <b>{migrationValue(migration.data?.effective?.rejectedLegal)}</b>
             </p>
             <p>
               Importable remaining{" "}
-              <b>{migration.data?.effective?.residualTentableReady ?? "—"}</b>
+              <b>{migrationValue(migration.data?.effective?.residualTentableReady)}</b>
             </p>
+            {migration.error && <p className="text-xs text-muted-foreground">Migration state is not calculated: {migration.error}</p>}
             <Link
               className="inline-flex items-center text-primary"
               href="/media-manager/migration"
@@ -626,6 +628,10 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const [profile, setProfile] = useState("all");
   const [mediaType, setMediaType] = useState("all");
   const [decision, setDecision] = useState("all");
+  const [multipleVersions, setMultipleVersions] = useState(false);
+  const [needsAttention, setNeedsAttention] = useState(false);
+  const [sort, setSort] = useState("title");
+  const [deleteScope, setDeleteScope] = useState("all");
   const [selected, setSelected] = useState<any>(null);
   const [reviewStatus, setReviewStatus] = useState<"pending" | "dismissed">("pending");
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null);
@@ -643,7 +649,11 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   );
   const deletePreview = useJson<any>(
     "/api/version-manager/delete-preview",
-    preset === "delete-preview",
+    preset === "delete-preview" || preset === "delete",
+  );
+  const deleteImpact = useJson<any>(
+    `/api/version-manager/delete?scope=${encodeURIComponent(deleteScope)}&q=${encodeURIComponent(query)}`,
+    preset === "delete-preview" || preset === "delete",
   );
   const missing = useJson<any>(
     "/api/version-manager/missing",
@@ -659,6 +669,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       );
       const body = await readJsonResponse<any>(response, "Review queue request");
       setReview(body);
+      setReviewError("");
     } catch (value: any) {
       setReviewError(value.message || "Unable to load review");
     }
@@ -711,6 +722,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
         const type = String(
           identity.mediaType || group.mediaType || "",
         ).toLowerCase();
+        const isTv = identity.kind === "episode" || type === "episode" || type === "tv";
         const hasStatus =
           status === "all" ||
           (status === "complete" ? versions.length > 0 : text.includes(status));
@@ -719,13 +731,27 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
         return (
           text.includes(query.toLowerCase()) &&
           hasProfile &&
-          (mediaType === "all" || type === mediaType) &&
+          (mediaType === "all" || (mediaType === "tv" ? isTv : !isTv)) &&
           hasStatus &&
-          hasDecision
+          hasDecision &&
+          (!multipleVersions || versions.length > 1) &&
+          (!needsAttention || versions.some((version: any) => ["REVIEW", "DELETE_CANDIDATE"].includes(version.decision)))
         );
       }),
-    [preview.data, query, status, profile, mediaType, decision],
+    [preview.data, query, status, profile, mediaType, decision, multipleVersions, needsAttention],
   );
+  const libraryRows = useMemo(() => {
+    const rows = new Map<string, { kind: "movie" | "show" | "unknown"; title: string; year?: number; groups: any[] }>();
+    for (const group of groups) {
+      const identity = group.identity || {};
+      const isEpisode = identity.kind === "episode";
+      const key = isEpisode && (identity.tmdbId || identity.tvdbId) ? `show:${identity.tmdbId || identity.tvdbId}` : `group:${group.id}`;
+      const current: { kind: "movie" | "show" | "unknown"; title: string; year?: number; groups: any[] } = rows.get(key) || { kind: isEpisode ? "show" : identity.kind === "movie" ? "movie" : "unknown", title: identity.title || group.title || "Unidentified content", year: identity.year, groups: [] };
+      current.groups.push(group);
+      rows.set(key, current);
+    }
+    return [...rows.values()].sort((left, right) => sort === "versions" ? right.groups.reduce((n, group) => n + group.versions.length, 0) - left.groups.reduce((n, group) => n + group.versions.length, 0) : left.title.localeCompare(right.title));
+  }, [groups, sort]);
   const needs = (missing.data?.previews || []).filter((item: any) =>
     JSON.stringify(item).toLowerCase().includes(query.toLowerCase()),
   );
@@ -759,8 +785,8 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
         >
           <Link href="/media-manager/library/review">Review</Link>
         </Button>
-        <Button asChild variant={preset === "delete-preview" ? "default" : "outline"} size="sm">
-          <Link href="/media-manager/library/delete-preview">Delete Preview</Link>
+        <Button asChild variant={preset === "delete" || preset === "delete-preview" ? "default" : "outline"} size="sm">
+          <Link href="/media-manager/library/delete">Delete</Link>
         </Button>
       </div>
       {preset !== "review" && preset !== "delete-preview" && (
@@ -801,9 +827,12 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
             onChange={(event) => setMediaType(event.target.value)}
           >
             <option value="all">Type: All</option>
-            <option value="movie">Movie</option>
-            <option value="tv">TV</option>
+            <option value="movie">Movies</option>
+            <option value="tv">TV Shows</option>
           </select>
+          <label className="flex items-center gap-2 rounded border px-2 text-sm"><input type="checkbox" checked={multipleVersions} onChange={(event) => setMultipleVersions(event.target.checked)} /> Multiple versions</label>
+          <label className="flex items-center gap-2 rounded border px-2 text-sm"><input type="checkbox" checked={needsAttention} onChange={(event) => setNeedsAttention(event.target.checked)} /> Needs attention</label>
+          <select className="rounded border bg-background p-2 text-sm" value={sort} onChange={(event) => setSort(event.target.value)}><option value="title">Sort: title</option><option value="versions">Sort: versions</option></select>
           <select
             className="rounded border bg-background p-2 text-sm"
             value={decision}
@@ -816,33 +845,25 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
           </select>
         </div>
       )}
-      {preset === "delete-preview" && (
+      {(preset === "delete" || preset === "delete-preview") && (
         <>
           <Card className="border-amber-500/50">
             <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
               <div>
-                <p className="font-semibold">Delete Preview · read-only</p>
-                <p className="text-sm text-muted-foreground">Policy evaluation only. No provider delete operation is available.</p>
+                <p className="font-semibold">Delete · impact analysis</p>
+                <p className="text-sm text-muted-foreground">Physical delete units and consequences are shown read-only. The executor is not available.</p>
               </div>
               <StatusBadge value="DRY RUN" />
             </CardContent>
           </Card>
+          <div className="flex flex-wrap items-center gap-2"><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, release, filename or provider item…" /><select value={deleteScope} onChange={(event) => setDeleteScope(event.target.value)} className="rounded border bg-background p-2 text-sm"><option value="all">All items</option><option value="candidates">Delete candidates</option><option value="attention">Needs attention</option></select></div>
           <ErrorBox error={deletePreview.error} />
           {deletePreview.loading ? <p className="text-sm text-muted-foreground">Evaluating policy…</p> : (
             <>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 {Object.entries(deletePreview.data?.counts || {}).map(([label, value]) => <Stat key={label} label={label.replaceAll("_", " ")} value={String(value)} />)}
               </div>
-              <div className="space-y-3">
-                {(deletePreview.data?.groups || []).slice(0, 200).map((group: any, index: number) => (
-                  <Card key={group.id || index} className="cursor-pointer hover:border-primary/50" onClick={() => setSelected(group)}>
-                    <CardContent className="space-y-3 p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="font-medium">{group.identity?.title || "Unidentified content"}</p><p className="text-xs text-muted-foreground">{group.identity?.year || "—"} · {group.versions?.length || 0} versions · policy {deletePreview.data.policyHash}</p></div><StatusBadge value={group.versions?.some((v: any) => v.decision === "DELETE_CANDIDATE") ? "DELETE_CANDIDATE" : group.versions?.some((v: any) => v.decision === "REVIEW") ? "REVIEW" : "KEEP"} /></div>
-                      <div className="grid gap-2 md:grid-cols-2">{(group.versions || []).map((version: any) => <div key={version.id} className="rounded border p-2 text-xs"><div className="flex justify-between"><StatusBadge value={version.decision} /><span>{version.fingerprint?.storage?.provider || "provider"}</span></div><p className="mt-1 text-muted-foreground">{version.reasons?.map((reason: any) => reason.message).join("; ") || "No explanation"}</p><p className="text-muted-foreground">recoverability: {version.fingerprint?.storage?.infoHash ? "YES" : "UNKNOWN"}</p></div>)}</div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
+              <div className="space-y-3">{(deleteImpact.data?.items || []).slice(0, 200).map((item: any) => <Card key={`${item.provider}-${item.providerItemId}`}><CardContent className="space-y-2 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="font-medium">ProviderItem {item.providerItemId}</p><p className="text-xs text-muted-foreground">{item.versions.length} versions · {item.affectedGroups.length} affected contents</p></div><StatusBadge value={item.onlyCopy ? "ONLY COPY" : item.state} /></div><p className="text-sm">{item.reasons.join(" · ")}</p><p className="text-xs text-muted-foreground">{item.versions.map((version: any) => `${version.title || "Unresolved"}${version.episode ? ` E${version.episode}` : ""} · ${version.decision || "—"}`).join("; ")}</p></CardContent></Card>)}</div>
             </>
           )}
         </>
@@ -854,42 +875,18 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
             <p className="text-sm text-muted-foreground">Loading library…</p>
           ) : (
             <div className="space-y-3">
-              {groups.slice(0, 200).map((group: any, index: number) => (
-                <Card
-                  key={group.id || index}
-                  className="cursor-pointer hover:border-primary/50"
-                  onClick={() => setSelected(group)}
-                >
-                  <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
-                    <div>
-                      <p className="font-medium">
-                        {group.identity?.title ||
-                          group.title ||
-                          "Unidentified content"}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {group.identity?.year || "—"} ·{" "}
-                        type: {group.identity?.kind ||
-                          group.identity?.mediaType ||
-                          group.mediaType ||
-                          "unknown"}{" "}
-                        · {group.versions?.length || 0} versions
-                      </p>
+              {libraryRows.slice(0, 200).map((row, index) => (
+                <Card key={`${row.kind}-${row.title}-${index}`}>
+                  <CardContent className="space-y-3 p-4">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div><p className="font-medium">{row.title}</p><p className="text-xs text-muted-foreground">{row.year || "—"} · {row.kind === "show" ? "TV show" : row.kind === "movie" ? "Movie" : "Unresolved"} · {row.groups.reduce((count, group) => count + group.versions.length, 0)} versions</p></div>
+                      <StatusBadge value={row.kind === "show" ? "SERIES" : row.kind === "movie" ? "MOVIE" : "UNRESOLVED"} />
                     </div>
-                    <div className="flex flex-wrap gap-2">
-                      {(group.versions || [])
-                        .slice(0, 3)
-                        .map((version: any, versionIndex: number) => (
-                          <StatusBadge
-                            key={version.id || versionIndex}
-                            value={version.decision || "VERSION"}
-                          />
-                        ))}
-                    </div>
+                    {row.kind === "show" ? <div className="space-y-2 border-l-2 pl-3">{[...new Map(row.groups.map((group) => [group.identity?.season || 0, row.groups.filter((candidate) => (candidate.identity?.season || 0) === (group.identity?.season || 0))])).entries()].sort(([a], [b]) => a - b).map(([season, seasonGroups]) => <details key={season} className="rounded border p-2"><summary className="cursor-pointer text-sm font-medium">Season {season || "unknown"} · {seasonGroups.length} episodes</summary><div className="mt-2 space-y-2">{seasonGroups.sort((a, b) => (a.identity?.episode || 0) - (b.identity?.episode || 0)).map((group) => <div key={group.id} className="rounded border p-2 text-sm"><button className="font-medium hover:underline" onClick={() => setSelected(group)}>Episode {group.identity?.episode || "unknown"} · {group.versions.length} versions</button><div className="mt-1 flex flex-wrap gap-1">{group.versions.map((version: any) => <StatusBadge key={version.id} value={version.decision} />)}</div></div>)}</div></details>)}</div> : <div className="flex flex-wrap gap-2">{row.groups.flatMap((group) => group.versions).slice(0, 8).map((version: any) => <button key={version.id} onClick={() => setSelected(row.groups.find((group) => group.versions.some((candidate: any) => candidate.id === version.id)))}><StatusBadge value={version.decision || "VERSION"} /></button>)}</div>}
                   </CardContent>
                 </Card>
               ))}
-              {groups.length === 0 && (
+              {libraryRows.length === 0 && (
                 <Card>
                   <CardContent className="p-6 text-sm text-muted-foreground">
                     No contents match the current filters.
@@ -1037,6 +1034,11 @@ function Migration({ section = "export" }: { section?: string }) {
   const [loadingFile, setLoadingFile] = useState(false);
   const [selectedExport, setSelectedExport] = useState<Set<string>>(new Set());
   const [selectedImport, setSelectedImport] = useState<Set<string>>(new Set());
+  const [backupToImport, setBackupToImport] = useState("");
+  const [migrationJob, setMigrationJob] = useState<any>(null);
+  const [migrationStartError, setMigrationStartError] = useState("");
+  const magnetBackups = useJson<any>(`/api/version-manager/magnet-backup?provider=${encodeURIComponent(sourceProvider)}`);
+  const [backupBusy, setBackupBusy] = useState(false);
   async function previewFile(file: File) {
     setLoadingFile(true);
     setFileError("");
@@ -1063,6 +1065,44 @@ function Migration({ section = "export" }: { section?: string }) {
   const effectiveReady = exportItems.filter(
     (item: any) => item.effectiveStatus === "READY_TO_IMPORT",
   );
+  async function createMagnetBackup(mode: "FULL" | "INCREMENTAL") {
+    setBackupBusy(true);
+    try {
+      const response = await fetch("/api/version-manager/magnet-backup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: sourceProvider, mode }) });
+      const body = await readJsonResponse<any>(response, "Magnet backup");
+      await magnetBackups.reload();
+      return body;
+    } finally { setBackupBusy(false); }
+  }
+  async function startMigration() {
+    if (!importPlan || !selectedImport.size || !window.confirm("Start the selected migration? The source provider is not modified; the target provider will receive the selected magnets.")) return;
+    setMigrationStartError("");
+    const items = (importPlan.items || []).filter((item: any) => selectedImport.has(item.infoHash || String(item.index)));
+    try {
+      const response = await fetch("/api/version-manager/migration/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirm: "START_MIGRATION", sourceProvider, targetProvider, items }) });
+      const body = await readJsonResponse<any>(response, "Starting migration");
+      setMigrationJob(body.job);
+    } catch (error: any) { setMigrationStartError(error.message || "Unable to start migration"); }
+  }
+  async function previewMagnetBackup(id: string) {
+    if (!id) return;
+    setLoadingFile(true); setFileError("");
+    try {
+      const backupResponse = await fetch(`/api/version-manager/magnet-backup/${encodeURIComponent(id)}`, { cache: "no-store" });
+      const backup = await readJsonResponse<any>(backupResponse, "Magnet backup");
+      if (!backup.document.manifest) throw new Error("This incremental backup requires its full baseline before preview");
+      const response = await fetch("/api/version-manager/import/preview", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetProvider, manifest: backup.document.manifest }) });
+      setImportPlan(await readJsonResponse<any>(response, "Import preview")); setSelectedImport(new Set());
+    } catch (error: any) { setFileError(error.message || "Unable to preview magnet backup"); } finally { setLoadingFile(false); }
+  }
+  useEffect(() => {
+    if (!migrationJob?.id || ["COMPLETED", "PARTIAL", "FAILED"].includes(migrationJob.status)) return;
+    const timer = window.setInterval(async () => {
+      const response = await fetch(`/api/version-manager/migration/jobs/${encodeURIComponent(migrationJob.id)}`, { cache: "no-store" });
+      if (response.ok) setMigrationJob((await response.json()).job);
+    }, 1500);
+    return () => window.clearInterval(timer);
+  }, [migrationJob?.id, migrationJob?.status]);
   const toggle = (
     setter: React.Dispatch<React.SetStateAction<Set<string>>>,
     id: string,
@@ -1134,21 +1174,22 @@ function Migration({ section = "export" }: { section?: string }) {
         </CardContent>
       </Card>
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Source items" value={state.data?.sourceItems ?? "—"} />
+        <Stat label="Source items" value={state.loading ? "…" : state.error ? "Unavailable" : state.data?.sourceItems ?? "Not calculated"} />
         <Stat
           label="Already present/equivalent"
-          value={state.data?.effective?.alreadyPresent ?? "—"}
+          value={state.loading ? "…" : state.error ? "Unavailable" : state.data?.effective?.alreadyPresent ?? "Not calculated"}
         />
         <Stat
           label="Rejected legal"
-          value={state.data?.effective?.rejectedLegal ?? "—"}
+          value={state.loading ? "…" : state.error ? "Unavailable" : state.data?.effective?.rejectedLegal ?? "Not calculated"}
         />
         <Stat
           label="Import All Missing"
-          value={state.data?.effective?.residualTentableReady ?? "—"}
+          value={state.loading ? "…" : state.error ? "Unavailable" : state.data?.effective?.residualTentableReady ?? "Not calculated"}
           detail="effective ready only"
         />
       </div>
+      <ErrorBox error={state.error ? `Migration state is not calculated: ${state.error}` : ""} />
       <Card id="export">
         <CardHeader>
           <CardTitle className="text-base">Export</CardTitle>
@@ -1258,6 +1299,18 @@ function Migration({ section = "export" }: { section?: string }) {
           </div>
         </CardContent>
       </Card>
+      <Card id="magnet-backup">
+        <CardHeader><CardTitle className="text-base">Magnet Backup</CardTitle></CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-sm text-muted-foreground">Stores provider magnet references and file metadata only; it never downloads media bytes.</p>
+          <div className="flex flex-wrap gap-2">
+            <Button size="sm" variant="outline" disabled={backupBusy || !sourceInfo?.configured} onClick={() => void createMagnetBackup("FULL")}>Backup Now</Button>
+            <Button size="sm" variant="outline" disabled={backupBusy || !sourceInfo?.configured} onClick={() => void createMagnetBackup("INCREMENTAL")}>Incremental Backup</Button>
+          </div>
+          <p className="text-xs text-muted-foreground">{magnetBackups.loading ? "Loading backup history…" : `${magnetBackups.data?.backups?.length || 0} backup records`}</p>
+          {(magnetBackups.data?.backups || []).slice(0, 5).map((backup: any) => <div className="flex flex-wrap justify-between gap-2 rounded border p-2 text-xs" key={backup.id}><span>{backup.mode} · {backup.itemCount} items</span><span>{backup.valid ? "VALID" : "INVALID"} · {backup.createdAt}</span></div>)}
+        </CardContent>
+      </Card>
       <Card id="import">
         <CardHeader>
           <CardTitle className="text-base">Import preview</CardTitle>
@@ -1265,8 +1318,9 @@ function Migration({ section = "export" }: { section?: string }) {
         <CardContent className="space-y-3">
           {!importSupported && <ErrorBox error="Import preview is unavailable for the selected target provider because its declared capabilities are unsupported." />}
           <p className="text-sm text-muted-foreground">
-            Analyze a manifest or generic magnets file. Execute is intentionally
-            unavailable in this milestone.
+            Analyze a manifest or magnets file, select eligible items, then use
+            the explicit confirmation to start a persistent target-provider job.
+            The source provider is never modified.
           </p>
           <input
             type="file"
@@ -1277,6 +1331,7 @@ function Migration({ section = "export" }: { section?: string }) {
             }}
             disabled={loadingFile}
           />
+          <div className="flex flex-wrap items-center gap-2"><select className="rounded border bg-background p-2 text-sm" value={backupToImport} onChange={(event) => { setBackupToImport(event.target.value); void previewMagnetBackup(event.target.value); }}><option value="">Import from Magnet Backup…</option>{(magnetBackups.data?.backups || []).map((backup: any) => <option key={backup.id} value={backup.id}>{backup.mode} · {backup.createdAt}</option>)}</select><span className="text-xs text-muted-foreground">Read-only preview; no import starts here.</span></div>
           <ErrorBox error={fileError} />
           {importPlan && (
             <>
@@ -1343,6 +1398,9 @@ function Migration({ section = "export" }: { section?: string }) {
                   );
                 })}
               </div>
+              <ErrorBox error={migrationStartError} />
+              {migrationJob && <div className="rounded border p-3 text-sm"><div className="flex flex-wrap justify-between gap-2"><b>Migration job {migrationJob.status}</b><span>{migrationJob.processed}/{migrationJob.total}</span></div><p className="mt-1 text-muted-foreground">Imported {migrationJob.imported} · skipped {migrationJob.skipped} · failed {migrationJob.failed}</p></div>}
+              <Button disabled={!selectedImport.size || !importSupported || Boolean(migrationJob && ["QUEUED", "RUNNING"].includes(migrationJob.status))} onClick={() => void startMigration()}>START MIGRATION</Button>
             </>
           )}
         </CardContent>
@@ -1537,7 +1595,7 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
   const sectionIds = ["profiles", "languages", "rules", "acquisition", "safety"];
   const [activeSection, setActiveSection] = useState(sectionIds.includes(section) ? section : "profiles");
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [policy, setPolicy] = useState<any>({ enableRemote: false, acquireMissingRemote: false, safety: { requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false } });
+  const [policy, setPolicy] = useState<any>({ enableRemote: false, acquireMissingRemote: false, preferCompletePack: false, safety: { requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false } });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState("");
   useEffect(() => {
@@ -1673,6 +1731,7 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
             <label className="flex items-center gap-2"><input type="checkbox" checked={policy.safety?.requireRecoverableBeforeDelete !== false} onChange={(event) => setPolicy((current: any) => ({ ...current, safety: { ...current.safety, requireRecoverableBeforeDelete: event.target.checked } }))} /> Require recoverability before candidate</label>
             <label className="flex items-center gap-2"><input type="checkbox" checked={policy.safety?.allowDeleteWhenIdentityUncertain === true} onChange={(event) => setPolicy((current: any) => ({ ...current, safety: { ...current.safety, allowDeleteWhenIdentityUncertain: event.target.checked } }))} /> Allow uncertain identity (not recommended)</label>
             <label className="flex items-center gap-2"><input type="checkbox" checked={policy.safety?.allowDeleteWhenMetadataIncomplete === true} onChange={(event) => setPolicy((current: any) => ({ ...current, safety: { ...current.safety, allowDeleteWhenMetadataIncomplete: event.target.checked } }))} /> Allow incomplete metadata (not recommended)</label>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={policy.preferCompletePack === true} onChange={(event) => setPolicy((current: any) => ({ ...current, preferCompletePack: event.target.checked }))} /> Prefer complete packs during delete impact analysis</label>
             <p className="text-muted-foreground">
               Recoverability requirements remain fail-closed.
             </p>

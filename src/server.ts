@@ -50,6 +50,9 @@ import { migrationRouteLevel, providerMigrationCapabilities } from "./services/p
 import { listMigrationAudit, recordAcquisitionAudit, recordMigrationAudit } from "./core/db";
 import { buildUnifiedReviewQueue } from "./services/unifiedReview";
 import { getVersionManagerScanRuntimeStatus, getVersionManagerScanStatus, startVersionManagerScan } from "./services/versionManagerScanJob";
+import { createMagnetBackup, listMagnetBackups, readMagnetBackup, startMagnetBackupScheduler, verifyMagnetBackup } from "./services/magnetBackup";
+import { buildDeleteImpact } from "./services/deleteImpact";
+import { getMigrationJob, listMigrationJobs, startMigrationJob } from "./services/migrationJob";
 
 // ===========================================================================
 // Server Initialisation
@@ -286,6 +289,17 @@ export function startServer() {
     }
   });
 
+  /** Read-only physical delete-unit impact. The provider executor remains disabled. */
+  app.get("/api/version-manager/delete", (_req, res) => {
+    try {
+      const snapshot = readVersionManagerGroups();
+      if (!snapshot) return res.status(503).json({ ok: false, snapshotAvailable: false, error: "No valid inventory snapshot is available; start a scan" });
+      const query = typeof _req.query.q === "string" ? _req.query.q : "";
+      const scope = typeof _req.query.scope === "string" ? _req.query.scope : "all";
+      return res.json({ ok: true, readOnly: true, executorEnabled: false, scope, snapshotId: snapshot.snapshotId, items: buildDeleteImpact(snapshot.groups, query, scope) });
+    } catch (error: any) { return res.status(500).json({ ok: false, error: error?.message || "Delete impact unavailable" }); }
+  });
+
   /** Read-only operator queue combining Organizer and policy/recoverability review. */
   app.get("/api/version-manager/review", async (req, res) => {
     try {
@@ -360,6 +374,25 @@ export function startServer() {
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message || "Migration export failed" });
     }
+  });
+
+  /** Read-only magnet backup snapshots. These contain provider references, never media bytes. */
+  app.get("/api/version-manager/magnet-backup", (req, res) => {
+    res.json({ ok: true, readOnly: true, backups: listMagnetBackups(typeof req.query.provider === "string" ? req.query.provider : undefined) });
+  });
+  app.post("/api/version-manager/magnet-backup", async (req, res) => {
+    try {
+      const provider = typeof req.body?.provider === "string" ? req.body.provider.trim().toLowerCase() : "";
+      const mode = req.body?.mode === "INCREMENTAL" ? "INCREMENTAL" : "FULL";
+      if (!provider) return res.status(400).json({ ok: false, error: "A source provider is required" });
+      const record = await createMagnetBackup(provider, mode);
+      res.status(201).json({ ok: true, readOnly: true, record });
+    } catch (error: any) { res.status(503).json({ ok: false, error: error?.message || "Magnet backup failed" }); }
+  });
+  app.get("/api/version-manager/magnet-backup/:id", (req, res) => {
+    const document = readMagnetBackup(String(req.params.id));
+    if (!document) return res.status(404).json({ ok: false, error: "Magnet backup not found" });
+    return res.json({ ok: true, readOnly: true, integrity: verifyMagnetBackup(String(req.params.id)), document });
   });
 
   /**
@@ -448,6 +481,24 @@ export function startServer() {
     }
   });
 
+  /** Starts the existing migration executor as a persistent asynchronous job. */
+  app.post("/api/version-manager/migration/jobs", (req, res) => {
+    try {
+      if (req.body?.confirm !== "START_MIGRATION") return res.status(400).json({ ok: false, error: "Explicit START_MIGRATION confirmation is required" });
+      const source = String(req.body?.sourceProvider || "").trim().toLowerCase();
+      const target = String(req.body?.targetProvider || "").trim().toLowerCase();
+      const items = Array.isArray(req.body?.items) ? req.body.items : [];
+      if (!source || !target) return res.status(400).json({ ok: false, error: "Source and target providers are required" });
+      const job = startMigrationJob(source, target, items);
+      return res.status(202).json({ ok: true, readOnly: false, job, statusUrl: `/api/version-manager/migration/jobs/${encodeURIComponent(job.id)}` });
+    } catch (error: any) { return res.status(503).json({ ok: false, error: error?.message || "Unable to start migration" }); }
+  });
+  app.get("/api/version-manager/migration/jobs", (_req, res) => res.json({ ok: true, readOnly: true, jobs: listMigrationJobs() }));
+  app.get("/api/version-manager/migration/jobs/:id", (req, res) => {
+    const job = getMigrationJob(String(req.params.id));
+    return job ? res.json({ ok: true, readOnly: true, job }) : res.status(404).json({ ok: false, error: "Migration job not found" });
+  });
+
   /** Explicit one-item migration execution; no bulk or UI execution path. */
   app.post("/api/version-manager/import/execute", async (req, res) => {
     try {
@@ -534,6 +585,7 @@ export function startServer() {
       const policy = {
         enableRemote: req.body.policy?.enableRemote === true,
         acquireMissingRemote: req.body.policy?.acquireMissingRemote === true,
+        preferCompletePack: req.body.policy?.preferCompletePack === true,
         policyVersion: typeof req.body.policy?.policyVersion === "string" ? req.body.policy.policyVersion : "1",
         safety: {
           requireRecoverableBeforeDelete: req.body.policy?.safety?.requireRecoverableBeforeDelete !== false,
@@ -1564,6 +1616,7 @@ export function startServer() {
 
   // Start the download token daily reset cron (midnight in configured timezone)
   tokenRotator.startDailyReset();
+  startMagnetBackupScheduler();
 }
 
 // ===========================================================================

@@ -1,5 +1,16 @@
 # Upstream PR Candidates
 
+## CURRENT STATUS
+
+- Integration branch acceptance: `FULL_E2E: VALIDATED` at `51af6c4`.
+- Standard contribution base: `develop` (`upstream/develop`), not `main`.
+- PRs #100–#106 remain `OPEN` against `develop` unless upstream status is
+  explicitly updated; open PRs are not treated as merged code.
+- Media Manager upstream PR splitting has not started.
+
+Historical candidate details below are retained for review; they do not change
+the current status above.
+
 Internal tracking document for generic SchröDrive fixes that may be proposed
 as small, independently reviewable upstream changes. This document is not a
 PR and contains no credentials or provider secrets.
@@ -7,6 +18,9 @@ PR and contains no credentials or provider secrets.
 Comparison baseline: `upstream/develop` fetched on 2026-09-28 at
 `f6f20d52cddca44529e225128095a13c97c0e428`. Historical commits are recorded
 without rewriting the branch history.
+
+Contribution target: `develop`. `main` is release-only unless the maintainer
+explicitly requests a different base.
 
 ## 1. Arr bridge — preserve nested staging paths
 
@@ -177,6 +191,15 @@ and multiversion organizer tests.
 Generic; absent from fetched upstream `develop`. It does not depend on the
 Version Manager or its decisions.
 
+### Current PR
+
+PR #100 is open against `develop` from `samtruman:fix/organizer-collision-safety`.
+The branch was realigned onto `upstream/develop`; current fix commit:
+`611c6d1d22f75b74edaba5f06d98ef7a24ca6ec3`.
+
+Published contribution status: PR #100 remains OPEN against `develop`; do not
+rewrite its branch or commit.
+
 ### Isolation
 
 Requires extracting the organizer-only diff from `e7cf2de` before proposing a
@@ -234,13 +257,13 @@ needed category is created only in normal mode; dry-run remains non-mutative.
 
 ### Upstream applicability
 
-Generic and independent of CineCircle and Version Manager. Absent from the
-fetched upstream `develop`.
+Generic and independent of deployment-specific code. Absent from the fetched
+upstream `develop`; published as PR #101 against `develop`.
 
 ### Isolation
 
-Requires extracting the organizer-only commit because the current branch has
-subsequent local work around the same organizer safety area.
+Extracted as a standalone commit from `upstream/develop`; no dependency on PR
+#100.
 
 ### Proposed PR scope
 
@@ -346,6 +369,20 @@ Potentially standalone after extracting only config core and tests.
 ### Proposed PR scope
 
 Generic persistent-config fallback semantics, with no Version Manager code.
+
+## Published upstream contribution batch
+
+All entries below target `moderniselife/SchroDrive:develop` and were created
+from the current `upstream/develop` after checking the corresponding bug.
+
+| Fix | PR | Branch | Commit | Base | Status | Dependency |
+|---|---:|---|---|---|---|---|
+| Organizer collision safety | #100 | `fix/organizer-collision-safety` | `611c6d1d22f75b74edaba5f06d98ef7a24ca6ec3` | `develop` | OPEN | none |
+| Organizer lazy categories | #101 | `fix/organizer-lazy-categories` | `381d2cd` | `develop` | OPEN | none |
+| Canonical Seerr settings keys | #102 | `fix/settings-canonical-seerr` | `2e3b4e2` | `develop` | OPEN | none |
+| Seerr service/API URL normalization | #103 | `fix/seerr-api-url-normalization` | `9bfbc55` | `develop` | OPEN | none |
+| Settings env provenance | #104 | `fix/settings-env-provenance` | `45286f0` | `develop` | OPEN | none |
+| Docker context/layer caching | #105 | `build/docker-context-layer-cache` | `39d6b1b` | `develop` | OPEN | none |
 
 ## 7. Seerr Settings persistence key mismatch
 
@@ -628,15 +665,16 @@ exclude the controlled E2E runtime configuration.
 |-----------|----------------|--------|------------|-------|-----------------|----------|
 | Arr nested staging paths | ALREADY_FIXED_UPSTREAM | `a20b84f` | yes | regression present | present in upstream develop | low |
 | Arr restart recovery | ALREADY_FIXED_UPSTREAM | `1c6f494` | yes | regression present | present in upstream develop | low |
-| Organizer collision safety | GENERIC_UPSTREAM_FIX | `e7cf2de` | extract | organizer safety | absent from fetched upstream develop | HIGH |
-| Optional category directories | GENERIC_UPSTREAM_FIX | `a19892c` | extract | organizer safety | absent from fetched upstream develop | HIGH |
+| Organizer collision safety | GENERIC_UPSTREAM_FIX | `611c6d1` (PR #100) | yes | organizer safety | open against develop | HIGH |
+| Optional category directories | GENERIC_UPSTREAM_FIX | `381d2cd` / PR #101 | yes | organizer safety | OPEN against develop | HIGH |
 | Organizer filename mode | NEEDS_UPSTREAM_VERIFICATION | `36d57a1` / `e7cf2de` | no | filename/safety | intent not yet verified | medium |
 | Persisted `.env` fallback | NEEDS_UPSTREAM_VERIFICATION | `e7983ad` | extract | config unit tests | absent; applicability needs review | medium |
-| Seerr canonical Settings keys | GENERIC_UPSTREAM_FIX | `2e6e4c9` | yes | config persistence | absent from fetched upstream develop | HIGH |
-| Seerr URL/API-root normalization | GENERIC_UPSTREAM_FIX | pending | yes | URL normalization unit test | needs upstream verification | HIGH |
-| Settings dotenv provenance | GENERIC_UPSTREAM_FIX | pending | yes | config provenance/persistence tests | present in fetched upstream develop | HIGH |
+| Seerr canonical Settings keys | GENERIC_UPSTREAM_FIX | `2e3b4e2` / PR #102 | yes | config persistence | OPEN against develop | HIGH |
+| Seerr URL/API-root normalization | GENERIC_UPSTREAM_FIX | `9bfbc55` / PR #103 | yes | URL normalization unit test | OPEN against develop | HIGH |
+| Settings dotenv provenance | GENERIC_UPSTREAM_FIX | `45286f0` / PR #104 | yes | config provenance/persistence tests | OPEN against develop | HIGH |
 | Seerr request duplicate detection | GENERIC_UPSTREAM_FIX | pending | yes | acquisition/Seerr unit tests | needs upstream verification | HIGH |
-| Docker context/layer caching | GENERIC_UPSTREAM_FIX + NEEDS_UPSTREAM_VERIFICATION | `ca2703c` | yes | local timed builds | verify against upstream HEAD | MEDIUM |
+| Docker context/layer caching | GENERIC_UPSTREAM_FIX | `39d6b1b` / PR #105 | yes | Dockerfile/context review | OPEN against develop | MEDIUM |
+| Mount readiness guard | GENERIC_UPSTREAM_FIX | `6bc2549` / PR #106 | yes | readiness/Organizer safety | OPEN against develop | HIGH |
 
 ## Migration bulk importer must classify provider rate-limit messages as retryable
 
@@ -777,7 +815,7 @@ changes, dev-mode or source mounts.
 
 ### Classification
 
-`DEPLOYMENT_VALIDATED` / `FUTURE_UPSTREAM_PR`
+`GENERIC_UPSTREAM_FIX`
 
 ### Component
 
@@ -789,7 +827,7 @@ SchröDrive can start while the FUSE/provider filesystem is not yet genuinely
 ready. Mount-dependent components may then run against an unavailable or
 incomplete filesystem.
 
-### Validated deployment solution
+### Reference implementation
 
 The CineCircle deployment uses a fail-closed startup precheck before the
 standard runtime:
@@ -807,7 +845,20 @@ validationMountPrecheck → PASS → /docker-entrypoint.sh
 - ideally keep the app/backend available while mount-dependent functions wait
   or fail safely.
 
-### Scope
+### Upstream implementation
 
-Deployment/runtime hardening only. Do not mix this candidate with the Media
-Manager MVP or its future PR. No implementation or refactor is included here.
+PR #106 (`fix/mount-readiness-guard`) adds a small shared readiness probe
+scoped to configured provider/WebDAV roots. Linux mountinfo plus a bounded
+directory response check distinguish an observed empty filesystem from an
+unavailable mount. Organizer skips unavailable sources and suspends pruning
+while any configured source is unobservable; independent ready sources remain
+scannable. The aggregate filesystem browser fails closed when its view would
+be incomplete.
+
+Commit: `6bc2549e23436cdae90fab4cc52c7b538c04c15e`
+
+Status: OPEN against `develop`.
+
+## FUSE assessment result
+
+`FUSE_PR: OPEN` — PR #106.

@@ -10,6 +10,8 @@ export type LanguageMode = "ANY" | "ALL";
 export interface VersionManagerPolicy {
   enableRemote: boolean;
   acquireMissingRemote: boolean;
+  /** Prefer complete season packs when physical delete impact is evaluated. */
+  preferCompletePack?: boolean;
   safety?: SafetyPolicy;
   policyVersion?: string;
 }
@@ -409,6 +411,7 @@ export const defaultVersionProfiles: VersionProfile[] = [
 export const defaultVersionManagerPolicy: VersionManagerPolicy = {
   enableRemote: false,
   acquireMissingRemote: false,
+  preferCompletePack: false,
   safety: { requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false },
   policyVersion: "1",
 };
@@ -618,6 +621,7 @@ export function versionManagerPolicyHash(policy: VersionManagerPolicy, profiles:
     policy: {
       enableRemote: policy.enableRemote === true,
       acquireMissingRemote: policy.acquireMissingRemote === true,
+      preferCompletePack: policy.preferCompletePack === true,
       safety: { ...defaultVersionManagerPolicy.safety, ...(policy.safety || {}) },
     },
     profiles: profiles.map(canonicalProfile),

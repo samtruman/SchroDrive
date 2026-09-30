@@ -277,6 +277,11 @@ export const config = {
   preemptiveRepairStallMinutes: Number(process.env.PREEMPTIVE_REPAIR_STALL_MIN || 30),
   // --- Data Directory & Database ---
   dataDir: process.env.DATA_DIR || './data',
+  magnetBackupEnabled: asBool(process.env.MAGNET_BACKUP_ENABLED, false),
+  magnetBackupSchedule: process.env.MAGNET_BACKUP_SCHEDULE || "0 3 * * *",
+  magnetBackupTimezone: process.env.MAGNET_BACKUP_TIMEZONE || "Europe/Rome",
+  magnetBackupDailyRetention: asNumber(process.env.MAGNET_BACKUP_DAILY_RETENTION, 90),
+  magnetBackupMonthlyRetention: asNumber(process.env.MAGNET_BACKUP_MONTHLY_RETENTION, 24),
   dbPath: process.env.DB_PATH || path.join(process.env.DATA_DIR || './data', 'schrodrive.db'),
 
   // =========================================================================
