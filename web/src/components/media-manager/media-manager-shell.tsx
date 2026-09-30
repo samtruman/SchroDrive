@@ -438,6 +438,7 @@ function Overview() {
   const profiles = status.data?.profiles || [];
   const identityIssues = reviewQueue.data?.summary?.identityIssues ?? 0;
   const latestScan = status.data?.latestScan;
+  const evaluation = status.data?.policyEvaluation;
   const migrationValue = (value: unknown): string | number => migration.loading ? "…" : migration.error ? "Unavailable" : typeof value === "string" || typeof value === "number" ? value : "Not calculated";
   const [scan, setScan] = useState<any>(null);
   const [scanJob, setScanJob] = useState<any>(status.data?.scanJob?.job || null);
@@ -520,7 +521,7 @@ function Overview() {
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
           label="Library contents"
-          value={scan?.groupCount ?? status.data?.latestScan?.groupCount ?? "—"}
+          value={scan?.groupCount ?? evaluation?.counts?.contentCount ?? latestScan?.groupCount ?? "—"}
           detail="ContentIdentity / VersionGroup"
         />
         <Stat
@@ -547,21 +548,22 @@ function Overview() {
           </Link>
           <Link href="/media-manager/library/review" className="rounded-md border p-3 transition-colors hover:border-primary">
             <p className="text-sm text-muted-foreground">Policy review</p>
-            <p className="mt-1 text-2xl font-semibold">{latestScan?.reviewCount ?? "—"}</p>
+            <p className="mt-1 text-2xl font-semibold">{evaluation?.counts?.reviewCount ?? latestScan?.reviewCount ?? "—"}</p>
             <p className="mt-1 text-xs text-muted-foreground">Safety and policy blockers</p>
           </Link>
           <Link href="/media-manager/library/missing" className="rounded-md border p-3 transition-colors hover:border-primary">
             <p className="text-sm text-muted-foreground">Missing</p>
-            <p className="mt-1 text-2xl font-semibold">{latestScan ? (latestScan.primaryMissing || 0) + (latestScan.remoteMissing || 0) : "—"}</p>
+            <p className="mt-1 text-2xl font-semibold">{evaluation ? (evaluation.counts.primaryMissing || 0) + (evaluation.counts.remoteMissing || 0) : "—"}</p>
             <p className="mt-1 text-xs text-muted-foreground">Unsatisfied enabled profiles</p>
           </Link>
           <Link href="/media-manager/library/delete-preview" className="rounded-md border p-3 transition-colors hover:border-primary">
             <p className="text-sm text-muted-foreground">Delete candidates</p>
-            <p className="mt-1 text-2xl font-semibold">{latestScan?.deleteCandidateCount ?? "—"}</p>
+            <p className="mt-1 text-2xl font-semibold">{evaluation?.counts?.deleteCandidateCount ?? latestScan?.deleteCandidateCount ?? "—"}</p>
             <p className="mt-1 text-xs text-muted-foreground">Read-only preview</p>
           </Link>
         </CardContent>
       </Card>
+      {evaluation?.status === "STALE" && <Card className="border-amber-500/50"><CardContent className="p-4 text-sm"><b>Policy evaluation is stale.</b> The current configuration differs from the snapshot evaluation; read-only projections are being recalculated from the existing snapshot, without rescanning providers.</CardContent></Card>}
       <div className="grid gap-4 lg:grid-cols-3">
         <Card>
           <CardHeader>
@@ -863,7 +865,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 {Object.entries(deletePreview.data?.counts || {}).map(([label, value]) => <Stat key={label} label={label.replaceAll("_", " ")} value={String(value)} />)}
               </div>
-              <div className="space-y-3">{(deleteImpact.data?.items || []).slice(0, 200).map((item: any) => <Card key={`${item.provider}-${item.providerItemId}`}><CardContent className="space-y-2 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="font-medium">ProviderItem {item.providerItemId}</p><p className="text-xs text-muted-foreground">{item.versions.length} versions · {item.affectedGroups.length} affected contents</p></div><StatusBadge value={item.onlyCopy ? "ONLY COPY" : item.state} /></div><p className="text-sm">{item.reasons.join(" · ")}</p><p className="text-xs text-muted-foreground">{item.versions.map((version: any) => `${version.title || "Unresolved"}${version.episode ? ` E${version.episode}` : ""} · ${version.decision || "—"}`).join("; ")}</p></CardContent></Card>)}</div>
+              <div className="space-y-3">{(deleteImpact.data?.items || []).slice(0, 200).map((item: any) => <Card key={`${item.provider}-${item.providerItemId}`}><CardContent className="space-y-2 p-4"><div className="flex flex-wrap items-center justify-between gap-2"><div><p className="font-medium">ProviderItem {item.providerItemId}</p><p className="text-xs text-muted-foreground">{item.versions.length} logical versions · {item.affectedGroups.length} affected contents · {item.physicalSize ? `${Math.round(item.physicalSize / 1_000_000)} MB physical` : "size unknown"}</p></div><StatusBadge value={item.onlyCopy ? "ONLY COPY" : item.state} /></div><p className="text-sm">{item.reasons.join(" · ")}</p><p className="text-xs text-muted-foreground">{item.versions.map((version: any) => `${version.title || "Unresolved"}${version.season !== undefined ? ` S${version.season}` : ""}${version.episode !== undefined ? ` E${version.episode}` : ""} · ${version.decision || "—"}`).join("; ")}</p>{item.alternativeVersions?.length > 0 && <p className="text-xs text-muted-foreground">Alternative KEEP: {item.alternativeVersions.map((version: any) => `${version.title || "Unresolved"}${version.episode !== undefined ? ` E${version.episode}` : ""} · ProviderItem ${version.providerItemId}`).join("; ")}</p>}{item.protectedByKeep && <p className="text-xs font-medium text-amber-700">Protected: deleting this physical ProviderItem would also remove a KEEP version.</p>}</CardContent></Card>)}</div>
             </>
           )}
         </>
@@ -943,8 +945,9 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
               {needs.length === 0 && (
                 <Card>
                   <CardContent className="p-6 text-sm text-muted-foreground">
-                    No missing profiles. If REMOTE is disabled, missing
-                    acquisition previews are intentionally not generated.
+                    No unsatisfied enabled profile requirements were found in
+                    the current snapshot. Provider acquisition previews remain
+                    unavailable when the corresponding gateway is disabled.
                   </CardContent>
                 </Card>
               )}
@@ -1732,10 +1735,16 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
             <label className="flex items-center gap-2"><input type="checkbox" checked={policy.safety?.requireRecoverableBeforeDelete !== false} onChange={(event) => setPolicy((current: any) => ({ ...current, safety: { ...current.safety, requireRecoverableBeforeDelete: event.target.checked } }))} /> Require recoverability before candidate</label>
             <label className="flex items-center gap-2"><input type="checkbox" checked={policy.safety?.allowDeleteWhenIdentityUncertain === true} onChange={(event) => setPolicy((current: any) => ({ ...current, safety: { ...current.safety, allowDeleteWhenIdentityUncertain: event.target.checked } }))} /> Allow uncertain identity (not recommended)</label>
             <label className="flex items-center gap-2"><input type="checkbox" checked={policy.safety?.allowDeleteWhenMetadataIncomplete === true} onChange={(event) => setPolicy((current: any) => ({ ...current, safety: { ...current.safety, allowDeleteWhenMetadataIncomplete: event.target.checked } }))} /> Allow incomplete metadata (not recommended)</label>
-            <label className="flex items-center gap-2"><input type="checkbox" checked={policy.preferCompletePack === true} onChange={(event) => setPolicy((current: any) => ({ ...current, preferCompletePack: event.target.checked }))} /> Prefer complete packs during delete impact analysis</label>
             <p className="text-muted-foreground">
               Recoverability requirements remain fail-closed.
             </p>
+          </CardContent>
+        </Card>
+        <Card id="media-manager-retention" className="scroll-mt-20">
+          <CardHeader><CardTitle>Retention</CardTitle></CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            <p className="text-muted-foreground">Retention preferences affect policy evaluation and read-only delete impact; they never enable provider mutation.</p>
+            <label className="flex items-center gap-2"><input type="checkbox" checked={policy.preferCompletePack === true} onChange={(event) => setPolicy((current: any) => ({ ...current, preferCompletePack: event.target.checked }))} /> Prefer complete packs during delete impact analysis</label>
           </CardContent>
         </Card>
       </div>

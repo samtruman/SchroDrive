@@ -75,6 +75,23 @@ function readVersionManagerGroups(): { groups: any[]; snapshotId: string; snapsh
   };
 }
 
+function summarizeVersionManagerGroups(groups: any[], policy: ReturnType<typeof getVersionManagerPolicy>, profiles = getVersionProfiles()) {
+  const versions = groups.flatMap((group) => group.versions || []);
+  const primaryProfileIds = new Set(profiles.filter((profile) => profile.enabled && profile.target !== "DIRECT_PLAY").map((profile) => profile.id));
+  const primaryMissing = groups.filter((group) => group.profileStatuses?.some((status: any) => primaryProfileIds.has(status.profileId) && !status.satisfied) || false).length;
+  const remoteMissing = policy.enableRemote ? groups.filter((group) => group.remote?.status === "REMOTE_MISSING").length : 0;
+  return {
+    contentCount: groups.length,
+    versionGroupCount: groups.length,
+    versionCount: versions.length,
+    keepCount: versions.filter((version: any) => version.decision === "KEEP").length,
+    deleteCandidateCount: versions.filter((version: any) => version.decision === "DELETE_CANDIDATE").length,
+    reviewCount: versions.filter((version: any) => version.decision === "REVIEW").length,
+    primaryMissing,
+    remoteMissing,
+  };
+}
+
 /**
  * Initialises and starts the Express HTTP server with all API routes,
  * SSE streaming endpoints, and optional background services (Overseerr poller,
@@ -212,6 +229,8 @@ export function startServer() {
   app.get("/api/version-manager/status", (_req, res) => {
     const profiles = getVersionProfiles();
     const policy = getVersionManagerPolicy();
+    const currentPolicyHash = versionManagerPolicyHash(policy, profiles);
+    const evaluated = readVersionManagerGroups();
     res.json({
       ok: true,
       enabled: false,
@@ -221,6 +240,14 @@ export function startServer() {
       policyHash: versionManagerPolicyHash(policy, profiles),
       profiles,
       latestScan: getLatestVersionManagerScan() || null,
+      policyEvaluation: evaluated ? {
+        status: evaluated.snapshotPolicyHash === currentPolicyHash ? "CURRENT" : "STALE",
+        snapshotPolicyHash: evaluated.snapshotPolicyHash || null,
+        currentPolicyHash,
+        snapshotId: evaluated.snapshotId,
+        evaluatedAt: evaluated.snapshotCreatedAt,
+        counts: summarizeVersionManagerGroups(evaluated.groups, policy, profiles),
+      } : { status: "NOT_EVALUATED", snapshotPolicyHash: null, currentPolicyHash },
       scanJob: getVersionManagerScanRuntimeStatus(),
     });
   });
@@ -348,7 +375,10 @@ export function startServer() {
       const probe = { source: "persisted-snapshot" };
       const profiles = getVersionProfiles();
       const policy = getVersionManagerPolicy();
-      const needs = policy.enableRemote ? deriveAcquisitionNeeds(groups, profiles, { adapterId: "seerr", acquisitionEnabled: policy.acquireMissingRemote }) : [];
+      const needs = profiles.flatMap((profile) => deriveAcquisitionNeeds(groups, [profile], {
+        adapterId: "seerr",
+        acquisitionEnabled: profile.target === "DIRECT_PLAY" ? policy.acquireMissingRemote : false,
+      }));
       const adapter = new SeerrAcquisitionAdapter();
       const previews = await Promise.all(needs.map(async (need) => {
         const preview = await adapter.preview(need);

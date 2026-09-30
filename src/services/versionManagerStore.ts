@@ -5,6 +5,7 @@ function normalizePolicy(policy: Partial<VersionManagerPolicy>): VersionManagerP
   return {
     enableRemote: policy.enableRemote === true,
     acquireMissingRemote: policy.acquireMissingRemote === true,
+    preferCompletePack: policy.preferCompletePack === true,
     safety: {
       requireRecoverableBeforeDelete: policy.safety?.requireRecoverableBeforeDelete ?? defaultVersionManagerPolicy.safety!.requireRecoverableBeforeDelete,
       allowDeleteWhenIdentityUncertain: policy.safety?.allowDeleteWhenIdentityUncertain ?? defaultVersionManagerPolicy.safety!.allowDeleteWhenIdentityUncertain,

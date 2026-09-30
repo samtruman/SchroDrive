@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createVersionManagerScanJob, getLatestVersionManagerSnapshot, getVersionProfiles, getVersionManagerScanJob, recoverInterruptedVersionManagerScanJobs, saveVersionManagerSnapshot, saveVersionProfiles } from "../../../src/services/versionManagerStore";
+import { createVersionManagerScanJob, getLatestVersionManagerSnapshot, getVersionProfiles, getVersionManagerPolicy, getVersionManagerScanJob, recoverInterruptedVersionManagerScanJobs, saveVersionManagerPolicy, saveVersionManagerSnapshot, saveVersionProfiles } from "../../../src/services/versionManagerStore";
 import { defaultVersionManagerPolicy, versionManagerPolicyHash, type VersionProfile } from "../../../src/services/versionManager";
 
 describe("version manager policy persistence", () => {
@@ -32,5 +32,15 @@ describe("version manager policy persistence", () => {
     const job = createVersionManagerScanJob();
     recoverInterruptedVersionManagerScanJobs();
     expect(getVersionManagerScanJob(job.id)?.status).toBe("FAILED");
+  });
+
+  test("persists retention preferences used by delete impact evaluation", () => {
+    const original = getVersionManagerPolicy();
+    try {
+      saveVersionManagerPolicy({ ...original, preferCompletePack: true });
+      expect(getVersionManagerPolicy().preferCompletePack).toBe(true);
+    } finally {
+      saveVersionManagerPolicy(original);
+    }
   });
 });

@@ -21,6 +21,13 @@ operation (`POST /api/version-manager/profiles/preview`) that evaluates
 unsaved configuration against the latest valid snapshot without persisting it
 or rescanning providers.
 
+Policy changes are evaluated against the latest valid snapshot immediately;
+they do not require another provider inventory scan. The status projection
+exposes whether that snapshot was evaluated with the current decision-config
+hash or is stale. Missing requirements are derived for every enabled retention
+profile; Seerr previews are separately marked unavailable when acquisition is
+disabled or the gateway is not configured.
+
 ## Library
 
 Library supports movie and TV scopes, search, decision/profile filters,
@@ -41,8 +48,11 @@ projection. It groups versions by the provider item that an adapter can
 actually delete, reports affected content, only-copy status, recoverability
 blockers, and whether the item is partially redundant. The executor is
 explicitly disabled in this milestone; no provider delete is exposed by the
-UI. `/api/version-manager/delete-preview` remains a compatibility read-only
-policy projection.
+UI. The impact response also identifies physical size, alternative KEEP
+versions, profile ownership, and ProviderItems protected by a KEEP version;
+logical DELETE_CANDIDATE counts must never be interpreted as physical delete
+operations. `/api/version-manager/delete-preview` remains a compatibility
+read-only policy projection.
 
 `preferCompletePack` is persisted as a policy preference for future pack-aware
 impact evaluation. Pack completeness must be checked per episode before it
@@ -96,10 +106,10 @@ because it reconciles against target inventory.
 - Automatic backup scheduling is disabled by default. When enabled it uses the
   existing process scheduler, the configured Europe/Rome timezone by default,
   and configurable retention values; it never adds a cron container.
-- Pack preference is persisted and surfaced. The current physical impact
-  projection still blocks uncertain or incomplete pack coverage; complete
-  multi-season pack preference evaluation remains a follow-up before delete
-  execution can be enabled.
+- Pack preference is persisted and surfaced in Retention settings. The current
+  physical impact projection still blocks uncertain or incomplete pack
+  coverage; complete multi-season pack preference evaluation remains a
+  follow-up before delete execution can be enabled.
 - ARR quality profiles are presented as an integration concern when the
   corresponding ARR capability is configured; SchröDrive does not recreate
   ARR custom formats or direct-mode indexer search.
