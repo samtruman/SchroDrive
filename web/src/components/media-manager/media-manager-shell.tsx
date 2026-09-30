@@ -965,10 +965,10 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2 text-sm">
-                <span>All <Badge variant="outline">{review.summary?.total ?? "—"}</Badge></span>
-                <span>Identity <Badge variant={review.summary?.identityIssues > 0 ? "destructive" : "outline"}>{review.summary?.identityIssues ?? "—"}</Badge></span>
-                <span>Policy <Badge variant="outline">{review.summary?.policyReviews ?? "—"}</Badge></span>
-                <span>Recoverability <Badge variant="outline">{review.summary?.recoverabilityIssues ?? "—"}</Badge></span>
+                <span>All <Badge variant="outline">{review?.summary?.total ?? "—"}</Badge></span>
+                <span>Identity <Badge variant={review?.summary?.identityIssues > 0 ? "destructive" : "outline"}>{review?.summary?.identityIssues ?? "—"}</Badge></span>
+                <span>Policy <Badge variant="outline">{review?.summary?.policyReviews ?? "—"}</Badge></span>
+                <span>Recoverability <Badge variant="outline">{review?.summary?.recoverabilityIssues ?? "—"}</Badge></span>
               </div>
             </CardContent>
           </Card>
