@@ -262,7 +262,10 @@ function startServer() {
             const snapshot = (0, versionManagerStore_1.getLatestVersionManagerSnapshot)();
             if (!snapshot || snapshot.status !== "VALID")
                 return res.status(409).json({ ok: false, error: "No valid inventory snapshot is available" });
-            const profiles = req.body.profiles.map((profile) => ({ ...profile, hardRequirements: profile.hardRequirements ? (0, versionManager_1.validateRule)(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? (0, versionManager_1.validateScoringRules)(profile.scoringRules) : undefined }));
+            const profiles = req.body.profiles.map((profile) => ({ ...profile, arrProfiles: profile.arrProfiles ? {
+                    movie: profile.arrProfiles.movie ? { ...profile.arrProfiles.movie, provider: "radarr" } : undefined,
+                    tv: profile.arrProfiles.tv ? { ...profile.arrProfiles.tv, provider: "sonarr" } : undefined,
+                } : undefined, hardRequirements: profile.hardRequirements ? (0, versionManager_1.validateRule)(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? (0, versionManager_1.validateScoringRules)(profile.scoringRules) : undefined }));
             const policy = { ...(0, versionManagerStore_1.getVersionManagerPolicy)(), ...(req.body.policy || {}), safety: { ...(0, versionManagerStore_1.getVersionManagerPolicy)().safety, ...(req.body.policy?.safety || {}) } };
             const records = (0, manualIdentity_1.applyManualIdentityOverrides)((0, versionManagerStore_1.getLatestVersionManagerRecords)());
             const current = (0, versionManager_1.evaluateVersionGroups)(records, (0, versionManagerStore_1.getVersionProfiles)(), (0, versionManagerStore_1.getVersionManagerPolicy)());

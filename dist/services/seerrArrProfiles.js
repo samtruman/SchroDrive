@@ -42,6 +42,7 @@ function serverUrl(server) {
 function profileRecords(kind, server, profiles, source) {
     return profiles.map((profile) => ({
         kind,
+        provider: kind,
         serverId: String(server.id ?? server.serverId ?? ""),
         serverName: String(server.name ?? server.hostname ?? `${kind} server`),
         qualityProfileId: String(profile.id ?? profile.qualityProfileId ?? ""),
