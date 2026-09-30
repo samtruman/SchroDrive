@@ -84,6 +84,10 @@ tool was not added solely for this audit.
   by this audit.
 - No representative real-provider latency benchmark was run; doing so would
   add noise and is unnecessary for this read-only alignment audit.
+- Browser smoke was executed with Playwright/Chromium against the active
+  runtime: all 12 requested pages returned successful HTML, while the active
+  image still returned 404 for the not-yet-deployed Review proxy and 503 for
+  provider-backed Migration State.
 
 ## Recommended Cleanup
 
