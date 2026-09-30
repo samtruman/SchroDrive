@@ -1601,10 +1601,18 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
   const [policy, setPolicy] = useState<any>({ acquisitionMode: "ARR", enableRemote: false, acquireMissingRemote: false, preferCompletePack: false, safety: { requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false } });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [persistedSettings, setPersistedSettings] = useState("");
   const [impact, setImpact] = useState<any>(null);
   useEffect(() => {
-    if (status.data?.profiles) setProfiles(status.data.profiles);
-    if (status.data?.policy) { setPolicy(status.data.policy); setAcquisitionMode(status.data.policy.acquisitionMode === "NATIVE" ? "NATIVE" : "ARR"); }
+    if (status.data?.profiles) {
+      const nextProfiles = status.data.profiles as Profile[];
+      const nextPolicy = status.data.policy || policy;
+      setProfiles(nextProfiles);
+      setPolicy(nextPolicy);
+      setAcquisitionMode(nextPolicy.acquisitionMode === "NATIVE" ? "NATIVE" : "ARR");
+      setPersistedSettings(JSON.stringify({ profiles: nextProfiles, policy: nextPolicy }));
+    }
   }, [status.data]);
   useEffect(() => {
     const applyHash = () => {
@@ -1616,9 +1624,12 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
     window.addEventListener("hashchange", applyHash);
     return () => window.removeEventListener("hashchange", applyHash);
   }, [section]);
+  const settingsSnapshot = JSON.stringify({ profiles, policy });
+  const hasUnsavedChanges = persistedSettings !== "" && settingsSnapshot !== persistedSettings;
   async function save() {
     setSaving(true);
     setSaved("");
+    setSaveError("");
     try {
       for (const profile of profiles) {
         const ruleError = validateUiRule(profile.hardRequirements || { op: "AND", children: [] });
@@ -1634,16 +1645,19 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ profiles, policy }),
       });
-      if (!response.ok) throw new Error("Unable to save profiles");
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || "Unable to save configuration");
       setSaved("Saved");
+      setPersistedSettings(settingsSnapshot);
     } catch (value: any) {
-      setSaved(value.message || "Save failed");
+      setSaveError(value.message || "Save failed");
     } finally {
       setSaving(false);
     }
   }
   async function previewImpact() {
     setSaved("");
+    setSaveError("");
     try {
       const response = await fetch("/api/version-manager/profiles/preview", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ profiles, policy }) });
       const payload = await response.json();
@@ -1664,7 +1678,7 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
         <CardHeader><CardTitle className="text-base">Acquisition Mode</CardTitle></CardHeader>
         <CardContent className="space-y-3 text-sm">
           <label className="grid max-w-md gap-1 font-medium">Mode
-            <select className="rounded border bg-background p-2" value={acquisitionMode} onChange={(event) => { const next = event.target.value === "NATIVE" ? "NATIVE" : "ARR"; setAcquisitionMode(next); setPolicy((current: any) => ({ ...current, acquisitionMode: next })); }}>
+            <select className="rounded border bg-background p-2" value={acquisitionMode} onChange={(event) => { const next = event.target.value === "NATIVE" ? "NATIVE" : "ARR"; setSaved(""); setSaveError(""); setAcquisitionMode(next); setPolicy((current: any) => ({ ...current, acquisitionMode: next })); }}>
               <option value="ARR">ARR Mode</option><option value="NATIVE">Native Mode</option>
             </select>
           </label>
@@ -1691,6 +1705,8 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
                 const selectedAvailable = !selected || candidates.some((candidate: any) => `${candidate.serverId}:${candidate.qualityProfileId}` === selectedKey);
                 return <label key={mediaType} className="grid gap-1 text-xs"><span>{mediaType === "movie" ? "Movies / Radarr" : "TV / Sonarr"}</span>{!selectedAvailable && <span className="text-amber-700">Previous mapping unavailable</span>}<select className="rounded border bg-background p-2 text-sm" value={selectedAvailable ? selectedKey : ""} onChange={(event) => {
                   const candidate = candidates.find((item: any) => `${item.serverId}:${item.qualityProfileId}` === event.target.value);
+                  setSaved("");
+                  setSaveError("");
                   updateProfile(index, { arrProfiles: { ...(profile.arrProfiles || {}), [mediaType]: candidate ? { provider: kind, serverId: candidate.serverId, qualityProfileId: candidate.qualityProfileId, qualityProfileName: candidate.qualityProfileName } : undefined } });
                 }} aria-label={`${profile.name || profile.id} ${mediaType} ARR profile`}>
                   <option value="">No ARR profile mapped</option>
@@ -1699,9 +1715,24 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
               })}
             </div>
           </div>)}
+          {hasUnsavedChanges && <p className="text-amber-700">Unsaved changes</p>}
+          <div className="flex items-center gap-3">
+            <Button onClick={() => void save()} disabled={saving}>{saving ? "Saving…" : "Save ARR Configuration"}</Button>
+            {saved && <span className="text-sm text-emerald-700">{saved}</span>}
+            {saveError && <span className="text-sm text-destructive">{saveError}</span>}
+          </div>
           <Link className="text-primary" href="/settings">Open global provider settings <ChevronRight className="inline h-4 w-4" /></Link>
         </CardContent>
       </Card>}
+      {acquisitionMode === "ARR" && <Card id="media-manager-policy-preview" className="scroll-mt-20">
+        <CardHeader><CardTitle className="text-base">Policy Preview &amp; Safety</CardTitle></CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <p className="text-muted-foreground">Preview the retention impact without rescanning providers or enabling Delete.</p>
+          <Button variant="outline" onClick={() => void previewImpact()}>Preview impact</Button>
+          {impact && <div className="rounded border bg-muted/20 p-3"><p className="font-medium">Read-only impact preview</p><p>Changed decisions: {impact.changed?.length || 0}. Proposed policy hash: {impact.proposed?.policyHash || "—"}</p></div>}
+        </CardContent>
+      </Card>}
+      {acquisitionMode === "NATIVE" && <>
       <Card id="media-manager-profiles" className="scroll-mt-20">
         <CardHeader>
           <CardTitle className="text-base">Profiles</CardTitle>
@@ -1765,6 +1796,7 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
         <CardHeader><CardTitle className="text-base">Rules</CardTitle></CardHeader>
         <CardContent className="space-y-2 text-sm"><p className="text-muted-foreground">Hard requirements are evaluated before scoring. The builder keeps field/operator combinations within the supported rule model.</p>{profiles.map((profile, index) => <details key={profile.id} className="rounded border p-3"><summary className="cursor-pointer font-medium">{profile.name || profile.id} hard requirements</summary><div className="mt-2"><RuleBuilder node={profile.hardRequirements || { op: "AND", children: [] }} root onChange={(hardRequirements) => updateProfile(index, { hardRequirements } as any)} /></div></details>)}</CardContent>
       </Card>
+      </>}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card id="media-manager-safety" className="scroll-mt-20">
           <CardHeader>
