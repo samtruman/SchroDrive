@@ -88,6 +88,11 @@ tool was not added solely for this audit.
   runtime: all 12 requested pages returned successful HTML, while the active
   image still returned 404 for the not-yet-deployed Review proxy and 503 for
   provider-backed Migration State.
+- The integration image was then built and run in isolation with all
+  provider/mount/poller/mutation paths disabled. Review returned HTTP 200 with
+  the expected unified schema; browser navigation passed. Migration State
+  returned HTTP 503 with the explicit configuration error expected from an
+  unconfigured isolated provider set.
 
 ## Recommended Cleanup
 

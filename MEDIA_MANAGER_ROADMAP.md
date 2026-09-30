@@ -5,9 +5,10 @@
 - Develop alignment: `VALIDATED` against
   `f6f20d52cddca44529e225128095a13c97c0e428`.
 - Weight audit: `VALIDATED`; no SAFE_NOW code cleanup identified.
-- Full E2E acceptance: `PARTIAL`; browser smoke now runs, but the currently
-  active image predates the unified Review proxy fix and Migration State is
-  provider-dependent and returned 503.
+- Full E2E acceptance: `PARTIAL`; the isolated integration image passes the
+  Review API/browser path, while Migration State returns the expected
+  configuration 503 without a provider and the empty isolated DATA_DIR cannot
+  exercise populated Content Detail actions.
 - Media Manager upstream readiness: `NEEDS_FIXES` before PR splitting.
 
 The frozen Media Manager branch remains preserved separately. The integration
@@ -16,9 +17,9 @@ upstream PR #106 remains OPEN and is not assumed merged.
 
 ## OPEN ITEMS
 
-- Rebuild/redeploy the integration image before repeating the browser smoke so
-  `/api/version-manager/review` is available in the active Web runtime.
-- Repeat Migration State smoke when the provider is stable.
+- If required for release acceptance, run the isolated image with a sanitized
+  provider-backed fixture/configuration to cover populated Content Detail and
+  migration state; do not change the active production container.
 - Reassess extraction boundaries for generated `dist` and local assessment
   documents.
 - Do not begin Media Manager PR splitting in this milestone.
@@ -36,6 +37,9 @@ upstream PR #106 remains OPEN and is not assumed merged.
 - 2026-09-30 — Chromium browser smoke visited all Media Manager and Migration
   pages; the active image exposed the pre-fix Review 404 and provider-backed
   Migration State 503, without any mutation.
+- 2026-09-30 — Built and ran the integration image in an isolated container;
+  Review API/schema and browser routes passed, while Migration State correctly
+  reported `Source provider is not configured`.
 
 ## POST_MVP_UPGRADE — MEDIA_MANAGER_SIMPLE_POLICY_PRESETS
 
