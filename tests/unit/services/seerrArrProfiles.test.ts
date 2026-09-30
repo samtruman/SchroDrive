@@ -58,4 +58,24 @@ describe("Seerr ARR quality-profile discovery", () => {
     expect(result.profiles).toHaveLength(1);
     expect(result.errors).toEqual([{ kind: "sonarr", code: "INVALID_RESPONSE", message: "Seerr sonarr discovery failed with HTTP 503" }]);
   });
+
+  test("reads profiles through Seerr first and uses its declared ARR connection when a proxy route is absent", async () => {
+    config.overseerrUrl = "http://seerr.fixture";
+    config.overseerrApiKey = "fixture-key";
+    config.overseerrAuth = "";
+    axios.get = (async (url: string) => {
+      if (url.endsWith("/settings/radarr")) return { data: [{ id: 0, name: "Radarr fixture", externalUrl: "http://radarr.fixture", apiKey: "arr-secret", profiles: [] }] };
+      if (url.endsWith("/settings/sonarr")) return { data: [{ id: 0, name: "Sonarr fixture", externalUrl: "http://sonarr.fixture", apiKey: "arr-secret", profiles: [] }] };
+      if (url.includes("/settings/radarr/0/profiles") || url.includes("/settings/sonarr/0/profiles")) { const error: any = new Error("not proxied"); error.response = { status: 404 }; throw error; }
+      if (url === "http://radarr.fixture/api/v3/qualityprofile") return { data: [{ id: 5, name: "Movie 2160p" }] };
+      if (url === "http://sonarr.fixture/api/v3/qualityprofile") return { data: [{ id: 6, name: "TV 1080p" }] };
+      throw new Error(`Unexpected fixture URL: ${url}`);
+    }) as typeof axios.get;
+    const result = await discoverSeerrArrProfiles();
+    expect(result.errors).toEqual([]);
+    expect(result.profiles).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "radarr", qualityProfileId: "5", source: "arr-fallback" }),
+      expect.objectContaining({ kind: "sonarr", qualityProfileId: "6", source: "arr-fallback" }),
+    ]));
+  });
 });

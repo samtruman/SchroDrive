@@ -265,7 +265,10 @@ export function startServer() {
       if (!Array.isArray(req.body?.profiles) || req.body.profiles.length === 0) return res.status(400).json({ ok: false, error: "profiles must be a non-empty array" });
       const snapshot = getLatestVersionManagerSnapshot();
       if (!snapshot || snapshot.status !== "VALID") return res.status(409).json({ ok: false, error: "No valid inventory snapshot is available" });
-      const profiles = req.body.profiles.map((profile: any) => ({ ...profile, hardRequirements: profile.hardRequirements ? validateRule(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? validateScoringRules(profile.scoringRules) : undefined }));
+      const profiles = req.body.profiles.map((profile: any) => ({ ...profile, arrProfiles: profile.arrProfiles ? {
+        movie: profile.arrProfiles.movie ? { ...profile.arrProfiles.movie, provider: "radarr" } : undefined,
+        tv: profile.arrProfiles.tv ? { ...profile.arrProfiles.tv, provider: "sonarr" } : undefined,
+      } : undefined, hardRequirements: profile.hardRequirements ? validateRule(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? validateScoringRules(profile.scoringRules) : undefined }));
       const policy = { ...getVersionManagerPolicy(), ...(req.body.policy || {}), safety: { ...getVersionManagerPolicy().safety, ...(req.body.policy?.safety || {}) } };
       const records = applyManualIdentityOverrides(getLatestVersionManagerRecords());
       const current = evaluateVersionGroups(records, getVersionProfiles(), getVersionManagerPolicy());
@@ -638,7 +641,8 @@ export function startServer() {
     try {
       if (!Array.isArray(req.body?.profiles) || req.body.profiles.length === 0) return res.status(400).json({ ok: false, error: "profiles must be a non-empty array" });
       const profiles = req.body.profiles.map((profile: any) => ({ ...profile, hardRequirements: profile.hardRequirements ? validateRule(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? validateScoringRules(profile.scoringRules) : undefined }));
-      const policy = {
+      const policy: ReturnType<typeof getVersionManagerPolicy> = {
+        acquisitionMode: req.body.policy?.acquisitionMode === "NATIVE" ? "NATIVE" : "ARR",
         enableRemote: req.body.policy?.enableRemote === true,
         acquireMissingRemote: req.body.policy?.acquireMissingRemote === true,
         preferCompletePack: req.body.policy?.preferCompletePack === true,

@@ -30,17 +30,50 @@ function listPayload(body) {
 function profilePayload(server) {
     return Array.isArray(server?.profiles) ? server.profiles : Array.isArray(server?.qualityProfiles) ? server.qualityProfiles : [];
 }
-async function discoverKind(kind) {
-    const response = await axios_1.default.get(`${(0, seerrUrl_1.seerrApiBaseUrl)(config_1.config.overseerrUrl)}/settings/${kind}`, { headers: headers(), timeout: 15000 });
-    const servers = listPayload(response.data);
-    return servers.flatMap((server) => profilePayload(server).map((profile) => ({
+function serverUrl(server) {
+    if (typeof server?.externalUrl === "string" && server.externalUrl)
+        return server.externalUrl.replace(/\/$/, "");
+    if (typeof server?.url === "string" && server.url)
+        return server.url.replace(/\/$/, "");
+    if (!server?.hostname || !server?.port)
+        return undefined;
+    return `${server.useSsl ? "https" : "http"}://${server.hostname}:${server.port}${server.baseUrl || ""}`.replace(/\/$/, "");
+}
+function profileRecords(kind, server, profiles, source) {
+    return profiles.map((profile) => ({
         kind,
         serverId: String(server.id ?? server.serverId ?? ""),
         serverName: String(server.name ?? server.hostname ?? `${kind} server`),
         qualityProfileId: String(profile.id ?? profile.qualityProfileId ?? ""),
         qualityProfileName: String(profile.name ?? profile.label ?? `Profile ${profile.id ?? "unknown"}`),
-        serverUrl: typeof server.url === "string" ? server.url : undefined,
-    })).filter((profile) => profile.serverId && profile.qualityProfileId));
+        serverUrl: serverUrl(server),
+        source,
+    })).filter((profile) => profile.serverId && profile.qualityProfileId);
+}
+async function discoverKind(kind) {
+    const response = await axios_1.default.get(`${(0, seerrUrl_1.seerrApiBaseUrl)(config_1.config.overseerrUrl)}/settings/${kind}`, { headers: headers(), timeout: 15000 });
+    const servers = listPayload(response.data);
+    return (await Promise.all(servers.map(async (server) => {
+        const nested = profilePayload(server);
+        if (nested.length > 0)
+            return profileRecords(kind, server, nested, "seerr");
+        const serverId = String(server.id ?? server.serverId ?? "");
+        try {
+            const viaSeerr = await axios_1.default.get(`${(0, seerrUrl_1.seerrApiBaseUrl)(config_1.config.overseerrUrl)}/settings/${kind}/${encodeURIComponent(serverId)}/profiles`, { headers: headers(), timeout: 15000 });
+            const profiles = listPayload(viaSeerr.data);
+            if (profiles.length > 0)
+                return profileRecords(kind, server, profiles, "seerr");
+        }
+        catch {
+            // Some Seerr versions do not proxy Sonarr profiles. Use its declared
+            // ARR connection read-only below, without inventing a local profile.
+        }
+        const base = serverUrl(server);
+        if (!base || !server.apiKey)
+            return [];
+        const direct = await axios_1.default.get(`${base}/api/v3/qualityprofile`, { headers: { "X-Api-Key": String(server.apiKey) }, timeout: 15000 });
+        return profileRecords(kind, server, listPayload(direct.data), "arr-fallback");
+    }))).flat();
 }
 async function discoverSeerrArrProfiles() {
     if (!configured())

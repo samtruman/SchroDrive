@@ -22,11 +22,17 @@ unsaved configuration against the latest valid snapshot without persisting it
 or rescanning providers.
 
 When Seerr is configured, `GET /api/version-manager/acquisition/arr-profiles`
-discovers Radarr and Sonarr quality profiles through Seerr's read-only settings
-gateway. The response preserves the ARR kind, server identity and quality
-profile identity; the Media Manager stores only an explicit association on a
-retention profile. ARR profiles are never recreated locally. A missing or
-unavailable ARR profile is shown as unmapped and does not trigger acquisition.
+discovers Radarr and Sonarr instances through Seerr's read-only settings
+gateway. It first consumes profiles returned by Seerr itself. If the installed
+Seerr version exposes an ARR instance but does not proxy that instance's
+profiles, the server-side adapter may perform a read-only fallback against the
+declared ARR connection and credentials returned by Seerr; no ARR address,
+port, credential, or container name is hardcoded. ARR credentials are never
+returned to the Web UI. The response preserves the ARR kind, provider/server
+identity, profile identity, and discovery source; the Media Manager stores only
+an explicit association on a retention profile. ARR profiles are never
+recreated locally. A missing, unavailable, or stale ARR profile is shown with
+its actual discovery/mapping state and does not trigger acquisition.
 The current acquisition adapter supports Seerr request/status flows, but does
 not claim a second physical version for a title when the gateway only exposes
 one movie or season request scope; such cases remain explicitly unsupported.
@@ -122,7 +128,9 @@ because it reconciles against target inventory.
   follow-up before delete execution can be enabled.
 - ARR quality profiles are presented as an integration concern when the
   corresponding ARR capability is configured; SchröDrive does not recreate
-  ARR custom formats or direct-mode indexer search.
+  ARR custom formats or direct-mode indexer search. Seerr remains the required
+  entry point in ARR mode; direct ARR access is only a server-side, read-only
+  compatibility fallback using an instance dynamically declared by Seerr.
 - Missing selection and exclusion are read-model operations. Real acquisition
   remains explicitly guarded by the existing Seerr/ARR configuration and is
   not enabled by this read-only milestone.

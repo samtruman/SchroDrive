@@ -10,6 +10,7 @@ export type LanguageMode = "ANY" | "ALL";
 export interface VersionManagerPolicy {
   enableRemote: boolean;
   acquireMissingRemote: boolean;
+  acquisitionMode?: "ARR" | "NATIVE";
   /** Prefer complete season packs when physical delete impact is evaluated. */
   preferCompletePack?: boolean;
   safety?: SafetyPolicy;
@@ -65,8 +66,8 @@ export interface VersionProfile {
   acquisitionBehavior?: "AUTOMATIC" | "APPROVAL_REQUIRED" | "DISABLED";
   /** Read-only acquisition mapping discovered from Seerr's ARR settings. */
   arrProfiles?: {
-    movie?: { serverId: string; qualityProfileId: string; qualityProfileName?: string };
-    tv?: { serverId: string; qualityProfileId: string; qualityProfileName?: string };
+    movie?: { provider?: "radarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string };
+    tv?: { provider?: "sonarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string };
   };
 }
 
@@ -416,6 +417,7 @@ export const defaultVersionProfiles: VersionProfile[] = [
 export const defaultVersionManagerPolicy: VersionManagerPolicy = {
   enableRemote: false,
   acquireMissingRemote: false,
+  acquisitionMode: "ARR",
   preferCompletePack: false,
   safety: { requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false },
   policyVersion: "1",
@@ -618,8 +620,8 @@ function canonicalProfile(profile: VersionProfile): unknown {
     scoring: Object.fromEntries(Object.entries(profile.scoring || {}).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)),
     scoringRules: (profile.scoringRules || []).map(canonicalScoringRule).sort(canonicalCompare),
     arrProfiles: profile.arrProfiles ? {
-      movie: profile.arrProfiles.movie ? { serverId: profile.arrProfiles.movie.serverId, qualityProfileId: profile.arrProfiles.movie.qualityProfileId } : null,
-      tv: profile.arrProfiles.tv ? { serverId: profile.arrProfiles.tv.serverId, qualityProfileId: profile.arrProfiles.tv.qualityProfileId } : null,
+      movie: profile.arrProfiles.movie ? { provider: "radarr", serverId: profile.arrProfiles.movie.serverId, qualityProfileId: profile.arrProfiles.movie.qualityProfileId } : null,
+      tv: profile.arrProfiles.tv ? { provider: "sonarr", serverId: profile.arrProfiles.tv.serverId, qualityProfileId: profile.arrProfiles.tv.qualityProfileId } : null,
     } : null,
   };
 }
@@ -628,6 +630,7 @@ function canonicalProfile(profile: VersionProfile): unknown {
 export function versionManagerPolicyHash(policy: VersionManagerPolicy, profiles: VersionProfile[] = defaultVersionProfiles): string {
   const normalized = {
     policy: {
+      acquisitionMode: policy.acquisitionMode === "NATIVE" ? "NATIVE" : "ARR",
       enableRemote: policy.enableRemote === true,
       acquireMissingRemote: policy.acquireMissingRemote === true,
       preferCompletePack: policy.preferCompletePack === true,

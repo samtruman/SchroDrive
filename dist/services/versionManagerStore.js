@@ -22,6 +22,7 @@ function normalizePolicy(policy) {
     return {
         enableRemote: policy.enableRemote === true,
         acquireMissingRemote: policy.acquireMissingRemote === true,
+        acquisitionMode: policy.acquisitionMode === "NATIVE" ? "NATIVE" : "ARR",
         preferCompletePack: policy.preferCompletePack === true,
         safety: {
             requireRecoverableBeforeDelete: policy.safety?.requireRecoverableBeforeDelete ?? versionManager_1.defaultVersionManagerPolicy.safety.requireRecoverableBeforeDelete,

@@ -675,6 +675,7 @@ function startServer() {
                 return res.status(400).json({ ok: false, error: "profiles must be a non-empty array" });
             const profiles = req.body.profiles.map((profile) => ({ ...profile, hardRequirements: profile.hardRequirements ? (0, versionManager_1.validateRule)(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? (0, versionManager_1.validateScoringRules)(profile.scoringRules) : undefined }));
             const policy = {
+                acquisitionMode: req.body.policy?.acquisitionMode === "NATIVE" ? "NATIVE" : "ARR",
                 enableRemote: req.body.policy?.enableRemote === true,
                 acquireMissingRemote: req.body.policy?.acquireMissingRemote === true,
                 preferCompletePack: req.body.policy?.preferCompletePack === true,

@@ -255,6 +255,7 @@ exports.defaultVersionProfiles = [
 exports.defaultVersionManagerPolicy = {
     enableRemote: false,
     acquireMissingRemote: false,
+    acquisitionMode: "ARR",
     preferCompletePack: false,
     safety: { requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false },
     policyVersion: "1",
@@ -464,6 +465,7 @@ function canonicalProfile(profile) {
 function versionManagerPolicyHash(policy, profiles = exports.defaultVersionProfiles) {
     const normalized = {
         policy: {
+            acquisitionMode: policy.acquisitionMode === "NATIVE" ? "NATIVE" : "ARR",
             enableRemote: policy.enableRemote === true,
             acquireMissingRemote: policy.acquireMissingRemote === true,
             preferCompletePack: policy.preferCompletePack === true,
