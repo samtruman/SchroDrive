@@ -55,6 +55,7 @@ const versionManagerScanJob_1 = require("./services/versionManagerScanJob");
 const magnetBackup_1 = require("./services/magnetBackup");
 const deleteImpact_1 = require("./services/deleteImpact");
 const migrationJob_1 = require("./services/migrationJob");
+const seerrArrProfiles_1 = require("./services/seerrArrProfiles");
 // ===========================================================================
 // Server Initialisation
 // ===========================================================================
@@ -243,6 +244,15 @@ function startServer() {
             } : { status: "NOT_EVALUATED", snapshotPolicyHash: null, currentPolicyHash },
             scanJob: (0, versionManagerScanJob_1.getVersionManagerScanRuntimeStatus)(),
         });
+    });
+    /** Read-only Seerr gateway discovery. ARR profiles remain owned by ARR. */
+    app.get("/api/version-manager/acquisition/arr-profiles", async (_req, res) => {
+        try {
+            return res.json({ ok: true, readOnly: true, discovery: await (0, seerrArrProfiles_1.discoverSeerrArrProfiles)() });
+        }
+        catch (error) {
+            return res.status(503).json({ ok: false, error: error?.message || "Seerr ARR discovery unavailable" });
+        }
     });
     /** Evaluates unsaved profile changes against the latest valid snapshot only. */
     app.post("/api/version-manager/profiles/preview", (req, res) => {

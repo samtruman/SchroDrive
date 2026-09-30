@@ -53,6 +53,7 @@ import { getVersionManagerScanRuntimeStatus, getVersionManagerScanStatus, startV
 import { createMagnetBackup, listMagnetBackups, readMagnetBackup, startMagnetBackupScheduler, verifyMagnetBackup } from "./services/magnetBackup";
 import { buildDeleteImpact } from "./services/deleteImpact";
 import { getMigrationJob, listMigrationJobs, startMigrationJob } from "./services/migrationJob";
+import { discoverSeerrArrProfiles } from "./services/seerrArrProfiles";
 
 // ===========================================================================
 // Server Initialisation
@@ -250,6 +251,12 @@ export function startServer() {
       } : { status: "NOT_EVALUATED", snapshotPolicyHash: null, currentPolicyHash },
       scanJob: getVersionManagerScanRuntimeStatus(),
     });
+  });
+
+  /** Read-only Seerr gateway discovery. ARR profiles remain owned by ARR. */
+  app.get("/api/version-manager/acquisition/arr-profiles", async (_req, res) => {
+    try { return res.json({ ok: true, readOnly: true, discovery: await discoverSeerrArrProfiles() }); }
+    catch (error: any) { return res.status(503).json({ ok: false, error: error?.message || "Seerr ARR discovery unavailable" }); }
   });
 
   /** Evaluates unsaved profile changes against the latest valid snapshot only. */

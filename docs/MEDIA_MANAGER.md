@@ -21,6 +21,16 @@ operation (`POST /api/version-manager/profiles/preview`) that evaluates
 unsaved configuration against the latest valid snapshot without persisting it
 or rescanning providers.
 
+When Seerr is configured, `GET /api/version-manager/acquisition/arr-profiles`
+discovers Radarr and Sonarr quality profiles through Seerr's read-only settings
+gateway. The response preserves the ARR kind, server identity and quality
+profile identity; the Media Manager stores only an explicit association on a
+retention profile. ARR profiles are never recreated locally. A missing or
+unavailable ARR profile is shown as unmapped and does not trigger acquisition.
+The current acquisition adapter supports Seerr request/status flows, but does
+not claim a second physical version for a title when the gateway only exposes
+one movie or season request scope; such cases remain explicitly unsupported.
+
 Policy changes are evaluated against the latest valid snapshot immediately;
 they do not require another provider inventory scan. The status projection
 exposes whether that snapshot was evaluated with the current decision-config

@@ -454,6 +454,10 @@ function canonicalProfile(profile) {
         maxSizeBytes: profile.maxSizeBytes ?? null,
         scoring: Object.fromEntries(Object.entries(profile.scoring || {}).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)),
         scoringRules: (profile.scoringRules || []).map(canonicalScoringRule).sort(canonicalCompare),
+        arrProfiles: profile.arrProfiles ? {
+            movie: profile.arrProfiles.movie ? { serverId: profile.arrProfiles.movie.serverId, qualityProfileId: profile.arrProfiles.movie.qualityProfileId } : null,
+            tv: profile.arrProfiles.tv ? { serverId: profile.arrProfiles.tv.serverId, qualityProfileId: profile.arrProfiles.tv.qualityProfileId } : null,
+        } : null,
     };
 }
 /** Hashes the complete decision configuration; policyVersion is revision metadata, not content identity. */

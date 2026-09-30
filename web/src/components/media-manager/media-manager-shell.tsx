@@ -24,7 +24,7 @@ import { normalizeIdentitySearchPrefill } from "./identity-search-prefill";
 import { ConfirmationDialog } from "./confirmation-dialog";
 
 type View = "overview" | "library" | "migration" | "settings";
-type Profile = { id: string; name: string; enabled: boolean; priority?: number; description?: string; preferredResolution?: string; languagePolicy?: any; hardRequirements?: any; scoring?: Record<string, number>; scoringRules?: ScoringRule[]; acquisitionBehavior?: string };
+type Profile = { id: string; name: string; enabled: boolean; priority?: number; description?: string; preferredResolution?: string; languagePolicy?: any; hardRequirements?: any; scoring?: Record<string, number>; scoringRules?: ScoringRule[]; acquisitionBehavior?: string; target?: string; arrProfiles?: { movie?: { serverId: string; qualityProfileId: string; qualityProfileName?: string }; tv?: { serverId: string; qualityProfileId: string; qualityProfileName?: string } } };
 type ScoringRule = { op?: "COMPARE" | "IN" | "HAS"; field: string; operator?: string; value?: unknown; values?: unknown[]; weight: number };
 type PendingConfirmation = { title: string; description: string; context?: ReactNode; confirmLabel: string; variant?: "default" | "secondary" | "outline" | "destructive"; onConfirm: () => Promise<void> };
 
@@ -878,7 +878,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
           ) : (
             <div className="space-y-3">
               {libraryRows.slice(0, 200).map((row, index) => (
-                <Card key={`${row.kind}-${row.title}-${index}`}>
+                <Card key={`${row.kind}-${row.title}-${index}`} className="cursor-pointer transition-colors hover:border-primary/50" onClick={() => row.kind !== "show" && setSelected(row.groups[0])} onKeyDown={(event) => { if (row.kind !== "show" && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setSelected(row.groups[0]); } }} role={row.kind === "show" ? undefined : "button"} tabIndex={row.kind === "show" ? undefined : 0}>
                   <CardContent className="space-y-3 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div><p className="font-medium">{row.title}</p><p className="text-xs text-muted-foreground">{row.year || "—"} · {row.kind === "show" ? "TV show" : row.kind === "movie" ? "Movie" : "Unresolved"} · {row.groups.reduce((count, group) => count + group.versions.length, 0)} versions</p></div>
@@ -1594,6 +1594,7 @@ function validateUiRule(node: any): string | undefined {
 
 function SettingsView({ section = "profiles" }: { section?: string }) {
   const status = useJson<any>("/api/version-manager/status");
+  const arrProfiles = useJson<any>("/api/version-manager/acquisition/arr-profiles");
   const sectionIds = ["profiles", "acquisition", "safety"];
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [policy, setPolicy] = useState<any>({ enableRemote: false, acquireMissingRemote: false, preferCompletePack: false, safety: { requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false } });
@@ -1723,7 +1724,33 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
       </Card>
       <Card id="media-manager-acquisition" className="scroll-mt-20">
         <CardHeader><CardTitle className="text-base">Acquisition</CardTitle></CardHeader>
-        <CardContent className="space-y-2 text-sm"><p>Acquisition execution remains disabled for this policy milestone.</p><p className="text-muted-foreground">Seerr credentials stay in global Settings and are not duplicated here.</p><Link className="text-primary" href="/settings">Open global provider settings <ChevronRight className="inline h-4 w-4" /></Link></CardContent>
+        <CardContent className="space-y-3 text-sm">
+          <p>Acquisition execution remains disabled. Quality profiles remain owned by Radarr/Sonarr and are discovered read-only through Seerr.</p>
+          {arrProfiles.loading && <p className="text-muted-foreground">Checking Seerr ARR integrations…</p>}
+          {arrProfiles.error && <p className="text-amber-700">Seerr ARR discovery unavailable: {arrProfiles.error}</p>}
+          {arrProfiles.data?.discovery?.configured === false && <p className="text-muted-foreground">Seerr is not configured. Configure it in global Settings to associate ARR profiles.</p>}
+          {arrProfiles.data?.discovery?.configured === true && arrProfiles.data.discovery.errors?.map((error: any) => <p key={error.kind} className="text-amber-700">{error.kind} discovery: {error.message}</p>)}
+          {profiles.map((profile, index) => <div key={`arr-${profile.id}`} className="grid gap-3 rounded border p-3 md:grid-cols-[1fr_2fr]">
+            <div><p className="font-medium">{profile.name || profile.id}</p><p className="text-xs text-muted-foreground">ARR acquisition associations · read-only source</p></div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {(["movie", "tv"] as const).map((mediaType) => {
+                const kind = mediaType === "movie" ? "radarr" : "sonarr";
+                const candidates = (arrProfiles.data?.discovery?.profiles || []).filter((candidate: any) => candidate.kind === kind);
+                const selected = profile.arrProfiles?.[mediaType];
+                const selectedKey = selected ? `${selected.serverId}:${selected.qualityProfileId}` : "";
+                return <label key={mediaType} className="grid gap-1 text-xs"><span>{mediaType === "movie" ? "Movies / Radarr" : "TV / Sonarr"}</span><select className="rounded border bg-background p-2 text-sm" value={selectedKey} onChange={(event) => {
+                  const candidate = candidates.find((item: any) => `${item.serverId}:${item.qualityProfileId}` === event.target.value);
+                  updateProfile(index, { arrProfiles: { ...(profile.arrProfiles || {}), [mediaType]: candidate ? { serverId: candidate.serverId, qualityProfileId: candidate.qualityProfileId, qualityProfileName: candidate.qualityProfileName } : undefined } });
+                }} aria-label={`${profile.name || profile.id} ${mediaType} ARR profile`}>
+                  <option value="">No ARR profile mapped</option>
+                  {candidates.map((candidate: any) => <option key={`${candidate.serverId}:${candidate.qualityProfileId}`} value={`${candidate.serverId}:${candidate.qualityProfileId}`}>{candidate.serverName} · {candidate.qualityProfileName}</option>)}
+                </select></label>;
+              })}
+            </div>
+          </div>)}
+          <p className="text-xs text-muted-foreground">A missing selected profile is shown as unmapped after ARR configuration changes; it does not trigger acquisition automatically.</p>
+          <Link className="text-primary" href="/settings">Open global provider settings <ChevronRight className="inline h-4 w-4" /></Link>
+        </CardContent>
       </Card>
       <div className="grid gap-4 lg:grid-cols-2">
         <Card id="media-manager-safety" className="scroll-mt-20">
