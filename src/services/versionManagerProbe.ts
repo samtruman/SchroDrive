@@ -103,11 +103,11 @@ async function runProbe(filePath: string): Promise<{ payload?: Record<string, un
   } catch (error) { return { error: error instanceof Error ? error.message : "Invalid ffprobe JSON" }; }
 }
 
-let mountFileIndex: Promise<Map<string, string>> | undefined;
+const mountFileIndexes = new Map<string, Promise<Map<string, string>>>();
 
-async function buildMountFileIndex(): Promise<Map<string, string>> {
+async function buildMountFileIndex(providerRoot: string): Promise<Map<string, string>> {
   const index = new Map<string, string>();
-  const root = path.join(config.mountBase, "alldebrid", "__all__");
+  const root = path.join(providerRoot, "__all__");
   try {
     const glob = new Bun.Glob("**/*.{mkv,mp4,m4v,avi,ts}");
     for await (const relative of glob.scan({ cwd: root, onlyFiles: true })) {
@@ -118,14 +118,28 @@ async function buildMountFileIndex(): Promise<Map<string, string>> {
   return index;
 }
 
-async function resolvePath(version: VersionRecord): Promise<string | undefined> {
-  const raw = version.fingerprint.storage.path;
-  const mount = config.mountBase;
-  const candidates = [raw, path.join(mount, raw), path.join(mount, version.fingerprint.storage.provider, raw), path.join(mount, version.fingerprint.storage.provider, "__all__", raw)];
+function isWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+export async function resolveVersionProbePath(version: VersionRecord): Promise<string | undefined> {
+  const raw = String(version.fingerprint.storage.path || "");
+  const provider = String(version.fingerprint.storage.provider || "").trim().toLowerCase();
+  if (!raw || !provider) return undefined;
+  const providerRoot = path.resolve(config.mountBase, provider);
+  if (path.isAbsolute(raw) && !isWithin(providerRoot, path.resolve(raw))) return undefined;
+  const candidates = path.isAbsolute(raw)
+    ? [path.resolve(raw)]
+    : [path.resolve(providerRoot, raw), path.resolve(providerRoot, "__all__", raw)];
   for (const candidate of candidates) {
     try { if ((await stat(candidate)).isFile()) return candidate; } catch { /* try next candidate */ }
   }
-  mountFileIndex ||= buildMountFileIndex();
+  let mountFileIndex = mountFileIndexes.get(providerRoot);
+  if (!mountFileIndex) {
+    mountFileIndex = buildMountFileIndex(providerRoot);
+    mountFileIndexes.set(providerRoot, mountFileIndex);
+  }
   const indexed = (await mountFileIndex).get(path.basename(raw).toLowerCase());
   if (indexed) return indexed;
   return undefined;
@@ -163,9 +177,11 @@ export async function probeVersionRecords(versions: VersionRecord[], options: { 
   const database = getDb();
   const memo = new Map<string, Promise<{ status: "complete" | "error"; fingerprint?: VersionRecord["fingerprint"]; error?: string; cacheHit?: boolean }>>();
   const probeOne = async (version: VersionRecord): Promise<void> => {
-    const filePath = await resolvePath(version);
+    const filePath = await resolveVersionProbePath(version);
     if (!filePath) { version.fingerprint.probe = { status: "unavailable", tool: "filename", error: "media path not accessible from configured mount" }; stats.unavailable++; return; }
-    const fileStat = await stat(filePath);
+    let fileStat;
+    try { fileStat = await stat(filePath); }
+    catch { version.fingerprint.probe = { status: "unavailable", tool: "filename", error: "media path became unavailable during probe" }; stats.unavailable++; return; }
     // Remote/VFS mounts can report a fresh mtime on every metadata read even
     // when the provider object and byte size are unchanged. Size + canonical
     // path is therefore the stable identity for this read-only probe cache.

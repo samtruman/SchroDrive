@@ -1,5 +1,16 @@
-import { describe, expect, test } from "bun:test";
-import { mergeCachedProbeFingerprint } from "../../../src/services/versionManagerProbe";
+import { afterEach, describe, expect, test } from "bun:test";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { config } from "../../../src/core/config";
+import { mergeCachedProbeFingerprint, resolveVersionProbePath } from "../../../src/services/versionManagerProbe";
+
+const originalMountBase = config.mountBase;
+const temporaryRoots: string[] = [];
+afterEach(async () => {
+  config.mountBase = originalMountBase;
+  await Promise.all(temporaryRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
+});
 
 describe("version manager probe cache", () => {
   test("keeps current parsed identity and storage while reusing technical stream data", () => {
@@ -49,5 +60,24 @@ describe("version manager probe cache", () => {
     expect(merged.audio[0]).toMatchObject({ language: "ita", codec: "AC3", channels: 6 });
     expect(merged.subtitles[0]).toMatchObject({ language: "eng", codec: "ass" });
     expect(merged.probe).toEqual({ status: "complete", tool: "ffprobe" });
+  });
+
+  test("never resolves a provider file through another provider mount", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "schrodrive-provider-probe-"));
+    temporaryRoots.push(root);
+    config.mountBase = root;
+    const filename = "Ghosted.2023.2160p.mkv";
+    const allDebridFile = path.join(root, "alldebrid", "__all__", filename, filename);
+    await mkdir(path.dirname(allDebridFile), { recursive: true });
+    await writeFile(allDebridFile, "fixture");
+    const realDebridFile = path.join(root, "realdebrid", "__all__", filename, filename);
+    await mkdir(path.dirname(realDebridFile), { recursive: true });
+    await writeFile(realDebridFile, "fixture");
+
+    const foreignAbsolute = { fingerprint: { storage: { provider: "realdebrid", path: allDebridFile } } } as any;
+    expect(await resolveVersionProbePath(foreignAbsolute)).toBeUndefined();
+
+    const version = { fingerprint: { storage: { provider: "realdebrid", path: filename } } } as any;
+    expect(await resolveVersionProbePath(version)).toBe(realDebridFile);
   });
 });
