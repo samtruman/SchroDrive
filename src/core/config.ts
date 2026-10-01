@@ -6,6 +6,7 @@ const persistedTmdbApiKey = getPersistedEnvValue("TMDB_API_KEY");
 const persistedSeerrUrl = getPersistedEnvValue("SEERR_URL");
 const persistedSeerrApiKey = getPersistedEnvValue("SEERR_API_KEY");
 const persistedSeerrAuth = getPersistedEnvValue("SEERR_AUTH");
+const persistedRdAccessToken = getPersistedEnvValue("RD_ACCESS_TOKEN");
 const persistedPlexUrl = getPersistedEnvValue("PLEX_URL");
 const persistedPlexToken = getPersistedEnvValue("PLEX_TOKEN");
 const persistedPlexMountDir = getPersistedEnvValue("PLEX_MOUNT_DIR");
@@ -61,7 +62,7 @@ export const config = {
   addStrategy: (process.env.ADD_STRATEGY || "all") as "all" | "failover" | "single",
   // Real-Debrid API
   rdApiBase: process.env.RD_API_BASE || "https://api.real-debrid.com/rest/1.0",
-  rdAccessToken: process.env.RD_ACCESS_TOKEN || "",
+  rdAccessToken: resolveRuntimeOrPersistedValue(process.env.RD_ACCESS_TOKEN, persistedRdAccessToken),
   // Real-Debrid WebDAV
   rdWebdavUrl: process.env.RD_WEBDAV_URL || "https://dav.real-debrid.com",
   rdWebdavUsername: process.env.RD_WEBDAV_USERNAME || "",
