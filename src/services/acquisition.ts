@@ -116,6 +116,85 @@ export function deriveAcquisitionNeeds(groups: VersionGroup[], profiles: Version
   return groups.flatMap((group) => profiles.flatMap((profile) => createAcquisitionNeed(group, profile, options) || []));
 }
 
+export type RetentionGapType = "NO_UNIQUE_WINNER" | "REQUIREMENTS_NOT_MET" | "IDENTITY_UNRESOLVED" | "RECOVERABILITY_UNCONFIRMED" | "NO_RETAINED_WINNER";
+
+export interface RetentionGap {
+  id: string;
+  contentIdentity: ContentIdentity;
+  mediaType: "movie" | "tv";
+  season?: number;
+  episode?: number;
+  profileId: string;
+  profileName: string;
+  gapType: RetentionGapType;
+  whatIsMissing: string;
+  why: string;
+  nextAction: string;
+  reasonCodes: string[];
+  existingVersions: VersionGroup["versions"];
+  rejectedVersions: VersionGroup["versions"];
+}
+
+/** Read model for the local retention decision. It never previews or sends acquisition requests. */
+export function deriveRetentionGaps(groups: VersionGroup[], profiles: VersionProfile[]): RetentionGap[] {
+  return groups.flatMap((group) => profiles.flatMap((profile) => {
+    const profileStatus = group.profileStatuses?.find((item) => item.profileId === profile.id);
+    if (!profile.enabled || profileStatus?.satisfied !== false) return [];
+    const mediaType = group.identity.kind === "movie" ? "movie" : group.identity.kind === "episode" ? "tv" : undefined;
+    if (!mediaType) return [];
+    const eligible = group.versions.filter((version) => version.evaluations.some((evaluation) => evaluation.profileId === profile.id && evaluation.eligible));
+    const rejected = group.versions.filter((version) => !version.evaluations.some((evaluation) => evaluation.profileId === profile.id && evaluation.eligible));
+    const reasonCodes = [...new Set(group.versions.flatMap((version) => version.reasons.map((reason) => reason.code)).concat(rejected.flatMap((version) => version.evaluations.flatMap((evaluation) => evaluation.profileId === profile.id ? evaluation.reasons.map((reason) => reason.code) : []))))];
+    let gapType: RetentionGapType;
+    let whatIsMissing: string;
+    let why: string;
+    let nextAction: string;
+    if (reasonCodes.includes("policy_tie") && eligible.length > 1) {
+      gapType = "NO_UNIQUE_WINNER";
+      whatIsMissing = "A single retained winner";
+      why = `${eligible.length} admissible versions are tied under the current ranking, so none can safely be selected over the others.`;
+      nextAction = "Compare the copies in Details. Leave them retained, or add a meaningful ranking rule; then run a new scan.";
+    } else if (group.identity.resolutionStatus === "uncertain" || group.identity.resolutionStatus === "conflict" || group.identity.confidence < 0.65) {
+      gapType = "IDENTITY_UNRESOLVED";
+      whatIsMissing = "A reliable content identity";
+      why = "The title or episode could not be matched with enough confidence for an automatic retention decision.";
+      nextAction = "Open Review, resolve the identity, then run a new scan.";
+    } else if (reasonCodes.includes("required_audio_language_missing") || reasonCodes.includes("required_subtitle_language_missing") || reasonCodes.includes("hard_rule_failed") || reasonCodes.includes("hard_requirement_failed")) {
+      gapType = "REQUIREMENTS_NOT_MET";
+      const missing = [reasonCodes.includes("required_audio_language_missing") ? "required audio" : "", reasonCodes.includes("required_subtitle_language_missing") ? "required subtitles" : "", reasonCodes.includes("hard_rule_failed") || reasonCodes.includes("hard_requirement_failed") ? "a mandatory rule" : ""].filter(Boolean).join(", ");
+      whatIsMissing = missing || "A version that meets the mandatory requirements";
+      why = `None of the ${group.versions.length} inventoried version${group.versions.length === 1 ? "" : "s"} satisfies ${missing || "the active requirements"}.`;
+      nextAction = "Check the failed evidence in Details. Correct the requirements if they are wrong, or add a compliant version, then scan again.";
+    } else if (reasonCodes.includes("recoverability_unknown") || reasonCodes.includes("recoverability_required")) {
+      gapType = "RECOVERABILITY_UNCONFIRMED";
+      whatIsMissing = "Verified recoverability evidence";
+      why = "The version is admissible, but its provider item cannot yet be proven recoverable, so no automatic removal decision is safe.";
+      nextAction = "Restore the provider magnet or infohash evidence, then run a new scan. The current copy remains retained.";
+    } else {
+      gapType = "NO_RETAINED_WINNER";
+      whatIsMissing = "A completed retention decision";
+      why = "The current evidence did not produce one safe retained winner.";
+      nextAction = "Open Details to inspect the decision reasons, correct the stated blocker, then scan again.";
+    }
+    return [{
+      id: `gap:${group.id}:${profile.id}`,
+      contentIdentity: group.identity,
+      mediaType,
+      season: group.identity.season,
+      episode: group.identity.episode,
+      profileId: profile.id,
+      profileName: profile.name,
+      gapType,
+      whatIsMissing,
+      why,
+      nextAction,
+      reasonCodes,
+      existingVersions: eligible,
+      rejectedVersions: rejected,
+    }];
+  }));
+}
+
 /** Stable local idempotency boundary before an adapter is ever called. */
 export function deduplicateAcquisitionNeeds(needs: AcquisitionNeed[]): AcquisitionNeed[] {
   const seen = new Set<string>();

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { deriveAcquisitionNeeds, deduplicateAcquisitionNeeds, revalidateAcquisitionNeed } from "../../../src/services/acquisition";
+import { deriveAcquisitionNeeds, deriveRetentionGaps, deduplicateAcquisitionNeeds, revalidateAcquisitionNeed } from "../../../src/services/acquisition";
 import { evaluateVersionGroups, fingerprintTorrent, type VersionProfile } from "../../../src/services/versionManager";
 import { SeerrAcquisitionAdapter } from "../../../src/services/seerrAcquisitionAdapter";
 import { seerrApiBaseUrl } from "../../../src/services/seerrUrl";
@@ -52,6 +52,31 @@ describe("generic acquisition core", () => {
     const [group] = evaluateVersionGroups(versions, [profile()], { enableRemote: true });
     const [need] = deriveAcquisitionNeeds([group], [profile()]);
     expect(deduplicateAcquisitionNeeds([need, { ...need, id: `${need.id}:duplicate` }])).toHaveLength(1);
+  });
+});
+
+describe("retention gap read model", () => {
+  test("explains an exact policy tie as a missing unique winner", () => {
+    const configured = profile({ id: "local", name: "Local retention", target: "QUALITY", sizePreference: "LARGER" });
+    const versions = fingerprintTorrent(torrent("Example.2025.1080p.WEB-DL.H264.mkv"), "realdebrid");
+    versions[0].fingerprint.identity = { ...versions[0].fingerprint.identity, tmdbId: "123", resolutionStatus: "resolved", confidence: 1 };
+    const duplicate = structuredClone(versions[0]);
+    duplicate.id = `${duplicate.id}:alldebrid`;
+    duplicate.fingerprint.storage = { ...duplicate.fingerprint.storage, provider: "alldebrid", torrentId: "duplicate" };
+    const [gap] = deriveRetentionGaps(evaluateVersionGroups([...versions, duplicate], [configured]), [configured]);
+    expect(gap.gapType).toBe("NO_UNIQUE_WINNER");
+    expect(gap.whatIsMissing).toBe("A single retained winner");
+    expect(gap.existingVersions).toHaveLength(2);
+  });
+
+  test("names missing mandatory audio instead of reporting an acquisition state", () => {
+    const configured = profile({ id: "local", name: "Local retention", target: "QUALITY", languagePolicy: { required: { values: ["ita"], mode: "ALL" }, preferred: [], original: false } });
+    const versions = fingerprintTorrent(torrent("Example.2025.1080p.WEB-DL.H264.mkv"), "realdebrid");
+    versions[0].fingerprint.identity = { ...versions[0].fingerprint.identity, tmdbId: "123", resolutionStatus: "resolved", confidence: 1 };
+    const [gap] = deriveRetentionGaps(evaluateVersionGroups(versions, [configured]), [configured]);
+    expect(gap.gapType).toBe("REQUIREMENTS_NOT_MET");
+    expect(gap.whatIsMissing).toContain("required audio");
+    expect(gap).not.toHaveProperty("status");
   });
 });
 

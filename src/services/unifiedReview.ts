@@ -28,6 +28,7 @@ export interface UnifiedReviewEntry {
   decision?: OrganizerReviewEntry["decision"];
   versionGroupId?: string;
   versionIds: string[];
+  versions?: VersionEvaluation[];
   allowedActions: string[];
   allowIdentityActions?: boolean;
 }
@@ -50,9 +51,10 @@ function digest(value: string): string {
 
 function identityKey(identity: Partial<VersionGroup["identity"]> | undefined): string | undefined {
   if (!identity) return undefined;
-  if (identity.tmdbId) return `tmdb:${identity.kind || "unknown"}:${identity.tmdbId}`;
-  if (identity.imdbId) return `imdb:${identity.kind || "unknown"}:${identity.imdbId}`;
-  if (identity.tvdbId) return `tvdb:${identity.kind || "unknown"}:${identity.tvdbId}`;
+  const episodeSuffix = identity.kind === "episode" ? `:${identity.season ?? ""}:${identity.episode ?? ""}` : "";
+  if (identity.tmdbId) return `tmdb:${identity.kind || "unknown"}:${identity.tmdbId}${episodeSuffix}`;
+  if (identity.imdbId) return `imdb:${identity.kind || "unknown"}:${identity.imdbId}${episodeSuffix}`;
+  if (identity.tvdbId) return `tvdb:${identity.kind || "unknown"}:${identity.tvdbId}${episodeSuffix}`;
   if (!identity.normalizedTitle && !identity.title) return undefined;
   let title = identity.normalizedTitle || identity.title || "";
   let year = identity.year;
@@ -89,6 +91,11 @@ function mergeEntry(entries: Map<string, UnifiedReviewEntry>, value: UnifiedRevi
   current.reasonCodes = [...new Set([...current.reasonCodes, ...value.reasonCodes])];
   current.blockers = [...new Set([...current.blockers, ...value.blockers])];
   current.versionIds = [...new Set([...current.versionIds, ...value.versionIds])];
+  if (value.versions?.length) {
+    const versions = new Map((current.versions || []).map((version) => [version.id, version]));
+    value.versions.forEach((version) => versions.set(version.id, version));
+    current.versions = [...versions.values()];
+  }
   current.allowedActions = [...new Set([...current.allowedActions, ...value.allowedActions])];
   if (!current.organizerReview && value.organizerReview) {
     current.organizerReview = value.organizerReview;
@@ -199,7 +206,7 @@ export function buildUnifiedReviewQueue(groups: VersionGroup[], organizerReviews
       key: keyForIdentity(group.identity, fallback), identity: group.identity, title: group.identity.title, year: group.identity.year, kind: group.identity.kind,
       season: group.identity.season, episode: group.identity.episode, issueTypes, reasonCodes, blockers: [...new Set(reviewVersions.flatMap((version) => version.reasons.map((reason) => reason.message)))],
       policyDecision: "REVIEW", recoverability: { status: state, sources }, identityResolutionStatus: identityStatus, versionGroupId: group.id,
-      versionIds: reviewVersions.map((version) => version.id), allowedActions: ["DETAILS"], allowIdentityActions: false,
+      versionIds: reviewVersions.map((version) => version.id), versions: reviewVersions, allowedActions: ["DETAILS"], allowIdentityActions: false,
     });
   }
   const result = [...entries.values()];

@@ -36,7 +36,7 @@ import { clearOrganizerReviewOverride, decideOrganizerReview, filterOrganizerRev
 import { browseMountedFilesystem, FilesystemBrowserError } from "./core/filesystemBrowser";
 import { evaluateVersionGroups, validateRule, validateScoringRules, versionManagerPolicyHash, type VersionRecord } from "./services/versionManager";
 import { loadMediaManagerInventory, type MediaManagerInventoryStats } from "./services/mediaManagerInventory";
-import { deriveAcquisitionNeeds } from "./services/acquisition";
+import { deriveRetentionGaps } from "./services/acquisition";
 import { SeerrAcquisitionAdapter } from "./services/seerrAcquisitionAdapter";
 import { getLatestVersionManagerRecords, getLatestVersionManagerScan, getLatestVersionManagerSnapshot, getVersionManagerPolicy, getVersionProfiles, saveVersionManagerPolicy, saveVersionManagerPreviewAudit, saveVersionManagerScan, saveVersionProfiles } from "./services/versionManagerStore";
 import { probeVersionRecords } from "./services/versionManagerProbe";
@@ -50,7 +50,7 @@ import { migrationRouteLevel, providerMigrationCapabilities } from "./services/p
 import { listMigrationAudit, recordAcquisitionAudit, recordMigrationAudit } from "./core/db";
 import { buildUnifiedReviewQueue } from "./services/unifiedReview";
 import { getVersionManagerScanRuntimeStatus, getVersionManagerScanStatus, startVersionManagerScan } from "./services/versionManagerScanJob";
-import { createMagnetBackup, listMagnetBackups, readMagnetBackup, startMagnetBackupScheduler, verifyMagnetBackup } from "./services/magnetBackup";
+import { createMagnetBackup, listMagnetBackups, magnetBackupDirectory, readMagnetBackup, startMagnetBackupScheduler, verifyMagnetBackup } from "./services/magnetBackup";
 import { buildDeleteImpact } from "./services/deleteImpact";
 import { getMigrationJob, listMigrationJobs, startMigrationJob } from "./services/migrationJob";
 import { previewProviderMigration, rememberMigrationPreview, selectMigrationPreview, validateMigrationRoute } from "./services/providerMigrationPreview";
@@ -373,30 +373,17 @@ export function startServer() {
     }
   });
 
-  /**
-   * GET /api/version-manager/missing — read-only missing-profile and Seerr
-   * status projection. This endpoint never sends an acquisition request.
-   */
+  /** Read-only gaps in the local retention decision. Never contacts Seerr. */
   app.get("/api/version-manager/missing", async (_req, res) => {
     try {
       const snapshot = readVersionManagerGroups();
       if (!snapshot) return res.status(503).json({ ok: false, snapshotAvailable: false, error: "No valid inventory snapshot is available; start a scan" });
       const groups = snapshot.groups;
       const versions = groups.flatMap((group: any) => group.versions || []);
-      const probe = { source: "persisted-snapshot" };
       const profiles = getVersionProfiles();
-      const policy = getVersionManagerPolicy();
-      const needs = profiles.flatMap((profile) => deriveAcquisitionNeeds(groups, [profile], {
-        adapterId: "seerr",
-        acquisitionEnabled: profile.target === "DIRECT_PLAY" ? policy.acquireMissingRemote : false,
-      }));
-      const adapter = new SeerrAcquisitionAdapter();
-      const previews = await Promise.all(needs.map(async (need) => {
-        const preview = await adapter.preview(need);
-        recordAcquisitionAudit({ needId: need.id, identity: need.contentIdentity, profileId: need.missingProfileId, adapterId: preview.adapterId, phase: "PREVIEW", status: preview.status, providerRequestId: preview.providerRequestId, detail: [preview.providerStatusSource, preview.mappingWarning].filter(Boolean).join("; ") });
-        return preview;
-      }));
-      return res.json({ ok: true, readOnly: true, mode: "dry-run", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, inventoryCount: versions.length, groupCount: groups.length, probe, needs, previews, adapter: await adapter.capabilities() });
+      const needs = deriveRetentionGaps(groups, profiles.filter((profile) => profile.target !== "DIRECT_PLAY"));
+      const summary = needs.reduce((result: Record<string, number>, need) => ({ ...result, [need.gapType]: (result[need.gapType] || 0) + 1 }), {});
+      return res.json({ ok: true, readOnly: true, source: "persisted-snapshot", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, inventoryCount: versions.length, groupCount: groups.length, needs, summary });
     } catch (err: any) {
       return res.status(500).json({ ok: false, error: err?.message || "Missing profile preview failed" });
     }
@@ -438,7 +425,7 @@ export function startServer() {
 
   /** Read-only magnet backup snapshots. These contain provider references, never media bytes. */
   app.get("/api/version-manager/magnet-backup", (req, res) => {
-    res.json({ ok: true, readOnly: true, backups: listMagnetBackups(typeof req.query.provider === "string" ? req.query.provider : undefined) });
+    res.json({ ok: true, readOnly: true, storageDirectory: magnetBackupDirectory(), backups: listMagnetBackups(typeof req.query.provider === "string" ? req.query.provider : undefined) });
   });
   app.post("/api/version-manager/magnet-backup", async (req, res) => {
     try {

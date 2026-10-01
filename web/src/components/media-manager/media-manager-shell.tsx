@@ -68,6 +68,42 @@ function displayIdentity(item: any): any {
   return { ...identity, title: identity.title || item?.title || item?.versions?.[0]?.title || item?.alternativeVersions?.[0]?.title || "Unidentified content", year: identity.year, kind: identity.kind };
 }
 
+function episodeLabel(item: any): string {
+  const season = item?.season ?? item?.contentIdentity?.season ?? item?.identity?.season;
+  const episode = item?.episode ?? item?.contentIdentity?.episode ?? item?.identity?.episode;
+  return season !== undefined && episode !== undefined ? `S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}` : "";
+}
+
+function reviewGuidance(entry: any): { heading: string; explanation: string; action: string } {
+  const codes = new Set<string>(entry.reasonCodes || []);
+  const count = entry.versionIds?.length || 0;
+  if (codes.has("policy_tie")) return {
+    heading: "Equivalent versions: no unique winner",
+    explanation: `${count || "Multiple"} admissible copies have the same ranking under the current policy. They are here because the one-winner rule cannot choose safely; no deletion candidate was created.`,
+    action: "Open Details and compare the provider, filename, size, audio and subtitles. Leave both retained, or add a ranking rule that expresses a real preference, then run a new scan.",
+  };
+  if (codes.has("required_audio_language_missing") || codes.has("required_subtitle_language_missing") || codes.has("hard_rule_failed") || codes.has("hard_requirement_failed")) return {
+    heading: "Mandatory requirements are not met",
+    explanation: "The inventoried versions fail at least one required audio, subtitle or hard-rule condition.",
+    action: "Open Details to see the failed evidence. Correct the requirement in Settings if it is wrong, or add a compliant version, then run a new scan.",
+  };
+  if (codes.has("recoverability_unknown") || codes.has("recoverability_required")) return {
+    heading: "Recoverability evidence is missing",
+    explanation: "The policy cannot prove that the provider item can be restored, so it refuses to make an automatic removal decision.",
+    action: "Restore the magnet or infohash evidence at the provider, then run a new scan. The current copy remains retained.",
+  };
+  if (entry.organizerReview) return {
+    heading: "Identity needs an operator decision",
+    explanation: "The organizer could not identify this file with enough confidence.",
+    action: "Resolve Identity when the match is wrong or uncertain; Accept as detected only when the displayed identity is correct; Dismiss only hides this organizer task.",
+  };
+  return {
+    heading: "Automatic decision is blocked",
+    explanation: "The current evidence is insufficient for a safe one-winner retention decision.",
+    action: "Open Details, correct the stated blocker, then run a new scan. No media is changed from this screen.",
+  };
+}
+
 function ErrorBox({ error }: { error?: string }) {
   return error ? (
     <div className="rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
@@ -342,6 +378,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
   const decisionVersions = versions.filter((version: any) => ["KEEP", "REVIEW", "DELETE_CANDIDATE"].includes(version.decision));
   const candidates = decisionVersions.filter((version: any) => version.decision === "DELETE_CANDIDATE");
   const keeps = decisionVersions.filter((version: any) => version.decision === "KEEP");
+  const isPolicyTie = (item.reasonCodes || []).includes("policy_tie") || versions.some((version: any) => (version.reasons || []).some((reason: any) => reason.code === "policy_tie"));
   const isDeleteImpact = Array.isArray(item.alternativeVersions) || item.providerItemId !== undefined;
   return (
     <Card className="border-primary/40">
@@ -352,10 +389,10 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
         </Button>
       </CardHeader>
       <CardContent className="grid gap-5 text-sm lg:grid-cols-2">
-        <section>
+        <section className="min-w-0">
           <h3 className="mb-2 font-semibold">Identity</h3>
           <dl className="space-y-1 text-muted-foreground">
-            <p>
+            <p className="break-all">
               <b className="text-foreground">Title:</b>{" "}
               {shownIdentity.title}
             </p>
@@ -378,7 +415,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
               <b className="text-foreground">Confidence:</b>{" "}
               {identity.confidence ?? item.confidence ?? "—"}
             </p>
-            <p>
+            <p className="break-all">
               <b className="text-foreground">Provenance:</b>{" "}
               {identity.provenance ? JSON.stringify(identity.provenance) : "—"}
             </p>
@@ -388,7 +425,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
           {(identity.title || item.title) && (review || item.allowIdentityActions !== false) && <div className="mt-4"><h3 className="mb-2 font-semibold">Identity actions</h3><IdentityResolver reviewId={item.reviewId || review?.id} identity={{ title: identity.title || item.title, year: identity.year, kind: identity.kind, mediaType: identity.mediaType, tmdbId: identity.tmdbId }} initialQuery={identity.title || item.title} initialType={identity.kind === "episode" || identity.mediaType === "tv" ? "tv" : "movie"} initialYear={identity.year} existingOverride={item.override || review?.override || (identity.source === "manual" ? { tmdbId: identity.tmdbId } : undefined)} actionLabel={identityAction} onSaved={onSaved} /></div>}
           {review && onReviewAction && <div className="mt-4 flex flex-wrap gap-2">{review.decision === "dismissed" ? <Button size="sm" onClick={() => onReviewAction(review.id, { action: "retry" }, review)}>Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => onReviewAction(review.id, { decision: "accepted" }, review)}>Accept as detected</Button><Button size="sm" variant="outline" onClick={() => onReviewAction(review.id, { action: "retry" }, review)}>Retry / Resume</Button><Button size="sm" variant="destructive" onClick={() => onReviewAction(review.id, { decision: "dismissed" }, review)}>Dismiss</Button></>}</div>}
         </section>
-        <section>
+        <section className="min-w-0">
           <h3 className="mb-2 font-semibold">Versions</h3>
           <div className="space-y-2">
             {versions.length ? (
@@ -414,7 +451,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
           <h3 className="mb-2 font-semibold">Policy / Decision</h3>
           <p><b>Decision:</b> <StatusBadge value={item.decision || versions[0]?.decision || "REVIEW"} /></p>
           {candidates.length > 0 && <div className="mt-3 space-y-3 rounded border p-3"><p className="font-semibold">Decision comparison</p>{candidates.map((version: any) => <div key={version.id}><p><b>Candidate:</b> {versionDetails(version).name}</p><p>{(version.reasons || []).map((reason: any) => typeof reason === "string" ? reason : reason.message).join(" · ")}</p>{[...keeps, ...(item.alternativeVersions || [])].filter((keep: any) => !version.groupId || keep.groupId === version.groupId).map((keep: any) => <p key={keep.id}><b>Kept instead:</b> {versionDetails(keep).name}</p>)}</div>)}</div>}
-          <p className="mt-2 text-muted-foreground">The retained version is the single best admissible version under the local retention policy.</p>
+          <p className="mt-2 text-muted-foreground">{isPolicyTie ? "No retained winner has been selected: the admissible versions remain tied and are all kept in Review." : "The retained version is the single best admissible version under the local retention policy."}</p>
           <div className="mt-2 space-y-1 text-xs text-muted-foreground">{versions.flatMap((version: any) => (version.reasons || []).map((reason: any) => <p key={`${version.id}-${reason.code}`}>• {reason.message}</p>))}</div>
         </section>
         <section>
@@ -553,9 +590,9 @@ function Overview() {
             <p className="mt-1 text-xs text-muted-foreground">Safety and policy blockers</p>
           </Link>
           <Link href="/media-manager/library/missing" className="rounded-md border p-3 transition-colors hover:border-primary">
-            <p className="text-sm text-muted-foreground">No admissible version</p>
+            <p className="text-sm text-muted-foreground">Unresolved retention gaps</p>
             <p className="mt-1 text-2xl font-semibold">{evaluation ? evaluation.counts.primaryMissing || 0 : "—"}</p>
-            <p className="mt-1 text-xs text-muted-foreground">No version satisfies the active retention policy</p>
+            <p className="mt-1 text-xs text-muted-foreground">No unique KEEP, unmet requirements, identity or recovery blocker</p>
           </Link>
           <Link href="/media-manager/library/delete-preview" className="rounded-md border p-3 transition-colors hover:border-primary">
             <p className="text-sm text-muted-foreground">Delete candidates</p>
@@ -750,12 +787,12 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     }
     return [...rows.values()].sort((left, right) => sort === "versions" ? right.groups.reduce((n, group) => n + group.versions.length, 0) - left.groups.reduce((n, group) => n + group.versions.length, 0) : left.title.localeCompare(right.title));
   }, [groups, sort]);
-  const needs = (missing.data?.previews || []).filter((item: any) =>
+  const needs = (missing.data?.needs || []).filter((item: any) =>
     JSON.stringify(item).toLowerCase().includes(query.toLowerCase()),
   );
   const enrichReviewEntry = (entry: any) => {
     const ids = new Set(entry.versionIds || []);
-    const versions = (reviewPreview.data?.groups || []).flatMap((group: any) => group.versions || []).filter((version: any) => ids.has(version.id));
+    const versions = entry.versions?.length ? entry.versions : (reviewPreview.data?.groups || []).flatMap((group: any) => group.versions || []).filter((version: any) => ids.has(version.id));
     return { ...entry, versions, review: entry.review || entry.organizerReview };
   };
   return (
@@ -904,6 +941,18 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       {preset === "missing" && (
         <>
           <ErrorBox error={missing.error} />
+          <Card>
+            <CardContent className="space-y-2 p-4">
+              <p className="font-semibold">What does Missing mean?</p>
+              <p className="text-sm text-muted-foreground">This view lists what is missing from a complete local retention decision. It does not mean that the media file is absent and it does not represent a pending Seerr download. Each row states whether the policy lacks a unique winner, required evidence, a compliant version, or a reliable identity.</p>
+              <div className="flex flex-wrap gap-2 text-xs">
+                <Badge variant="outline">Unique winner {(missing.data?.summary?.NO_UNIQUE_WINNER || 0)}</Badge>
+                <Badge variant="outline">Requirements {(missing.data?.summary?.REQUIREMENTS_NOT_MET || 0)}</Badge>
+                <Badge variant="outline">Identity {(missing.data?.summary?.IDENTITY_UNRESOLVED || 0)}</Badge>
+                <Badge variant="outline">Recoverability {(missing.data?.summary?.RECOVERABILITY_UNCONFIRMED || 0)}</Badge>
+              </div>
+            </CardContent>
+          </Card>
           {missing.loading ? (
             <p className="text-sm text-muted-foreground">
               Loading policy gaps…
@@ -913,28 +962,34 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
               {needs.map((item: any, index: number) => (
                 <Card
                   key={item.needId || item.id || index}
-                  className="cursor-pointer hover:border-primary/50"
-                  onClick={() => setSelected(item)}
+                  className="hover:border-primary/50"
                 >
-                  <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
-                    <div>
-                      <p className="font-medium">
+                  <CardContent className="space-y-3 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="font-medium">
                         {item.contentIdentity?.title ||
                           item.title ||
                           "Unknown content"}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {item.contentIdentity?.mediaType || "—"} · no admissible version for the active retention policy
-                      </p>
+                        </p>
+                        <p className="text-xs text-muted-foreground">{item.contentIdentity?.year || "—"} · {item.mediaType === "tv" ? "TV episode" : "Movie"}{episodeLabel(item) ? ` · ${episodeLabel(item)}` : ""} · {item.profileName}</p>
+                      </div>
+                      <StatusBadge value={item.gapType || "REVIEW"} />
                     </div>
-                    <div className="flex items-center gap-2">
-                      <StatusBadge value={item.status || "REVIEW"} />
+                    <div className="grid gap-2 text-sm md:grid-cols-3">
+                      <div className="rounded border p-3"><p className="font-medium">What is missing</p><p className="text-muted-foreground">{item.whatIsMissing}</p></div>
+                      <div className="rounded border p-3"><p className="font-medium">Why it is here</p><p className="text-muted-foreground">{item.why}</p></div>
+                      <div className="rounded border p-3"><p className="font-medium">What you can do</p><p className="text-muted-foreground">{item.nextAction}</p></div>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {(item.gapType === "IDENTITY_UNRESOLVED" || item.gapType === "NO_UNIQUE_WINNER" || item.gapType === "RECOVERABILITY_UNCONFIRMED") && <Button asChild size="sm" variant="outline"><Link href="/media-manager/library/review">Open Review</Link></Button>}
+                      {item.gapType === "REQUIREMENTS_NOT_MET" && <Button asChild size="sm" variant="outline"><Link href="/media-manager/settings/profiles">Open Retention Settings</Link></Button>}
                       <Button
                         size="sm"
                         variant="outline"
                         onClick={(event) => {
                           event.stopPropagation();
-                          setSelected(item);
+                          setSelected({ ...item, versions: [...(item.existingVersions || []), ...(item.rejectedVersions || [])] });
                         }}
                       >
                         Details
@@ -992,17 +1047,16 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
           ) : (
             <div className="space-y-3">
               {(review.entries || []).filter((entry: any) => !identityOnly || entry.issueTypes?.includes("IDENTITY_ISSUE")).map((entry: any) => (
-                <Card key={entry.id}>
+                <Card key={entry.key}>
                   <CardContent className="space-y-3 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <p className="font-medium">{entry.title || entry.sourceBasename || "Unidentified content"}</p>
-                        <p className="break-all text-xs text-muted-foreground">{entry.year || "—"} · {entry.kind || "unknown"}{entry.sourceBasename ? ` · ${entry.sourceBasename}` : ""}</p>
+                        <p className="break-all text-xs text-muted-foreground">{entry.year || "—"} · {entry.kind || "unknown"}{episodeLabel(entry) ? ` · ${episodeLabel(entry)}` : ""}{entry.sourceBasename ? ` · ${entry.sourceBasename}` : ""}</p>
                       </div>
                       <div className="flex flex-wrap gap-1">{(entry.issueTypes || []).map((issue: string) => <StatusBadge key={issue} value={issue} />)}</div>
                     </div>
-                    <p className="text-sm">{(entry.blockers || []).slice(0, 3).join(" · ") || "Review required"}</p>
-                    {!entry.organizerReview && <p className="text-sm text-muted-foreground">Open Details to inspect the blocker and resolve identity when available. Accept, Dismiss and Retry apply only to organizer review tasks. Recovery blockers require a fresh inventory scan after the provider issue is corrected.</p>}
+                    {(() => { const guidance = reviewGuidance(entry); return <div className="grid gap-2 text-sm md:grid-cols-2"><div className="rounded border p-3"><p className="font-medium">Why it is here · {guidance.heading}</p><p className="mt-1 text-muted-foreground">{guidance.explanation}</p></div><div className="rounded border p-3"><p className="font-medium">What you can do</p><p className="mt-1 text-muted-foreground">{guidance.action}</p></div></div>; })()}
                     {entry.organizerReview && entry.decision !== "dismissed" && <IdentityResolver reviewId={entry.organizerReview.id} identity={entry.identity} initialQuery={entry.title} initialType={entry.kind === "episode" ? "tv" : "movie"} initialYear={entry.year} existingOverride={entry.organizerReview.override} actionLabel={entry.organizerReview.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />}
                     <div className="flex flex-wrap gap-2">
                       {entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "accepted" }, entry.organizerReview)}><Check className="mr-2 h-4 w-4" />Accept as detected</Button><Button size="sm" variant="destructive" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "dismissed" }, entry.organizerReview)}><X className="mr-2 h-4 w-4" />Dismiss</Button><Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry.organizerReview)}><RefreshCw className="mr-2 h-4 w-4" />Retry / Resume</Button></>)}
@@ -1315,6 +1369,7 @@ function Migration({ section = "migration" }: { section?: string }) {
         <CardHeader><CardTitle className="text-base">Magnet Backup</CardTitle></CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">Stores provider magnet references and file metadata only; it never downloads media bytes.</p>
+          <div className="rounded border p-3 text-sm"><p className="font-medium">Server backup folder</p><p className="mt-1 break-all font-mono text-xs text-muted-foreground">{magnetBackups.loading ? "Loading…" : magnetBackups.data?.storageDirectory || "Unavailable"}</p><p className="mt-1 text-xs text-muted-foreground">Backup Now and Incremental Backup write JSON files in this persistent server folder. The manifest.json and magnets.txt buttons above download files to your browser instead.</p></div>
           <div className="flex flex-wrap gap-2">
             <Button size="sm" variant="outline" disabled={backupBusy || !sourceInfo?.configured} onClick={() => void createMagnetBackup("FULL")}>Backup Now</Button>
             <Button size="sm" variant="outline" disabled={backupBusy || !sourceInfo?.configured} onClick={() => void createMagnetBackup("INCREMENTAL")}>Incremental Backup</Button>

@@ -9,6 +9,7 @@ export type MagnetBackupMode = "FULL" | "INCREMENTAL";
 export interface MagnetBackupRecord { id: string; mode: MagnetBackupMode; provider: string; createdAt: string; itemCount: number; magnetCount: number; sha256: string; file: string; baseBackupId?: string; added: number; modified: number; removed: number; valid: boolean; }
 export interface MagnetBackupDocument { schemaVersion: "1.0"; kind: "MAGNET_BACKUP"; mode: MagnetBackupMode; provider: string; createdAt: string; baseBackupId?: string; manifest?: MigrationManifest; changes?: { added: MigrationManifest["items"]; modified: MigrationManifest["items"]; removed: MigrationManifest["items"] }; }
 function root(): string { return path.join(config.dataDir, "magnet-backups"); }
+export function magnetBackupDirectory(): string { return root(); }
 function indexPath(): string { return path.join(root(), "index.json"); }
 function readIndex(): MagnetBackupRecord[] { try { return JSON.parse(fs.readFileSync(indexPath(), "utf8")) as MagnetBackupRecord[]; } catch { return []; } }
 function atomicWrite(file: string, value: unknown): void { fs.mkdirSync(path.dirname(file), { recursive: true }); const temporary = `${file}.${process.pid}.tmp`; fs.writeFileSync(temporary, JSON.stringify(value, null, 2), { mode: 0o600 }); fs.renameSync(temporary, file); }

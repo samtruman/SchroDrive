@@ -53,6 +53,7 @@ describe("unified Media Manager review queue", () => {
     const recoverability = group({ identity: { title: "Recovery", normalizedTitle: "recovery", year: 2024, kind: "movie", confidence: 0.98, source: "provider", resolutionStatus: "resolved" }, versions: [{ ...(group().versions[0] as any), id: "recovery-v" }] as any });
     const result = buildUnifiedReviewQueue([policy, recoverability]);
     expect(result.entries.find((entry) => entry.title === "Policy")?.issueTypes).toEqual(["POLICY_REVIEW"]);
+    expect(result.entries.find((entry) => entry.title === "Policy")?.versions).toHaveLength(1);
     expect(result.entries.find((entry) => entry.title === "Recovery")?.issueTypes).toEqual(["RECOVERABILITY_ISSUE"]);
   });
 
@@ -86,6 +87,14 @@ describe("unified Media Manager review queue", () => {
     const first = group({ identity: { title: "Same Title", normalizedTitle: "same title", year: 2024, kind: "movie", confidence: 0.98, source: "provider", resolutionStatus: "resolved", tmdbId: "101" } });
     const second = group({ identity: { title: "Same Title", normalizedTitle: "same title", year: 2024, kind: "movie", confidence: 0.98, source: "provider", resolutionStatus: "resolved", tmdbId: "202" }, id: "second" });
     expect(buildUnifiedReviewQueue([first, second]).entries).toHaveLength(2);
+  });
+
+  test("keeps episodes with the same series identity in separate review entries", () => {
+    const episode3 = group({ identity: { title: "Tehran", normalizedTitle: "tehran", year: 2020, kind: "episode", season: 2, episode: 3, confidence: 0.98, source: "provider", resolutionStatus: "resolved", tmdbId: "123" } });
+    const episode4 = group({ identity: { title: "Tehran", normalizedTitle: "tehran", year: 2020, kind: "episode", season: 2, episode: 4, confidence: 0.98, source: "provider", resolutionStatus: "resolved", tmdbId: "123" }, id: "episode-4" });
+    const entries = buildUnifiedReviewQueue([episode3, episode4]).entries;
+    expect(entries).toHaveLength(2);
+    expect(entries.map((entry) => entry.episode).sort()).toEqual([3, 4]);
   });
 
   test("excludes KEEP and DELETE_CANDIDATE-only groups", () => {
