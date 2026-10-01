@@ -43,6 +43,8 @@ export interface LanguagePolicy {
   preferred: string[];
   original: boolean;
   scope?: "AUDIO" | "SUBTITLE" | "AUDIO_OR_SUBTITLE";
+  /** What to do with a non-compliant version when a compliant replacement exists. */
+  missingRequiredAction?: "REVIEW" | "DELETE_IF_REPLACED";
 }
 
 export interface VersionProfile {
@@ -63,6 +65,10 @@ export interface VersionProfile {
   scoring?: Record<string, number>;
   /** Structured scoring rules; `scoring` remains for backwards compatibility. */
   scoringRules?: ScoringRule[];
+  /** Final tie-breaker after language and technical ranking. */
+  sizePreference?: "LARGER" | "SMALLER" | "IGNORE";
+  /** Ignore insignificant size differences when applying the size tie-breaker. */
+  minimumSizeDifferencePercent?: number;
   acquisitionBehavior?: "AUTOMATIC" | "APPROVAL_REQUIRED" | "DISABLED";
   /** Read-only acquisition mapping discovered from Seerr's ARR settings. */
   arrProfiles?: {
@@ -297,11 +303,29 @@ export interface VersionGroup {
   profileStatuses?: ProfileStatus[];
 }
 
+/** CineCircle's former Riven aliases, normalized to ISO-639-2 where possible. */
 const LANGUAGE_ALIASES: Record<string, string> = {
-  ita: "ita", italian: "ita", eng: "eng", english: "eng", original: "original",
-  fre: "fra", french: "fra", ger: "deu", german: "deu", spa: "spa", spanish: "spa",
-  jpn: "ja", japanese: "ja", ja: "ja", zho: "zh", chi: "zh", kor: "ko", rus: "ru",
+  it: "ita", ita: "ita", italian: "ita", italiano: "ita",
+  en: "eng", eng: "eng", english: "eng", inglese: "eng",
+  es: "spa", esp: "spa", spa: "spa", spanish: "spa", espanol: "spa", "español": "spa",
+  fr: "fra", fre: "fra", fra: "fra", french: "fra", francais: "fra", "français": "fra",
+  de: "deu", ger: "deu", deu: "deu", german: "deu", deutsch: "deu",
+  pt: "por", por: "por", portuguese: "por", portugues: "por", "português": "por",
+  ja: "jpn", jpn: "jpn", japanese: "jpn",
+  ko: "kor", kor: "kor", korean: "kor",
+  zh: "zho", chi: "zho", zho: "zho", chinese: "zho",
+  ru: "rus", rus: "rus", russian: "rus",
+  nl: "nld", dut: "nld", nld: "nld", dutch: "nld", nederlands: "nld",
+  pl: "pol", pol: "pol", polish: "pol", polski: "pol",
+  tr: "tur", tur: "tur", turkish: "tur", turkce: "tur", "türkçe": "tur",
+  he: "heb", heb: "heb", hebrew: "heb",
+  original: "original",
 };
+
+function normalizeLanguage(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  return LANGUAGE_ALIASES[normalized] || normalized;
+}
 
 export const MEDIA_FILE_EXTENSIONS = new Set(["mkv", "mp4", "m4v", "avi", "ts", "m2ts", "webm"]);
 
@@ -390,7 +414,9 @@ export function fingerprintTorrent(torrent: TorrentInfo, provider = "unknown"): 
           dolbyVision: /(?:\bDV\b|DOLBY[ ._-]?VISION)/i.test(name),
           provenance: { resolution: "FILENAME", codec: "FILENAME", hdr10: "FILENAME", hdr10Plus: "FILENAME", dolbyVision: "FILENAME" },
         },
-        audio: (languages.length > 0 ? languages : ["eng"]).map((language) => ({ language, ...audio, provenance: { language: "FILENAME", codec: "FILENAME", channels: "FILENAME", atmos: "FILENAME" } })),
+        // Unknown language must stay unknown. Assuming English here could turn
+        // incomplete filename evidence into a destructive retention decision.
+        audio: languages.map((language) => ({ language, ...audio, provenance: { language: "FILENAME", codec: "FILENAME", channels: "FILENAME", atmos: "FILENAME" } })),
         subtitles: [], release: { source: inferSource(name), group: name.match(/-([A-Za-z0-9]+)(?:\.[^.]+)?$/)?.[1], provenance: { source: "FILENAME", group: "FILENAME" } },
         storage: { provider, torrentId: torrent.id, fileId: file.id, path, size: file.size || torrent.bytes, infoHash: torrent.infoHash || torrent.raw?.infoHash || torrent.raw?.infohash || torrent.raw?.hash || torrent.raw?.hashString, recoverability, addedAt: torrent.addedAt?.toISOString(), provenance: { provider: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", torrentId: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", path: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", size: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", infoHash: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN" } },
         probe: { status: "not_requested", tool: "filename" },
@@ -405,6 +431,7 @@ export const defaultVersionProfiles: VersionProfile[] = [
     languagePolicy: { required: { values: [], mode: "ALL" }, preferred: [], original: true },
     hardRequirements: { op: "AND", children: [] },
     sourceOrder: ["REMUX", "BLURAY", "WEB-DL", "WEBRIP", "HDTV"], codecOrder: ["HEVC", "AV1", "H264"], audioOrder: ["TRUEHD", "DTS-HD MA", "DTS-HD", "DDP", "EAC3", "AAC"],
+    sizePreference: "LARGER", minimumSizeDifferencePercent: 10,
   },
   {
     id: "remote", name: "REMOTE / DIRECT PLAY", enabled: false, target: "DIRECT_PLAY", preferredResolution: "1080p",
@@ -425,10 +452,10 @@ export const defaultVersionManagerPolicy: VersionManagerPolicy = {
 
 function hasRequiredLanguages(version: VersionRecord, policy: LanguagePolicy): boolean {
   const scope = policy.scope || "AUDIO";
-  const audio = new Set(version.fingerprint.audio.map((stream) => LANGUAGE_ALIASES[stream.language.toLowerCase()] || stream.language.toLowerCase()));
-  const subtitles = new Set(version.fingerprint.subtitles.map((stream) => LANGUAGE_ALIASES[stream.language.toLowerCase()] || stream.language.toLowerCase()));
-  const required = policy.required.values.map((value) => LANGUAGE_ALIASES[value.toLowerCase()] || value.toLowerCase());
-  const original = version.fingerprint.identity.originalLanguage ? LANGUAGE_ALIASES[version.fingerprint.identity.originalLanguage.toLowerCase()] || version.fingerprint.identity.originalLanguage.toLowerCase() : undefined;
+  const audio = new Set(version.fingerprint.audio.map((stream) => normalizeLanguage(stream.language)));
+  const subtitles = new Set(version.fingerprint.subtitles.map((stream) => normalizeLanguage(stream.language)));
+  const required = policy.required.values.map(normalizeLanguage);
+  const original = version.fingerprint.identity.originalLanguage ? normalizeLanguage(version.fingerprint.identity.originalLanguage) : undefined;
   const matches = (value: string) => {
     const resolved = value === "original" ? original : value;
     if (!resolved) return false;
@@ -437,6 +464,17 @@ function hasRequiredLanguages(version: VersionRecord, policy: LanguagePolicy): b
     return scope === "SUBTITLE" ? inSubtitles : scope === "AUDIO_OR_SUBTITLE" ? inAudio || inSubtitles : inAudio;
   };
   return policy.required.mode === "ANY" ? required.length === 0 || required.some(matches) : required.every(matches);
+}
+
+function preferredLanguageScore(version: VersionRecord, policy: LanguagePolicy): number {
+  const available = new Set(version.fingerprint.audio.map((stream) => normalizeLanguage(stream.language)));
+  let score = 0;
+  policy.preferred.map(normalizeLanguage).forEach((language, index) => {
+    if (available.has(language)) score = Math.max(score, 1_000 - index * 50);
+  });
+  const original = version.fingerprint.identity.originalLanguage ? normalizeLanguage(version.fingerprint.identity.originalLanguage) : undefined;
+  if (policy.original && original && available.has(original)) score += 500;
+  return score;
 }
 
 function rank(value: string | undefined, order: string[]): number {
@@ -462,6 +500,7 @@ function evaluateProfile(version: VersionRecord, profile: VersionProfile): Profi
   breakdown.source = Math.max(0, 20 - rank(version.fingerprint.release.source, profile.sourceOrder) * 4);
   breakdown.codec = Math.max(0, 15 - rank(version.fingerprint.video.codec, profile.codecOrder) * 3);
   breakdown.audio = Math.max(0, 15 - rank(version.fingerprint.audio[0]?.codec, profile.audioOrder) * 3) + (version.fingerprint.audio[0]?.atmos ? 3 : 0);
+  breakdown.language = preferredLanguageScore(version, profile.languagePolicy);
   if (profile.target === "DIRECT_PLAY") {
     breakdown.bandwidth = version.fingerprint.storage.size > 0 ? Math.max(0, 20 - Math.log10(version.fingerprint.storage.size / 1_000_000_000 + 1) * 8) : 0;
   }
@@ -482,6 +521,20 @@ function evaluateProfile(version: VersionRecord, profile: VersionProfile): Profi
   return { profileId: profile.id, eligible, score, breakdown, reasons };
 }
 
+function compareForProfile(left: VersionEvaluation, right: VersionEvaluation, profile: VersionProfile): number {
+  const leftScore = left.evaluations.find((evaluation) => evaluation.profileId === profile.id)?.score || 0;
+  const rightScore = right.evaluations.find((evaluation) => evaluation.profileId === profile.id)?.score || 0;
+  if (leftScore !== rightScore) return rightScore - leftScore;
+  const preference = profile.sizePreference || "IGNORE";
+  if (preference === "IGNORE") return 0;
+  const leftSize = Number(left.fingerprint.storage.size || 0);
+  const rightSize = Number(right.fingerprint.storage.size || 0);
+  if (!leftSize || !rightSize || leftSize === rightSize) return 0;
+  const difference = Math.abs(leftSize - rightSize) / Math.max(leftSize, rightSize) * 100;
+  if (difference < Math.max(0, Number(profile.minimumSizeDifferencePercent || 0))) return 0;
+  return preference === "LARGER" ? rightSize - leftSize : leftSize - rightSize;
+}
+
 function groupKey(version: VersionRecord): string {
   const identity = version.fingerprint.identity;
   if (!identity.normalizedTitle || identity.confidence < 0.65) return `review:${version.id}`;
@@ -494,29 +547,40 @@ export function evaluateVersionGroups(versions: VersionRecord[], profiles = defa
   return [...groups.entries()].map(([id, members]) => {
     const activeProfiles = profiles.filter((profile) => profile.enabled && (profile.target !== "DIRECT_PLAY" || policy.enableRemote));
     const evaluations = members.map((version): VersionEvaluation => ({ ...version, decision: "REVIEW", evaluations: activeProfiles.map((profile) => evaluateProfile(version, profile)), reasons: [] }));
+    const tiedProfiles = new Set<string>();
     for (const profile of activeProfiles) {
       const eligible = evaluations.filter((version) => version.fingerprint.identity.confidence >= 0.65 && version.evaluations.find((evaluation) => evaluation.profileId === profile.id)?.eligible);
-      const winner = [...eligible].sort((a, b) => (b.evaluations.find((e) => e.profileId === profile.id)?.score || 0) - (a.evaluations.find((e) => e.profileId === profile.id)?.score || 0))[0];
+      const ordered = [...eligible].sort((a, b) => compareForProfile(a, b, profile));
+      const winner = ordered.length > 1 && compareForProfile(ordered[0], ordered[1], profile) === 0 ? undefined : ordered[0];
+      if (ordered.length > 1 && !winner) tiedProfiles.add(profile.id);
       if (winner) {
         winner.decision = "KEEP";
         winner.satisfiesProfiles = [...new Set([...(winner.satisfiesProfiles || []), profile.id])];
-        winner.reasons.push({ code: "profile_winner", message: `Best eligible version for ${profile.name}`, facts: { profile: profile.id, score: winner.evaluations.find((e) => e.profileId === profile.id)?.score } });
+        winner.reasons.push({ code: "profile_winner", message: "Best eligible version for the local retention policy", facts: { profile: profile.id, score: winner.evaluations.find((e) => e.profileId === profile.id)?.score } });
       }
     }
     for (const version of evaluations) {
-      const hasHardRequirementFailure = version.evaluations.some((evaluation) => !evaluation.eligible);
+      const failedEvaluations = version.evaluations.filter((evaluation) => !evaluation.eligible);
+      const hasHardRequirementFailure = failedEvaluations.length > 0;
+      const languageFailureCanBeRemoved = failedEvaluations.length > 0 && failedEvaluations.every((evaluation) => {
+        const profile = activeProfiles.find((candidate) => candidate.id === evaluation.profileId);
+        return profile?.languagePolicy.missingRequiredAction === "DELETE_IF_REPLACED"
+          && evaluation.reasons.length > 0
+          && evaluation.reasons.every((reason) => reason.code === "required_language_missing");
+      });
       const recoverability = version.fingerprint.storage.recoverability?.status || (version.fingerprint.storage.infoHash ? "RECOVERABLE" : "UNKNOWN");
       const recoverable = recoverability === "RECOVERABLE";
       const safeForDelete = (policy.safety?.requireRecoverableBeforeDelete ?? true) ? recoverable : true;
       const hasSurvivingKeep = evaluations.some((candidate) => candidate.decision === "KEEP");
-      if (version.decision === "REVIEW" && !hasHardRequirementFailure && version.fingerprint.identity.confidence >= 0.65 && evaluations.length > 1 && hasSurvivingKeep && safeForDelete) {
+      const everyProfileHasReplacement = activeProfiles.every((profile) => evaluations.some((candidate) => candidate.decision === "KEEP" && candidate.evaluations.some((evaluation) => evaluation.profileId === profile.id && evaluation.eligible)));
+      if (version.decision === "REVIEW" && (!hasHardRequirementFailure || languageFailureCanBeRemoved) && version.fingerprint.identity.confidence >= 0.65 && evaluations.length > 1 && hasSurvivingKeep && everyProfileHasReplacement && safeForDelete) {
         version.decision = "DELETE_CANDIDATE";
-        version.reasons.push({ code: "no_profile_slot", message: "Does not win an enabled profile in this version group", facts: { groupId: id } });
+        version.reasons.push({ code: languageFailureCanBeRemoved ? "required_language_replaced" : "no_profile_slot", message: languageFailureCanBeRemoved ? "A compliant replacement exists for every enabled profile" : "Does not win an enabled profile in this version group", facts: { groupId: id } });
       } else if (version.decision === "REVIEW") {
         if (!safeForDelete && version.fingerprint.identity.confidence >= 0.65 && !hasHardRequirementFailure) version.reasons.push({ code: recoverability === "NOT_RECOVERABLE" ? "recoverability_required" : "recoverability_unknown", message: recoverability === "NOT_RECOVERABLE" ? "Delete preview requires a recoverable provider item" : "Recoverability could not be established for this provider item", facts: { recoverabilityStatus: recoverability, infoHashAvailable: recoverable } });
         version.reasons.push({
-          code: hasHardRequirementFailure ? "hard_requirement_failed" : "identity_uncertain",
-          message: hasHardRequirementFailure ? "A profile hard requirement failed; operator review is required" : "Identity confidence is insufficient for an automatic candidate decision",
+          code: tiedProfiles.size ? "policy_tie" : hasHardRequirementFailure ? "hard_requirement_failed" : "identity_uncertain",
+          message: tiedProfiles.size ? "The configured policy cannot distinguish the leading versions" : hasHardRequirementFailure ? "A profile hard requirement failed; operator review is required" : "Identity confidence is insufficient for an automatic candidate decision",
           facts: { confidence: version.fingerprint.identity.confidence },
         });
       }
@@ -600,6 +664,7 @@ function canonicalLanguagePolicy(policy: LanguagePolicy): unknown {
     preferred: [...policy.preferred].map((value) => value.trim().toLowerCase()),
     original: policy.original === true,
     scope: policy.scope || "AUDIO",
+    missingRequiredAction: policy.missingRequiredAction || "REVIEW",
   };
 }
 
@@ -619,6 +684,8 @@ function canonicalProfile(profile: VersionProfile): unknown {
     maxSizeBytes: profile.maxSizeBytes ?? null,
     scoring: Object.fromEntries(Object.entries(profile.scoring || {}).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)),
     scoringRules: (profile.scoringRules || []).map(canonicalScoringRule).sort(canonicalCompare),
+    sizePreference: profile.sizePreference || "IGNORE",
+    minimumSizeDifferencePercent: profile.minimumSizeDifferencePercent ?? 0,
     arrProfiles: profile.arrProfiles ? {
       movie: profile.arrProfiles.movie ? { provider: "radarr", serverId: profile.arrProfiles.movie.serverId, qualityProfileId: profile.arrProfiles.movie.qualityProfileId } : null,
       tv: profile.arrProfiles.tv ? { provider: "sonarr", serverId: profile.arrProfiles.tv.serverId, qualityProfileId: profile.arrProfiles.tv.qualityProfileId } : null,

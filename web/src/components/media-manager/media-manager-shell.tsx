@@ -27,7 +27,7 @@ import { ProviderMigration } from "./provider-migration";
 import { ConfirmationDialog } from "./confirmation-dialog";
 
 type View = "overview" | "library" | "migration" | "settings";
-type Profile = { id: string; name: string; enabled: boolean; priority?: number; description?: string; preferredResolution?: string; languagePolicy?: any; hardRequirements?: any; scoring?: Record<string, number>; scoringRules?: ScoringRule[]; acquisitionBehavior?: string; target?: string; arrProfiles?: { movie?: { provider?: "radarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string }; tv?: { provider?: "sonarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string } } };
+type Profile = { id: string; name: string; enabled: boolean; priority?: number; description?: string; preferredResolution?: string; languagePolicy?: any; hardRequirements?: any; scoring?: Record<string, number>; scoringRules?: ScoringRule[]; sizePreference?: "LARGER" | "SMALLER" | "IGNORE"; minimumSizeDifferencePercent?: number; acquisitionBehavior?: string; target?: string; arrProfiles?: { movie?: { provider?: "radarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string }; tv?: { provider?: "sonarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string } } };
 type ScoringRule = { op?: "COMPARE" | "IN" | "HAS"; field: string; operator?: string; value?: unknown; values?: unknown[]; weight: number };
 type PendingConfirmation = { title: string; description: string; context?: ReactNode; confirmLabel: string; variant?: "default" | "secondary" | "outline" | "destructive"; onConfirm: () => Promise<void> };
 
@@ -896,7 +896,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
               <StatusBadge value="DRY RUN" />
             </CardContent>
           </Card>
-          <div className="flex flex-wrap items-center gap-2"><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, release, filename or provider item…" /><select value={deleteScope} onChange={(event) => setDeleteScope(event.target.value)} className="rounded border bg-background p-2 text-sm"><option value="protected">Protected / Not deletable — no candidates</option><option value="candidates">Delete candidates</option><option value="attention">Needs attention</option></select></div>
+          <div className="flex flex-wrap items-center gap-2"><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, release, filename or provider item…" /><select value={deleteScope} onChange={(event) => setDeleteScope(event.target.value)} className="rounded border bg-background p-2 text-sm"><option value="candidates">Delete candidates · physically eligible</option><option value="protected">Protected / Not deletable</option><option value="attention">Needs attention</option></select></div>
           <ErrorBox error={deletePreview.error} />
           {deletePreview.loading ? <p className="text-sm text-muted-foreground">Evaluating policy…</p> : (
             <>
@@ -1644,9 +1644,7 @@ function validateUiRule(node: any): string | undefined {
 
 function SettingsView({ section = "profiles" }: { section?: string }) {
   const status = useJson<any>("/api/version-manager/status");
-  const [acquisitionMode, setAcquisitionMode] = useState<"ARR" | "NATIVE">("ARR");
-  const arrProfiles = useJson<any>("/api/version-manager/acquisition/arr-profiles", acquisitionMode === "ARR");
-  const sectionIds = ["profiles", "acquisition", "safety"];
+  const sectionIds = ["profiles", "languages", "rules", "safety", "retention"];
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [policy, setPolicy] = useState<any>({ acquisitionMode: "ARR", enableRemote: false, acquireMissingRemote: false, preferCompletePack: false, safety: { requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false } });
   const [saving, setSaving] = useState(false);
@@ -1654,20 +1652,25 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
   const [saveError, setSaveError] = useState("");
   const [persistedSettings, setPersistedSettings] = useState("");
   const [impact, setImpact] = useState<any>(null);
+  const [requiredLanguagesInput, setRequiredLanguagesInput] = useState("");
+  const [preferredLanguagesInput, setPreferredLanguagesInput] = useState("");
   useEffect(() => {
     if (status.data?.profiles) {
       const nextProfiles = status.data.profiles as Profile[];
       const nextPolicy = status.data.policy || policy;
+      const nextRetentionProfile = nextProfiles.find((profile) => profile.target === "QUALITY" && profile.enabled)
+        || nextProfiles.find((profile) => profile.target !== "DIRECT_PLAY");
       setProfiles(nextProfiles);
       setPolicy(nextPolicy);
-      setAcquisitionMode(nextPolicy.acquisitionMode === "NATIVE" ? "NATIVE" : "ARR");
+      setRequiredLanguagesInput((nextRetentionProfile?.languagePolicy?.required?.values || []).join(", "));
+      setPreferredLanguagesInput((nextRetentionProfile?.languagePolicy?.preferred || []).join(", "));
       setPersistedSettings(JSON.stringify({ profiles: nextProfiles, policy: nextPolicy }));
     }
   }, [status.data]);
   useEffect(() => {
     const applyHash = () => {
       const hash = window.location.hash.slice(1);
-      const next = sectionIds.includes(hash) ? hash : ["languages", "rules"].includes(hash) ? "profiles" : section;
+      const next = sectionIds.includes(hash) ? hash : section;
       requestAnimationFrame(() => document.getElementById(`media-manager-${next}`)?.scrollIntoView({ behavior: "smooth", block: "start" }));
     };
     applyHash();
@@ -1676,6 +1679,10 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
   }, [section]);
   const settingsSnapshot = JSON.stringify({ profiles, policy });
   const hasUnsavedChanges = persistedSettings !== "" && settingsSnapshot !== persistedSettings;
+  const retentionProfileIndex = profiles.findIndex((profile) => profile.target === "QUALITY" && profile.enabled) >= 0
+    ? profiles.findIndex((profile) => profile.target === "QUALITY" && profile.enabled)
+    : profiles.findIndex((profile) => profile.target !== "DIRECT_PLAY");
+  const retentionProfile = retentionProfileIndex >= 0 ? profiles[retentionProfileIndex] : undefined;
   async function save() {
     setSaving(true);
     setSaved("");
@@ -1716,137 +1723,88 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
     } catch (value: any) { setSaved(value.message || "Impact preview unavailable"); }
   }
   function updateProfile(index: number, patch: Partial<Profile>) { setProfiles((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item)); }
-  function addProfile() { const id = `custom-${Date.now()}`; setProfiles((current) => [...current, { id, name: "Custom profile", enabled: true, priority: 0, preferredResolution: "1080p", languagePolicy: { required: { values: [], mode: "ALL" }, preferred: [], original: false, scope: "AUDIO" }, sourceOrder: [], codecOrder: [], audioOrder: [], hardRequirements: { op: "AND", children: [] }, scoring: {}, acquisitionBehavior: "DISABLED" } as any]); }
+  const parseLanguages = (value: string) => value.split(/[,;\n]/).map((item) => item.trim()).filter(Boolean);
   return (
     <div className="w-full min-w-0 space-y-6" data-testid="media-manager-settings">
       <Header
         view="settings"
         title="Media Manager Settings"
-        description="Configure profiles, acquisition behavior and safety without duplicating global provider credentials."
+        description="Configure local retention criteria and safety for files already present."
       />
-      <Card id="media-manager-acquisition-mode" className="scroll-mt-20 border-primary/40">
-        <CardHeader><CardTitle className="text-base">Acquisition Mode</CardTitle></CardHeader>
-        <CardContent className="space-y-3 text-sm">
-          <label className="grid max-w-md gap-1 font-medium">Mode
-            <select className="rounded border bg-background p-2" value={acquisitionMode} onChange={(event) => { const next = event.target.value === "NATIVE" ? "NATIVE" : "ARR"; setSaved(""); setSaveError(""); setAcquisitionMode(next); setPolicy((current: any) => ({ ...current, acquisitionMode: next })); }}>
-              <option value="ARR">ARR Mode</option><option value="NATIVE">Native Mode</option>
-            </select>
-          </label>
-          {acquisitionMode === "ARR" ? <p className="text-muted-foreground">Seerr is the gateway to Radarr/Sonarr. ARR Quality Profiles are read-only here; SchröDrive stores only retention requirements and explicit mappings.</p> : <p className="text-amber-700">Native Acquisition is not implemented. Local retention settings remain available, but no direct torrent search or acquisition is simulated.</p>}
-        </CardContent>
-      </Card>
-      {acquisitionMode === "ARR" && <Card id="media-manager-acquisition" className="scroll-mt-20">
-        <CardHeader><CardTitle className="text-base">ARR / Seerr Configuration</CardTitle></CardHeader>
-        <CardContent className="space-y-3 text-sm">
-          <p>Quality profiles remain owned by Radarr/Sonarr and are discovered read-only through Seerr.</p>
-          {arrProfiles.loading && <p className="text-muted-foreground">Checking Seerr ARR integrations…</p>}
-          {arrProfiles.error && <p className="text-amber-700">Seerr discovery failed: {arrProfiles.error}</p>}
-          {arrProfiles.data?.discovery?.configured === false && <p className="text-amber-700">Seerr is not configured. Configure it in global Settings before mapping ARR profiles.</p>}
-          {arrProfiles.data?.discovery?.configured === true && arrProfiles.data.discovery.errors?.map((error: any) => <p key={error.kind} className="text-amber-700">{error.kind} discovery: {error.message}</p>)}
-          {arrProfiles.data?.discovery?.configured === true && !arrProfiles.data.discovery.profiles?.length && !arrProfiles.data.discovery.errors?.length && <p className="text-amber-700">No ARR Quality Profiles were returned by Seerr.</p>}
-          {profiles.map((profile, index) => <div key={`arr-${profile.id}`} className="grid gap-3 rounded border p-3 md:grid-cols-[1fr_2fr]">
-            <div><p className="font-medium">{profile.name || profile.id}</p><p className="text-xs text-muted-foreground">Retention slot mapping · ARR source is read-only</p></div>
-            <div className="grid gap-2 sm:grid-cols-2">
-              {(["movie", "tv"] as const).map((mediaType) => {
-                const kind = mediaType === "movie" ? "radarr" : "sonarr";
-                const candidates = (arrProfiles.data?.discovery?.profiles || []).filter((candidate: any) => candidate.kind === kind);
-                const selected = profile.arrProfiles?.[mediaType];
-                const selectedKey = selected ? `${selected.serverId}:${selected.qualityProfileId}` : "";
-                const selectedAvailable = !selected || candidates.some((candidate: any) => `${candidate.serverId}:${candidate.qualityProfileId}` === selectedKey);
-                return <label key={mediaType} className="grid gap-1 text-xs"><span>{mediaType === "movie" ? "Movies / Radarr" : "TV / Sonarr"}</span>{!selectedAvailable && <span className="text-amber-700">Previous mapping unavailable</span>}<select className="rounded border bg-background p-2 text-sm" value={selectedAvailable ? selectedKey : ""} onChange={(event) => {
-                  const candidate = candidates.find((item: any) => `${item.serverId}:${item.qualityProfileId}` === event.target.value);
-                  setSaved("");
-                  setSaveError("");
-                  updateProfile(index, { arrProfiles: { ...(profile.arrProfiles || {}), [mediaType]: candidate ? { provider: kind, serverId: candidate.serverId, qualityProfileId: candidate.qualityProfileId, qualityProfileName: candidate.qualityProfileName } : undefined } });
-                }} aria-label={`${profile.name || profile.id} ${mediaType} ARR profile`}>
-                  <option value="">No ARR profile mapped</option>
-                  {candidates.map((candidate: any) => <option key={`${candidate.serverId}:${candidate.qualityProfileId}`} value={`${candidate.serverId}:${candidate.qualityProfileId}`}>{candidate.serverName} · {candidate.qualityProfileName}</option>)}
-                </select></label>;
-              })}
-            </div>
-          </div>)}
-          {hasUnsavedChanges && <p className="text-amber-700">Unsaved changes</p>}
-          <div className="flex items-center gap-3">
-            <Button onClick={() => void save()} disabled={saving}>{saving ? "Saving…" : "Save ARR Configuration"}</Button>
-            {saved && <span className="text-sm text-emerald-700">{saved}</span>}
-            {saveError && <span className="text-sm text-destructive">{saveError}</span>}
-          </div>
-          <Link className="text-primary" href="/settings">Open global provider settings <ChevronRight className="inline h-4 w-4" /></Link>
-        </CardContent>
-      </Card>}
-      {acquisitionMode === "ARR" && <Card id="media-manager-policy-preview" className="scroll-mt-20">
+      <Card id="media-manager-policy-preview" className="scroll-mt-20">
         <CardHeader><CardTitle className="text-base">Policy Preview &amp; Safety</CardTitle></CardHeader>
         <CardContent className="space-y-3 text-sm">
           <p className="text-muted-foreground">Preview the retention impact without rescanning providers or enabling Delete.</p>
           <Button variant="outline" onClick={() => void previewImpact()}>Preview impact</Button>
           {impact && <div className="rounded border bg-muted/20 p-3"><p className="font-medium">Read-only impact preview</p><p>Changed decisions: {impact.changed?.length || 0}. Proposed policy hash: {impact.proposed?.policyHash || "—"}</p></div>}
         </CardContent>
-      </Card>}
-      {acquisitionMode === "NATIVE" && <>
+      </Card>
       <Card id="media-manager-profiles" className="scroll-mt-20">
         <CardHeader>
-          <CardTitle className="text-base">Profiles</CardTitle>
+          <CardTitle className="text-base">Local Retention Policy</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="flex justify-end"><Button size="sm" variant="outline" onClick={addProfile}>Create profile</Button></div>
-          {profiles.map((profile, index) => (
+          {retentionProfile && (
             <div
               className="flex flex-wrap items-center justify-between gap-3 rounded border p-3"
-              key={profile.id}
+              key={retentionProfile.id}
             >
               <div>
-                <input className="rounded border bg-background p-1 font-medium" value={profile.name || profile.id} onChange={(event) => updateProfile(index, { name: event.target.value })} aria-label={`${profile.id} name`} />
-                <input className="mt-1 block w-full rounded border bg-background p-1 text-xs" value={profile.description || ""} onChange={(event) => updateProfile(index, { description: event.target.value })} placeholder="Description" />
+                <p className="font-medium">Current file retention</p>
                 <p className="text-xs text-muted-foreground">
-                  VersionProfile · requirements remain extensible
+                  Evaluated locally on files already present; independent from ARR acquisition profiles
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-3 text-sm">
-                <label>Priority <input className="ml-1 w-16 rounded border bg-background p-1" type="number" value={profile.priority ?? 0} onChange={(event) => updateProfile(index, { priority: Number(event.target.value) })} /></label>
-                <label>Resolution <input className="ml-1 w-20 rounded border bg-background p-1" value={profile.preferredResolution || ""} onChange={(event) => updateProfile(index, { preferredResolution: event.target.value })} /></label>
+                <label>Preferred resolution <input className="ml-1 w-24 rounded border bg-background p-1" value={retentionProfile.preferredResolution || ""} onChange={(event) => updateProfile(retentionProfileIndex, { preferredResolution: event.target.value })} /></label>
                 <label>
                 <input
                   type="checkbox"
-                  checked={profile.enabled}
+                  checked={retentionProfile.enabled}
                   onChange={(event) =>
-                    updateProfile(index, { enabled: event.target.checked })
+                    updateProfile(retentionProfileIndex, { enabled: event.target.checked })
                   }
                 />
-                Enabled
+                Evaluate this policy
                 </label>
               </div>
             </div>
-          ))}
+          )}
           <div className="flex items-center gap-3">
             <Button onClick={() => void save()} disabled={saving}>
-              {saving ? "Saving…" : "Save profiles"}
+              {saving ? "Saving…" : "Save retention policy"}
             </Button>
             <Button variant="outline" onClick={() => void previewImpact()}>Preview impact</Button>
             {saved && (
               <span className="text-sm text-muted-foreground">{saved}</span>
             )}
+            {saveError && <span className="text-sm text-destructive">{saveError}</span>}
           </div>
           {impact && <div className="rounded border bg-muted/20 p-3 text-sm"><p className="font-medium">Read-only impact preview</p><p>Changed decisions: {impact.changed?.length || 0}. Proposed policy hash: {impact.proposed?.policyHash || "—"}</p><p className="text-muted-foreground">The active configuration and inventory were not modified.</p></div>}
-          <div className="space-y-2 rounded border p-3"><p className="font-medium">Scoring</p><p className="text-xs text-muted-foreground">Scoring runs only after hard requirements pass. Field, operator, value and weight are persisted per profile.</p>{profiles.map((profile, index) => <details key={`score-${profile.id}`} className="rounded border p-2"><summary className="cursor-pointer text-sm">{profile.name || profile.id}</summary><div className="mt-2 space-y-2">{(profile.scoringRules || []).map((rule, ruleIndex) => <ScoringRuleEditor key={ruleIndex} rule={rule} onChange={(next) => updateProfile(index, { scoringRules: (profile.scoringRules || []).map((item, itemIndex) => itemIndex === ruleIndex ? next : item) })} onRemove={() => updateProfile(index, { scoringRules: (profile.scoringRules || []).filter((_, itemIndex) => itemIndex !== ruleIndex) })} />)}<Button size="sm" variant="outline" onClick={() => updateProfile(index, { scoringRules: [...(profile.scoringRules || []), { op: "COMPARE", field: "resolution", operator: "equals", value: "2160p", weight: 0 }] })}>Add scoring rule</Button>{Object.keys(profile.scoring || {}).length > 0 && <p className="text-xs text-muted-foreground">Legacy field weights are preserved for compatibility; new rules use the structured editor above.</p>}</div></details>)}</div>
+          {retentionProfile && <div className="space-y-2 rounded border p-3"><p className="font-medium">Advanced ranking</p><p className="text-xs text-muted-foreground">Ranking runs only after hard requirements pass.</p><details className="rounded border p-2"><summary className="cursor-pointer text-sm">Custom scoring rules</summary><div className="mt-2 space-y-2">{(retentionProfile.scoringRules || []).map((rule, ruleIndex) => <ScoringRuleEditor key={ruleIndex} rule={rule} onChange={(next) => updateProfile(retentionProfileIndex, { scoringRules: (retentionProfile.scoringRules || []).map((item, itemIndex) => itemIndex === ruleIndex ? next : item) })} onRemove={() => updateProfile(retentionProfileIndex, { scoringRules: (retentionProfile.scoringRules || []).filter((_, itemIndex) => itemIndex !== ruleIndex) })} />)}<Button size="sm" variant="outline" onClick={() => updateProfile(retentionProfileIndex, { scoringRules: [...(retentionProfile.scoringRules || []), { op: "COMPARE", field: "resolution", operator: "equals", value: "2160p", weight: 0 }] })}>Add scoring rule</Button>{Object.keys(retentionProfile.scoring || {}).length > 0 && <p className="text-xs text-muted-foreground">Legacy field weights are preserved for compatibility; new rules use the structured editor above.</p>}</div></details></div>}
         </CardContent>
       </Card>
       <Card id="media-manager-languages" className="scroll-mt-20">
         <CardHeader><CardTitle className="text-base">Languages</CardTitle></CardHeader>
         <CardContent className="space-y-3 text-sm">
-          <p className="text-muted-foreground">Language rules are profile-scoped. Audio and subtitles remain distinct; ORIGINAL is resolved from identity metadata.</p>
-          {profiles.map((profile, index) => <div key={profile.id} className="grid gap-2 rounded border p-3 md:grid-cols-4">
-            <span className="font-medium">{profile.name || profile.id}</span>
-            <input className="rounded border bg-background p-2" placeholder="required: ita, eng" value={(profile.languagePolicy?.required?.values || []).join(", ")} onChange={(event) => updateProfile(index, { languagePolicy: { ...(profile.languagePolicy || {}), required: { ...(profile.languagePolicy?.required || {}), values: event.target.value.split(",").map((value) => value.trim()).filter(Boolean) } } } as any)} />
-            <select className="rounded border bg-background p-2" value={profile.languagePolicy?.required?.mode || "ALL"} onChange={(event) => updateProfile(index, { languagePolicy: { ...(profile.languagePolicy || {}), required: { ...(profile.languagePolicy?.required || {}), mode: event.target.value } } } as any)}><option>ALL</option><option>ANY</option></select>
-            <select className="rounded border bg-background p-2" value={profile.languagePolicy?.scope || "AUDIO"} onChange={(event) => updateProfile(index, { languagePolicy: { ...(profile.languagePolicy || {}), scope: event.target.value } } as any)}><option>AUDIO</option><option>SUBTITLE</option><option>AUDIO_OR_SUBTITLE</option></select>
-          </div>)}
+          <p className="text-muted-foreground">Language rules drive local retention. Common aliases such as it/ita/italiano and en/eng/english are normalized; unknown language remains unknown.</p>
+          {retentionProfile && <div className="space-y-3 rounded border p-3">
+            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
+              <label className="grid gap-1 text-xs"><span>Required languages</span><input className="rounded border bg-background p-2 text-sm" aria-label="Required languages" placeholder="ita, eng" value={requiredLanguagesInput} onChange={(event) => { const value = event.target.value; setRequiredLanguagesInput(value); updateProfile(retentionProfileIndex, { languagePolicy: { ...(retentionProfile.languagePolicy || {}), required: { ...(retentionProfile.languagePolicy?.required || {}), values: parseLanguages(value) } } } as any); }} /></label>
+              <label className="grid gap-1 text-xs"><span>Required match</span><select className="rounded border bg-background p-2 text-sm" value={retentionProfile.languagePolicy?.required?.mode || "ALL"} onChange={(event) => updateProfile(retentionProfileIndex, { languagePolicy: { ...(retentionProfile.languagePolicy || {}), required: { ...(retentionProfile.languagePolicy?.required || {}), mode: event.target.value } } } as any)}><option value="ALL">All required</option><option value="ANY">Any required</option></select></label>
+              <label className="grid gap-1 text-xs"><span>Inspect</span><select className="rounded border bg-background p-2 text-sm" value={retentionProfile.languagePolicy?.scope || "AUDIO"} onChange={(event) => updateProfile(retentionProfileIndex, { languagePolicy: { ...(retentionProfile.languagePolicy || {}), scope: event.target.value } } as any)}><option value="AUDIO">Audio tracks</option><option value="SUBTITLE">Subtitle tracks</option><option value="AUDIO_OR_SUBTITLE">Audio or subtitles</option></select></label>
+              <label className="grid gap-1 text-xs"><span>If required language is missing</span><select className="rounded border bg-background p-2 text-sm" value={retentionProfile.languagePolicy?.missingRequiredAction || "REVIEW"} onChange={(event) => updateProfile(retentionProfileIndex, { languagePolicy: { ...(retentionProfile.languagePolicy || {}), missingRequiredAction: event.target.value } } as any)}><option value="REVIEW">Needs review</option><option value="DELETE_IF_REPLACED">Candidate only if replaced</option></select></label>
+              <label className="grid gap-1 text-xs md:col-span-2"><span>Preferred languages, in priority order</span><input className="rounded border bg-background p-2 text-sm" aria-label="Preferred languages" placeholder="ita, original, eng" value={preferredLanguagesInput} onChange={(event) => { const value = event.target.value; setPreferredLanguagesInput(value); updateProfile(retentionProfileIndex, { languagePolicy: { ...(retentionProfile.languagePolicy || {}), preferred: parseLanguages(value) } } as any); }} /></label>
+              <label className="flex items-center gap-2 self-end rounded border p-2"><input type="checkbox" checked={retentionProfile.languagePolicy?.original === true} onChange={(event) => updateProfile(retentionProfileIndex, { languagePolicy: { ...(retentionProfile.languagePolicy || {}), original: event.target.checked } } as any)} /> Prefer original-language audio</label>
+            </div>
+            <p className="text-xs text-muted-foreground">A non-compliant version becomes a candidate only when this is explicitly enabled and a compliant kept replacement satisfies the active retention policy. Otherwise it stays in Needs attention.</p>
+          </div>}
         </CardContent>
       </Card>
       <Card id="media-manager-rules" className="scroll-mt-20">
         <CardHeader><CardTitle className="text-base">Rules</CardTitle></CardHeader>
-        <CardContent className="space-y-2 text-sm"><p className="text-muted-foreground">Hard requirements are evaluated before scoring. The builder keeps field/operator combinations within the supported rule model.</p>{profiles.map((profile, index) => <details key={profile.id} className="rounded border p-3"><summary className="cursor-pointer font-medium">{profile.name || profile.id} hard requirements</summary><div className="mt-2"><RuleBuilder node={profile.hardRequirements || { op: "AND", children: [] }} root onChange={(hardRequirements) => updateProfile(index, { hardRequirements } as any)} /></div></details>)}</CardContent>
+        <CardContent className="space-y-2 text-sm"><p className="text-muted-foreground">Hard requirements are evaluated before ranking. The builder keeps field/operator combinations within the supported rule model.</p>{retentionProfile && <details className="rounded border p-3"><summary className="cursor-pointer font-medium">Hard requirements</summary><div className="mt-2"><RuleBuilder node={retentionProfile.hardRequirements || { op: "AND", children: [] }} root onChange={(hardRequirements) => updateProfile(retentionProfileIndex, { hardRequirements } as any)} /></div></details>}</CardContent>
       </Card>
-      </>}
       <div className="grid gap-4 lg:grid-cols-2">
         <Card id="media-manager-safety" className="scroll-mt-20">
           <CardHeader>
@@ -1867,9 +1825,19 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
           <CardContent className="space-y-2 text-sm">
             <p className="text-muted-foreground">Retention preferences affect policy evaluation and read-only delete impact; they never enable provider mutation.</p>
             <label className="flex items-center gap-2"><input type="checkbox" checked={policy.preferCompletePack === true} onChange={(event) => setPolicy((current: any) => ({ ...current, preferCompletePack: event.target.checked }))} /> Prefer complete packs during delete impact analysis</label>
+            {retentionProfile && <div className="grid gap-2 rounded border p-3 sm:grid-cols-[1fr_auto] sm:items-end">
+              <label className="grid gap-1 text-xs"><span>When language and technical score tie</span><select className="rounded border bg-background p-2 text-sm" value={retentionProfile.sizePreference || "IGNORE"} onChange={(event) => updateProfile(retentionProfileIndex, { sizePreference: event.target.value as Profile["sizePreference"] })}><option value="LARGER">Keep larger file</option><option value="SMALLER">Keep smaller file</option><option value="IGNORE">Do not use size</option></select></label>
+              <label className="grid gap-1 text-xs"><span>Minimum size difference %</span><input className="w-28 rounded border bg-background p-2 text-sm" type="number" min="0" max="100" value={retentionProfile.minimumSizeDifferencePercent ?? 0} onChange={(event) => updateProfile(retentionProfileIndex, { minimumSizeDifferencePercent: Math.max(0, Number(event.target.value) || 0) })} /></label>
+            </div>}
           </CardContent>
         </Card>
       </div>
+      {(hasUnsavedChanges || saving || saved || saveError) && <div className="sticky bottom-4 z-10 flex flex-wrap items-center justify-end gap-3 rounded-lg border bg-background/95 p-3 shadow-lg backdrop-blur">
+        {hasUnsavedChanges && <span className="text-sm text-amber-700">Unsaved retention changes</span>}
+        {saved && !hasUnsavedChanges && <span className="text-sm text-emerald-700">Retention policy saved</span>}
+        {saveError && <span className="text-sm text-destructive">{saveError}</span>}
+        <Button onClick={() => void save()} disabled={saving || !hasUnsavedChanges}>{saving ? "Saving…" : "Save retention policy"}</Button>
+      </div>}
     </div>
   );
 }

@@ -35,6 +35,8 @@ describe("version manager", () => {
     expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash(policy, [{ ...base, priority: 11 }]));
     expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash(policy, [{ ...base, hardRequirements: { op: "COMPARE", field: "hdr", operator: "equals", value: true } }]));
     expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash(policy, [{ ...base, languagePolicy: { ...base.languagePolicy, required: { values: ["ita"], mode: "ANY" } } }]));
+    expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash(policy, [{ ...base, languagePolicy: { ...base.languagePolicy, missingRequiredAction: "DELETE_IF_REPLACED" } }]));
+    expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash(policy, [{ ...base, sizePreference: "SMALLER" }]));
     expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash({ ...policy, enableRemote: true }, [base]));
     expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash({ ...policy, safety: { ...policy.safety, requireRecoverableBeforeDelete: false } }, [base]));
     expect(versionManagerPolicyHash(policy, [base])).toBe(versionManagerPolicyHash({ ...policy, policyVersion: "999" }, [base]));
@@ -49,6 +51,62 @@ describe("version manager", () => {
     expect(version.fingerprint.release.source).toBe("REMUX");
     expect(version.fingerprint.audio[0].language).toBe("ita");
     expect(version.fingerprint.probe.status).toBe("not_requested");
+  });
+
+  test("normalizes language aliases and never assumes English when language is unknown", () => {
+    const [italian] = fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.Italiano.mkv", 10_000), "alldebrid");
+    const [unknown] = fingerprintTorrent(torrent("Other.Movie.2025.1080p.WEB-DL.mkv", 10_000), "alldebrid");
+    expect(italian.fingerprint.audio.map((stream) => stream.language)).toEqual(["ita"]);
+    expect(evaluateVersionGroups([italian], [profile({ languagePolicy: { required: { values: ["it"], mode: "ALL" }, preferred: [], original: false } })])[0].versions[0].decision).toBe("KEEP");
+    expect(unknown.fingerprint.audio).toEqual([]);
+  });
+
+  test("applies preferred language before technical quality", () => {
+    const italian = fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.ITA.H264.DDP.mkv", 10_000), "alldebrid")[0];
+    const english = fingerprintTorrent(torrent("Example.Movie.2025.2160p.REMUX.ENG.HEVC.TRUEHD.mkv", 20_000), "alldebrid")[0];
+    italian.fingerprint.storage.infoHash = "a".repeat(40);
+    english.fingerprint.storage.infoHash = "b".repeat(40);
+    italian.fingerprint.storage.recoverability = { status: "RECOVERABLE", source: "PROVIDER_CAPABILITY", reason: "fixture" };
+    english.fingerprint.storage.recoverability = { status: "RECOVERABLE", source: "PROVIDER_CAPABILITY", reason: "fixture" };
+    const configured = profile({ languagePolicy: { required: { values: [], mode: "ALL" }, preferred: ["it"], original: false } });
+    const [group] = evaluateVersionGroups([italian, english], [configured]);
+    expect(group.versions.find((version) => version.id === italian.id)?.decision).toBe("KEEP");
+    expect(group.versions.find((version) => version.id === english.id)?.decision).toBe("DELETE_CANDIDATE");
+  });
+
+  test("only makes a missing-language version a candidate when a compliant replacement exists and policy opts in", () => {
+    const italian = fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.ITA.mkv", 10_000), "alldebrid")[0];
+    const english = fingerprintTorrent(torrent("Example.Movie.2025.2160p.REMUX.ENG.mkv", 20_000), "alldebrid")[0];
+    italian.fingerprint.storage.infoHash = "a".repeat(40);
+    english.fingerprint.storage.infoHash = "b".repeat(40);
+    italian.fingerprint.storage.recoverability = { status: "RECOVERABLE", source: "PROVIDER_CAPABILITY", reason: "fixture" };
+    english.fingerprint.storage.recoverability = { status: "RECOVERABLE", source: "PROVIDER_CAPABILITY", reason: "fixture" };
+    const reviewProfile = profile();
+    const removeProfile = profile({ languagePolicy: { ...reviewProfile.languagePolicy, missingRequiredAction: "DELETE_IF_REPLACED" } });
+    const reviewed = evaluateVersionGroups([italian, english], [reviewProfile])[0];
+    const removable = evaluateVersionGroups([italian, english], [removeProfile])[0];
+    expect(reviewed.versions.find((version) => version.id === english.id)?.decision).toBe("REVIEW");
+    expect(removable.versions.find((version) => version.id === italian.id)?.decision).toBe("KEEP");
+    expect(removable.versions.find((version) => version.id === english.id)?.decision).toBe("DELETE_CANDIDATE");
+    expect(removable.versions.find((version) => version.id === english.id)?.reasons.some((reason) => reason.code === "required_language_replaced")).toBe(true);
+  });
+
+  test("uses configured file size only as a final tie-breaker and keeps exact ties in review", () => {
+    const larger = fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.ITA.H264.DDP-GROUPA.mkv", 20_000), "alldebrid")[0];
+    const smaller = fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.ITA.H264.DDP-GROUPB.mkv", 10_000), "alldebrid")[0];
+    larger.fingerprint.storage.infoHash = "a".repeat(40);
+    smaller.fingerprint.storage.infoHash = "b".repeat(40);
+    larger.fingerprint.storage.recoverability = { status: "RECOVERABLE", source: "PROVIDER_CAPABILITY", reason: "fixture" };
+    smaller.fingerprint.storage.recoverability = { status: "RECOVERABLE", source: "PROVIDER_CAPABILITY", reason: "fixture" };
+    const configured = profile({ sizePreference: "LARGER", minimumSizeDifferencePercent: 10 });
+    const [group] = evaluateVersionGroups([smaller, larger], [configured]);
+    expect(group.versions.find((version) => version.id === larger.id)?.decision).toBe("KEEP");
+    expect(group.versions.find((version) => version.id === smaller.id)?.decision).toBe("DELETE_CANDIDATE");
+
+    smaller.fingerprint.storage.size = larger.fingerprint.storage.size;
+    const [tied] = evaluateVersionGroups([smaller, larger], [configured]);
+    expect(tied.versions.every((version) => version.decision === "REVIEW")).toBe(true);
+    expect(tied.versions.every((version) => version.reasons.some((reason) => reason.code === "policy_tie"))).toBe(true);
   });
 
   test("uses a single media file inside an extensionless provider item", () => {

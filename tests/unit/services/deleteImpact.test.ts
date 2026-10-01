@@ -24,11 +24,12 @@ describe("physical delete impact projection", () => {
       { id: "episode-1", identity: { title: "Show", kind: "episode", season: 1, episode: 1 }, versions: [version("candidate", "pack", "DELETE_CANDIDATE"), version("replacement", "other", "KEEP")] },
       { id: "episode-2", identity: { title: "Show", kind: "episode", season: 1, episode: 2 }, versions: [version("retained-episode", "pack", "KEEP")] },
     ] as any;
-    const [item] = buildDeleteImpact(groups, "candidate.mkv", "candidates");
+    expect(buildDeleteImpact(groups, "candidate.mkv", "candidates")).toHaveLength(0);
+    const [item] = buildDeleteImpact(groups, "candidate.mkv", "protected");
     expect(item.protectedByKeep).toBe(true);
     expect(item.versions).toHaveLength(2);
     expect(item.alternativeVersions[0]).toMatchObject({ groupId: "episode-1", episode: 1, files: [{ path: "replacement.mkv", size: 10 }] });
-    expect(buildDeleteImpact(groups, "", "protected").every(item => !item.versions.some(v => v.decision === "DELETE_CANDIDATE"))).toBe(true);
+    expect(buildDeleteImpact(groups, "", "protected").every(item => item.versions.some(v => v.decision === "DELETE_CANDIDATE"))).toBe(true);
   });
 
   test("an external KEEP is a replacement even when providers reuse the same item id", () => {
@@ -45,6 +46,7 @@ describe("physical delete impact projection", () => {
       { id: "e1", identity: { title: "Show" }, versions: [version("c1", "pack", "DELETE_CANDIDATE"), version("k1", "other", "KEEP")] },
       { id: "e2", identity: { title: "Show" }, versions: [version("c2", "pack", "DELETE_CANDIDATE")] },
     ] as any;
-    expect(buildDeleteImpact(groups, "", "candidates")[0]).toMatchObject({ onlyCopy: true, state: "BLOCKED" });
+    expect(buildDeleteImpact(groups, "", "candidates")).toHaveLength(0);
+    expect(buildDeleteImpact(groups, "", "protected")[0]).toMatchObject({ onlyCopy: true, state: "BLOCKED" });
   });
 });

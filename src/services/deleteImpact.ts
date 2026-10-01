@@ -61,8 +61,13 @@ export function buildDeleteImpact(groups: VersionGroup[], query = "", scope = "a
   }
   return [...result.values()].filter(item => {
     const hasCandidate = item.versions.some(version => version.decision === "DELETE_CANDIDATE");
-    if (scope === "candidates" && !hasCandidate) return false;
-    if (scope === "protected" && hasCandidate) return false;
+    const physicallyEligible = hasCandidate && item.state === "READY" && !item.onlyCopy && !item.protectedByKeep;
+    // Candidate means a physical resource that could actually be deleted if
+    // the executor existed. Logical candidates blocked by a KEEP/shared pack,
+    // missing replacement, review, or recoverability stay in the separate
+    // protected view.
+    if (scope === "candidates" && !physicallyEligible) return false;
+    if (scope === "protected" && (!hasCandidate || physicallyEligible)) return false;
     if (scope === "attention" && !item.versions.some(version => version.decision === "REVIEW")) return false;
     return !q || JSON.stringify(item).toLowerCase().includes(q);
   }).sort((a, b) => (a.versions[0]?.title || "").localeCompare(b.versions[0]?.title || "") || a.providerItemId.localeCompare(b.providerItemId));
