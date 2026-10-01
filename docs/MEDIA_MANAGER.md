@@ -11,8 +11,11 @@ snapshot; the Web UI does not create a second inventory engine.
 
 Library, Missing, Review, and Delete read from the valid canonical snapshot.
 Review is a deduplicated projection and may contain overlapping identity,
-policy, and recoverability reasons. Missing acquisition previews are only
-generated when the REMOTE policy is enabled.
+policy, and recoverability reasons. Each configured provider has an independent
+snapshot and is selected explicitly in the UI; copies on different providers
+are never compared for retention or deletion. A provider mount is not required
+because inventory and execution use the provider API. Missing is a retention
+gap view and does not imply an acquisition request.
 
 Settings keeps retention profiles in SchröDrive while acquisition remains
 owned by the configured ARR/Seerr integrations. The profile editor includes
@@ -59,16 +62,22 @@ unknown field is displayed as unavailable rather than inferred.
 
 ## Delete
 
-`/api/version-manager/delete` is a read-only physical delete-unit impact
-projection. It groups versions by the provider item that an adapter can
-actually delete, reports affected content, only-copy status, recoverability
-blockers, and whether the item is partially redundant. The executor is
-explicitly disabled in this milestone; no provider delete is exposed by the
-UI. The impact response also identifies physical size, alternative KEEP
-versions, profile ownership, and ProviderItems protected by a KEEP version;
-logical DELETE_CANDIDATE counts must never be interpreted as physical delete
-operations. `/api/version-manager/delete-preview` remains a compatibility
-read-only policy projection.
+`GET /api/version-manager/delete` projects physical delete units. It groups
+versions by the ProviderItem that the selected adapter can actually delete and
+separates eligible candidates, protected items, and cases needing attention.
+Each candidate shows the physical size, the copy retained instead, and the
+policy evidence that made that copy preferable. Logical `DELETE_CANDIDATE`
+counts must never be interpreted as physical delete operations.
+
+`POST /api/version-manager/delete` executes through the recovery-aware Delete
+Executor. The persisted Safety setting controls `DRY_RUN` or `LIVE` mode. Both
+modes revalidate the snapshot, replacement, recoverability, protection, and
+current provider presence. Live mode additionally requires the exact
+ProviderItem confirmation. After a confirmed deletion the selected provider is
+rescanned and the UI refreshes its snapshot. A provider timeout is recorded as
+an unknown outcome and starts reconciliation; the operator must not retry until
+that refresh completes. `/api/version-manager/delete-preview` remains a
+compatibility policy projection.
 
 `preferCompletePack` is persisted as a policy preference for future pack-aware
 impact evaluation. Pack completeness must be checked per episode before it
@@ -115,10 +124,14 @@ unavailable/unconfigured provider state, not-calculated state, and an actual
 zero. Export remains source-only; migration state requires a configured target
 because it reconciles against target inventory.
 
+Review supports title, episode, and filename search. Missing links carry the
+exact version-group identifier, so `Open Review` displays the requested item
+instead of the unfiltered queue. Identity issues expose the provider filename
+and a manual TMDb resolution action. Policy ties show only the leading tied
+copies; lower-resolution copies are not offered as equivalent winners.
+
 ## Current limitations
 
-- Physical delete execution remains disabled and requires a separate explicit
-  milestone.
 - Automatic backup scheduling is disabled by default. When enabled it uses the
   existing process scheduler, the configured Europe/Rome timezone by default,
   and configurable retention values; it never adds a cron container.
@@ -134,6 +147,10 @@ because it reconciles against target inventory.
 - Missing selection and exclusion are read-model operations. Real acquisition
   remains explicitly guarded by the existing Seerr/ARR configuration and is
   not enabled by this read-only milestone.
+- Multiversion acquisition remains disabled. Retention selects one winning copy
+  per content item on each provider. Series/season-scoped release-group
+  preferences are not implemented yet; manual winner selection is currently
+  per episode or movie.
 - Browser and provider validation must use isolated fixtures before deployment;
   production data is not modified by these read-only projections.
 
@@ -141,6 +158,8 @@ because it reconciles against target inventory.
 
 Canonical snapshots are never replaced by an invalid or incomplete scan.
 Provider readiness is distinct from an empty inventory. Delete Preview,
-Review, Missing, Magnet Backup, and migration preview are read-only unless an
-explicit migration execution confirmation is submitted. No Delete Executor is
-implemented here.
+Review, Missing, Magnet Backup preview, and migration preview are read-only.
+Delete and migration mutations require their explicit confirmation contracts;
+Delete additionally obeys the persisted dry-run gate and fails closed when
+identity, replacement, recoverability, metadata, or provider presence is not
+proven.

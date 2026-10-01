@@ -1,6 +1,6 @@
 # Provider Capability Assessment
 
-Assessment date: 2026-09-29.
+Assessment date: 2026-10-01.
 
 The migration core consumes explicit capability declarations. API support and
 validation are separate: a documented operation may be implemented and
@@ -28,14 +28,14 @@ Support levels: `SUPPORTED`, `PARTIAL`, `UNSUPPORTED`, `UNKNOWN`.
 | AllDebrid | duplicate lookup, post-import verification | SUPPORTED | E2E_VALIDATED | Reverse restore produced a target item and the second preview detected its equivalent hash. |
 | AllDebrid | import torrent | SUPPORTED | CONTRACT_TESTED | No real torrent-file import in this assessment. |
 | AllDebrid | cache lookup | UNKNOWN | UNVALIDATED | No separate documented cache-check path used by the adapter. |
-| AllDebrid | delete | SUPPORTED | IMPLEMENTED | Provider method exists; Media Manager Delete Executor remains disabled. |
+| AllDebrid | delete | SUPPORTED | E2E_VALIDATED | Media Manager executor performs guarded ProviderItem deletion; provider timeouts are reconciled as unknown outcomes before retry. |
 | Real-Debrid | inventory, infohash, duplicate lookup, status | SUPPORTED | E2E_VALIDATED | Target inventory and single import E2E validated. |
 | Real-Debrid | file tree | SUPPORTED | INTEGRATION_TESTED | Source file-tree behavior is not a cross-provider export E2E. |
 | Real-Debrid | magnet export, recoverability | SUPPORTED | E2E_VALIDATED | Reverse restore validated canonical magnet reconstruction from infohash; original complete magnet data is not guaranteed. |
 | Real-Debrid | import magnet, post-import verification | SUPPORTED | E2E_VALIDATED | Cross-provider target path was already validated. |
 | Real-Debrid | import torrent | SUPPORTED | CONTRACT_TESTED | No new real mutation performed. |
 | Real-Debrid | cache lookup | UNKNOWN | UNVALIDATED | Not exposed as a separately validated adapter capability. |
-| Real-Debrid | delete | SUPPORTED | IMPLEMENTED | Provider method exists; not executable from Media Manager. |
+| Real-Debrid | delete | SUPPORTED | CONTRACT_TESTED | Exposed through the guarded Media Manager executor; no production deletion was used for this assessment. |
 | TorBox | inventory, file tree, infohash, status, import magnet/torrent, duplicate lookup, post-import verification, delete | SUPPORTED | UNVALIDATED | Documented API surface, but API access is unavailable on the current Free account. |
 | TorBox | magnet export, recoverability | PARTIAL | UNVALIDATED | Depends on hash/metadata returned by the account/API response. |
 | TorBox | cache lookup | SUPPORTED | UNVALIDATED | Documented API capability; no live account validation. |
@@ -60,5 +60,6 @@ hardcoded provider-pair whitelist. Unsupported/unknown capabilities block
 preview, while supported but unvalidated capabilities remain visibly marked
 as unvalidated rather than being promoted to E2E status.
 
-No delete operation was executed. Delete remains outside the Media Manager
-until the recovery-aware Delete Executor milestone is explicitly authorized.
+Delete availability is provider-specific and controlled by the Media Manager
+Safety dry-run flag. Execution always targets one ProviderItem on the selected
+provider and never compares or removes a copy held by another provider.

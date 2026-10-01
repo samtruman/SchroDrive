@@ -218,6 +218,16 @@ SchröDrive includes a full **Next.js dashboard** accessible on port 3000 when `
 | **Torrents** | Browse, search, and manage torrents across all configured providers |
 | **Files** | Virtual file explorer for mounted debrid content |
 | **Search** | Search Prowlarr/Jackett + Stremio scrapers, add torrents directly |
+| **Media Manager** | Manage each provider library independently: retention ranking, Review, guarded Delete, magnet backup, restore, and provider migration |
+
+Media Manager keeps one best admissible copy for each content item on each
+provider. Mandatory audio/subtitle rules are evaluated before ranking;
+resolution, preferred languages, configured scores, and the optional file-size
+tie-break select the winner. Cross-provider duplicates are intentionally left
+alone. Delete defaults to the persisted dry-run safety gate and revalidates the
+physical ProviderItem immediately before any live request. See
+[`docs/MEDIA_MANAGER.md`](docs/MEDIA_MANAGER.md) for the full behavior and
+safety contract.
 | **Add** | Manually add magnets or torrent hashes to any provider |
 | **Mounts** | rclone mount status and health monitoring |
 | **Activity** | Real-time feed of system events |
