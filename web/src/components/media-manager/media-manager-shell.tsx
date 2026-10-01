@@ -1171,6 +1171,7 @@ function Migration({ section = "migration" }: { section?: string }) {
   const [mode, setMode] = useState("FULL");
   const [fileError, setFileError] = useState("");
   const [importPlan, setImportPlan] = useState<any>(null);
+  const [importInput, setImportInput] = useState<any>(null);
   const [loadingFile, setLoadingFile] = useState(false);
   const [selectedExport, setSelectedExport] = useState<Set<string>>(new Set());
   const [selectedImport, setSelectedImport] = useState<Set<string>>(new Set());
@@ -1184,18 +1185,14 @@ function Migration({ section = "migration" }: { section?: string }) {
   const [backupNotice, setBackupNotice] = useState("");
   const [backupError, setBackupError] = useState("");
   useEffect(() => { if (magnetBackups.data?.schedule) setBackupSchedule(magnetBackups.data.schedule); }, [magnetBackups.data?.schedule?.updatedAt]);
-  async function previewFile(file: File) {
+  async function previewImport(input: any, destination = targetProvider) {
     setLoadingFile(true);
     setFileError("");
     try {
-      const text = await file.text();
-      const body = file.name.toLowerCase().endsWith(".json")
-        ? { targetProvider, manifest: JSON.parse(text) }
-        : { targetProvider, magnetsText: text };
       const response = await fetch("/api/version-manager/import/preview", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...input, targetProvider: destination }),
       });
       const data = await readJsonResponse<any>(response, "Import preview");
       setImportPlan(data);
@@ -1204,6 +1201,18 @@ function Migration({ section = "migration" }: { section?: string }) {
       setFileError(value.message || "Unable to preview import");
     } finally {
       setLoadingFile(false);
+    }
+  }
+  async function previewFile(file: File) {
+    try {
+      const text = await file.text();
+      const input = file.name.toLowerCase().endsWith(".json")
+        ? { manifest: JSON.parse(text) }
+        : { magnetsText: text };
+      setImportInput(input);
+      await previewImport(input);
+    } catch (value: any) {
+      setFileError(value.message || "Unable to read import file");
     }
   }
   const exportItems = state.data?.items || [];
@@ -1233,11 +1242,11 @@ function Migration({ section = "migration" }: { section?: string }) {
     finally { setBackupBusy(false); }
   }
   async function startMigration() {
-    if (!importPlan || !selectedImport.size || !window.confirm("Start the selected migration? The source provider is not modified; the target provider will receive the selected magnets.")) return;
+    if (!importPlan || !selectedImport.size || !window.confirm(`Restore the selected items to ${targetInfo?.displayName || targetProvider}? The backup source is not modified.`)) return;
     setMigrationStartError("");
     const items = (importPlan.items || []).filter((item: any) => selectedImport.has(item.infoHash || String(item.index)));
     try {
-      const response = await fetch("/api/version-manager/migration/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirm: "START_MIGRATION", sourceProvider, targetProvider, items }) });
+      const response = await fetch("/api/version-manager/migration/jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ confirm: "START_MIGRATION", sourceProvider: importPlan.sourceProvider || "file-import", targetProvider, items }) });
       const body = await readJsonResponse<any>(response, "Starting migration");
       setMigrationJob(body.job);
     } catch (error: any) { setMigrationStartError(error.message || "Unable to start migration"); }
@@ -1249,8 +1258,9 @@ function Migration({ section = "migration" }: { section?: string }) {
       const backupResponse = await fetch(`/api/version-manager/magnet-backup/${encodeURIComponent(id)}`, { cache: "no-store" });
       const backup = await readJsonResponse<any>(backupResponse, "Magnet backup");
       if (!backup.document.manifest) throw new Error("This incremental backup requires its full baseline before preview");
-      const response = await fetch("/api/version-manager/import/preview", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ targetProvider, manifest: backup.document.manifest }) });
-      setImportPlan(await readJsonResponse<any>(response, "Import preview")); setSelectedImport(new Set());
+      const input = { manifest: backup.document.manifest };
+      setImportInput(input);
+      await previewImport(input);
     } catch (error: any) { setFileError(error.message || "Unable to preview magnet backup"); } finally { setLoadingFile(false); }
   }
   useEffect(() => {
@@ -1308,7 +1318,7 @@ function Migration({ section = "migration" }: { section?: string }) {
       </div>
       {section === "migration" && <ProviderMigration />}
       {section !== "migration" && <>
-      {(section === "export" || section === "import") && <>
+      {section === "export" && <>
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Provider capabilities</CardTitle>
@@ -1491,6 +1501,19 @@ function Migration({ section = "migration" }: { section?: string }) {
           <CardTitle className="text-base">Restore / Import file</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
+          <label className="block max-w-xl text-sm"><span className="font-medium">Restore to provider</span>
+            <select className="mt-1 block w-full rounded border bg-background p-2" value={targetProvider} onChange={(event) => {
+              const destination = event.target.value;
+              setTargetProvider(destination);
+              setSelectedImport(new Set());
+              setMigrationJob(null);
+              if (importInput) void previewImport(importInput, destination);
+              else setImportPlan(null);
+            }}>
+              {providerList.map((provider: any) => <option key={provider.providerId} value={provider.providerId} disabled={!provider.configured}>{provider.displayName}{provider.configured ? "" : " (not configured)"}</option>)}
+            </select>
+            <span className="mt-1 block text-xs text-muted-foreground">Preview, duplicate checks and execution use this provider only. The backup source is never changed.</span>
+          </label>
           {!importSupported && <ErrorBox error="Migration preview is unavailable for the selected target provider because its declared capabilities are unsupported." />}
           <p className="text-sm text-muted-foreground">
             Analyze a manifest or magnets file, reconcile it with the target,
@@ -1522,9 +1545,7 @@ function Migration({ section = "migration" }: { section?: string }) {
                         (importPlan.items || [])
                           .filter(
                             (item: any) =>
-                              (state.data?.effectiveByProviderItemId?.[
-                                item.providerItemId
-                              ] || item.status) === "READY_TO_IMPORT",
+                              item.status === "READY_TO_IMPORT",
                           )
                           .map(
                             (item: any) => item.infoHash || String(item.index),
@@ -1549,10 +1570,7 @@ function Migration({ section = "migration" }: { section?: string }) {
               <div className="max-h-56 overflow-auto rounded border">
                 {(importPlan.items || []).map((item: any) => {
                   const id = item.infoHash || String(item.index);
-                  const effectiveStatus =
-                    state.data?.effectiveByProviderItemId?.[
-                      item.providerItemId
-                    ] || item.status;
+                  const effectiveStatus = item.status;
                   const eligible = effectiveStatus === "READY_TO_IMPORT";
                   return (
                     <label

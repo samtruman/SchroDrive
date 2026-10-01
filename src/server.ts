@@ -620,7 +620,10 @@ export function startServer() {
         ? await target.listTorrents()
         : (await Promise.all(registry.configured().map((provider) => provider.listTorrents()))).flat();
       const plan = analyzeMigrationImport({ manifest: body.manifest, magnetsText: typeof body.magnetsText === "string" ? body.magnetsText : undefined }, inventory);
-      res.json({ ok: true, targetProvider: target?.id || "configured-providers", ...plan });
+      const sourceProvider = typeof body.manifest?.sourceProvider === "string" && body.manifest.sourceProvider.trim()
+        ? body.manifest.sourceProvider.trim().toLowerCase()
+        : "file-import";
+      res.json({ ok: true, sourceProvider, targetProvider: target?.id || "configured-providers", ...plan });
     } catch (err: any) {
       res.status(400).json({ ok: false, error: err?.message || "Migration import preview failed" });
     }
