@@ -131,6 +131,33 @@ async function resolvePath(version: VersionRecord): Promise<string | undefined> 
   return undefined;
 }
 
+/**
+ * A probe cache entry contains technical stream data captured during an older
+ * scan. Keep that data, but never let it restore stale filename identity or
+ * provider storage fields after the parser or provider inventory changes.
+ */
+export function mergeCachedProbeFingerprint(
+  current: VersionRecord["fingerprint"],
+  cached: VersionRecord["fingerprint"],
+): VersionRecord["fingerprint"] {
+  const cachedTmdbId = cached.identity?.tmdbId;
+  return {
+    ...current,
+    video: structuredClone(cached.video),
+    audio: structuredClone(cached.audio),
+    subtitles: structuredClone(cached.subtitles),
+    probe: structuredClone(cached.probe),
+    identity: {
+      ...current.identity,
+      ...(cachedTmdbId ? { tmdbId: cachedTmdbId } : {}),
+      provenance: {
+        ...current.identity.provenance,
+        ...(cachedTmdbId ? { tmdbId: cached.identity.provenance?.tmdbId || "FFPROBE" } : {}),
+      },
+    },
+  };
+}
+
 export async function probeVersionRecords(versions: VersionRecord[], options: { concurrency?: number } = {}): Promise<ProbeStats> {
   const stats: ProbeStats = { requested: versions.length, probed: 0, cacheHits: 0, cacheMisses: 0, unavailable: 0, errors: 0 };
   const database = getDb();
@@ -161,7 +188,7 @@ export async function probeVersionRecords(versions: VersionRecord[], options: { 
     }
     const result = await work;
     if (result.cacheHit) stats.cacheHits++;
-    if (result.status === "complete" && result.fingerprint) version.fingerprint = structuredClone(result.fingerprint);
+    if (result.status === "complete" && result.fingerprint) version.fingerprint = mergeCachedProbeFingerprint(version.fingerprint, result.fingerprint);
     else { version.fingerprint.probe = { status: "error", tool: "ffprobe", error: result.error }; stats.errors++; }
   };
   let next = 0;
