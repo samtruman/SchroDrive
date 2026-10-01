@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { normalizeIdentitySearchPrefill } from "./identity-search-prefill";
+import { DeleteImpactCards, ReviewActionGuide } from "./operator-guidance";
 import { ConfirmationDialog } from "./confirmation-dialog";
 
 type View = "overview" | "library" | "migration" | "settings";
@@ -437,7 +438,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
         </section>
         <section>
           <h3 className="mb-2 font-semibold">Safety</h3>
-          {isDeleteImpact && <><p><b>Physical resource:</b> ProviderItem {item.providerItemId || "unknown"}</p><p><b>Physical deletion:</b> {item.protectedByKeep ? "PROTECTED" : item.state === "READY" ? "ELIGIBLE (executor disabled)" : "BLOCKED"}</p>{item.protectedByKeep && <p className="text-amber-700">Protection reason: this ProviderItem is also referenced by a KEEP version or shared content.</p>}</>}
+          {isDeleteImpact && <><p><b>Physical resource:</b> ProviderItem {item.providerItemId || "unknown"}</p><p><b>Physical deletion:</b> {item.protectedByKeep ? "PROTECTED" : item.state === "READY" ? "ELIGIBLE after final revalidation" : "BLOCKED"}</p>{item.protectedByKeep && <p className="text-amber-700">Protection reason: this ProviderItem is also referenced by a KEEP version or shared content.</p>}</>}
           {versions.length ? versions.map((version: any, index: number) => <p key={version.id || index} className="text-sm text-muted-foreground">{version.fingerprint?.storage?.provider || "provider"} · recoverability: {version.fingerprint?.storage?.infoHash ? "YES · infohash available" : "UNKNOWN · review required"}</p>) : <p className="text-muted-foreground">No safety details available.</p>}
         </section>
         <details className="rounded border p-3 lg:col-span-2">
@@ -459,6 +460,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
 
 function Overview() {
   const status = useJson<any>("/api/version-manager/status");
+  const deleteDryRun = status.data?.policy?.safety?.deleteDryRun !== false;
   const migration = useJson<any>("/api/version-manager/migration/state");
   const reviewQueue = useJson<any>("/api/version-manager/review?status=pending");
   const profiles = status.data?.profiles || [];
@@ -560,7 +562,7 @@ function Overview() {
           value={migration.data?.effective?.readyToImport ?? "—"}
           detail="effective ready"
         />
-        <Stat label="Safety" value="DRY RUN" detail="Delete disabled" />
+        <Stat label="Safety" value={deleteDryRun ? "DRY RUN" : "LIVE"} detail={deleteDryRun ? "validation only" : "provider deletion enabled"} />
       </div>
       <Card>
         <CardHeader>
@@ -636,10 +638,10 @@ function Overview() {
           <CardContent className="space-y-2 text-sm">
             <p className="flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-green-500" />
-              Dry run active
+              {deleteDryRun ? "Dry run active" : "Live deletion enabled"}
             </p>
             <p className="text-muted-foreground">
-              Delete executor is not implemented.
+              {deleteDryRun ? "Candidates can be revalidated against the provider, but the delete API cannot be called." : "Eligible ProviderItems can be deleted after final revalidation and explicit confirmation."}
             </p>
           </CardContent>
         </Card>
@@ -664,6 +666,9 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const [reviewStatus, setReviewStatus] = useState<"pending" | "dismissed" | "all">("pending");
   const [reviewIssueFilter, setReviewIssueFilter] = useState<"all" | "identity" | "policy" | "recoverability">("all");
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null);
+  const [deleteBusy, setDeleteBusy] = useState("");
+  const [deleteNotice, setDeleteNotice] = useState("");
+  const [deleteError, setDeleteError] = useState("");
   const reviewQueue = useJson<any>("/api/version-manager/review?status=pending");
   const [identityOnly, setIdentityOnly] = useState(false);
   const identityIssueCount = reviewQueue.data?.summary?.identityIssues ?? 0;
@@ -684,6 +689,26 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     `/api/version-manager/delete?scope=${encodeURIComponent(deleteScope)}&q=${encodeURIComponent(query)}`,
     preset === "delete-preview" || preset === "delete",
   );
+  async function executeDelete(item: any, dryRun: boolean) {
+    const key = `${item.provider}:${item.providerItemId}`;
+    setDeleteBusy(key);
+    setDeleteNotice("");
+    setDeleteError("");
+    try {
+      const response = await fetch("/api/version-manager/delete", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: item.provider, providerItemId: item.providerItemId, snapshotId: deleteImpact.data?.snapshotId, dryRun, confirmation: dryRun ? undefined : item.providerItemId }) });
+      const body = await readJsonResponse<any>(response, dryRun ? "Dry-run validation" : "Provider deletion");
+      setDeleteNotice(body.executed ? `Deleted ${item.provider}:${item.providerItemId}. Run a new scan to refresh the library.` : `Validated ${item.provider}:${item.providerItemId}. No provider data was deleted.`);
+      await deleteImpact.reload();
+      await deletePreview.reload();
+    } catch (value: any) {
+      setDeleteError(value.message || "Delete action failed");
+      throw value;
+    } finally { setDeleteBusy(""); }
+  }
+  function requestLiveDelete(item: any) {
+    const gib = Number(item.physicalSize || 0) / 1024 / 1024 / 1024;
+    setConfirmation({ title: "Delete this ProviderItem?", description: "This is a real provider deletion. The current snapshot, replacement, protection and provider presence will be checked again immediately before deletion.", context: <div className="space-y-1"><p><b>Provider:</b> {item.provider}</p><p><b>ProviderItem:</b> {item.providerItemId}</p><p><b>Physical size:</b> {gib ? `${gib.toFixed(2)} GiB` : "unknown"}</p></div>, confirmLabel: "Delete ProviderItem", variant: "destructive", onConfirm: () => executeDelete(item, false) });
+  }
   const reviewPreview = useJson<any>(
     "/api/version-manager/preview",
     preset === "review",
@@ -892,19 +917,20 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
             <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
               <div>
                 <p className="font-semibold">Delete · impact analysis</p>
-                <p className="text-sm text-muted-foreground">Physical delete units and consequences are shown read-only. The executor is not available.</p>
+                <p className="text-sm text-muted-foreground">{deleteImpact.data?.dryRun !== false ? "Dry run is enabled: actions revalidate the physical resource against the provider without deleting it." : "Live mode is enabled: eligible resources can be deleted only after final revalidation and explicit confirmation."}</p>
               </div>
-              <StatusBadge value="DRY RUN" />
+              <StatusBadge value={deleteImpact.data?.dryRun !== false ? "DRY RUN" : "LIVE"} />
             </CardContent>
           </Card>
-          <div className="flex flex-wrap items-center gap-2"><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, release, filename or provider item…" /><select value={deleteScope} onChange={(event) => setDeleteScope(event.target.value)} className="rounded border bg-background p-2 text-sm"><option value="all">All items</option><option value="candidates">Delete candidates</option><option value="attention">Needs attention</option></select></div>
-          <ErrorBox error={deletePreview.error} />
+          <div className="flex flex-wrap items-center gap-2"><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, release, filename or provider item…" /><select value={deleteScope} onChange={(event) => setDeleteScope(event.target.value)} className="rounded border bg-background p-2 text-sm"><option value="candidates">Delete candidates · physically eligible</option><option value="protected">Protected / Not deletable</option><option value="attention">Needs attention</option></select></div>
+          <ErrorBox error={deletePreview.error || deleteImpact.error || deleteError} />
+          {deleteNotice && <p className="rounded border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm">{deleteNotice}</p>}
           {deletePreview.loading ? <p className="text-sm text-muted-foreground">Evaluating policy…</p> : (
             <>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 {Object.entries(deletePreview.data?.counts || {}).map(([label, value]) => <Stat key={label} label={label.replaceAll("_", " ")} value={String(value)} />)}
               </div>
-              <div className="space-y-2">{(deleteImpact.data?.items || []).slice(0, 200).map((item: any) => { const candidate = item.versions.find((version: any) => version.decision === "DELETE_CANDIDATE"); const kept = [...item.versions.filter((version: any) => version.decision === "KEEP"), ...(item.alternativeVersions || [])]; const title = candidate?.title || kept[0]?.title || "Unresolved content"; const versionLabel = (version: any) => `${version?.season !== undefined ? `S${String(version.season).padStart(2, "0")}E${String(version.episode || 0).padStart(2, "0")} · ` : ""}${version?.files?.[0]?.path?.split(/[\\/]/).pop() || "Version details unavailable"}`; return <Card key={`${item.provider}-${item.providerItemId}`} className="cursor-pointer transition-colors hover:border-primary/50" onClick={() => setSelected(item)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelected(item); } }}><CardContent className="space-y-2 p-3"><div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-medium">{title}</p><p className="text-xs text-muted-foreground">{candidate ? "Candidate for removal" : "Protected KEEP resource — no removal candidate"} · {item.versions.length} physical-file references · {item.physicalSize ? `${Math.round(item.physicalSize / 1_000_000)} MB physical` : "size unknown"}</p></div><StatusBadge value={item.onlyCopy ? "ONLY COPY" : item.protectedByKeep ? "PROTECTED" : item.state === "READY" ? "ELIGIBLE" : "BLOCKED"} /></div><div className="rounded border border-destructive/20 bg-destructive/5 p-2 text-sm"><p className="font-medium">What would be removed?</p><p>{candidate ? versionLabel(candidate) : "Nothing — this physical resource contains only versions that must be kept."}</p><p className="text-xs text-muted-foreground">{candidate?.reasons?.join(" · ") || "No logical deletion candidate is present."}</p></div>{kept.length > 0 && <div className="rounded border border-emerald-500/30 bg-emerald-500/5 p-2 text-sm"><p className="font-medium">Kept instead</p><p>{versionLabel(kept[0])}</p><p className="text-xs text-muted-foreground">{kept[0]?.reasons?.join(" · ") || "Required by an enabled retention slot."}</p></div>}<div className="text-sm"><p className="font-medium">Physical deletion</p><p>{item.protectedByKeep ? "Protected from physical deletion" : item.onlyCopy ? "Blocked — only copy identified" : "Eligible in dry run; executor is disabled"}</p><p className="text-xs text-muted-foreground">{item.protectedByKeep ? "The same physical item also contains a version that must be kept." : item.reasons.join(" · ")}</p></div><details onClick={(event) => event.stopPropagation()} className="text-xs text-muted-foreground"><summary className="cursor-pointer">Technical details</summary><p className="mt-1">ProviderItem: {item.providerItemId}</p><p>Provider: {item.provider || "—"}</p><p>Physical references: {item.versions.length}</p></details></CardContent></Card>; })}</div>
+              <DeleteImpactCards items={deleteImpact.data?.items || []} scope={deleteScope} dryRun={deleteImpact.data?.dryRun !== false} busyId={deleteBusy} onDetails={setSelected} onValidate={(item) => { void executeDelete(item, true).catch(() => undefined); }} onDelete={requestLiveDelete} />
             </>
           )}
         </>
@@ -1661,7 +1687,7 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
   const arrProfiles = useJson<any>("/api/version-manager/acquisition/arr-profiles", acquisitionMode === "ARR");
   const sectionIds = ["profiles", "acquisition", "safety"];
   const [profiles, setProfiles] = useState<Profile[]>([]);
-  const [policy, setPolicy] = useState<any>({ acquisitionMode: "ARR", enableRemote: false, acquireMissingRemote: false, preferCompletePack: false, safety: { requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false } });
+  const [policy, setPolicy] = useState<any>({ acquisitionMode: "ARR", enableRemote: false, acquireMissingRemote: false, preferCompletePack: false, safety: { deleteDryRun: true, requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false } });
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState("");
   const [saveError, setSaveError] = useState("");
@@ -1866,7 +1892,8 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
             <CardTitle className="text-base">Safety</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
-            <p><StatusBadge value="DRY RUN" /> Delete disabled / not implemented.</p>
+            <div className="rounded border p-3"><label className="flex items-start gap-3"><input className="mt-1" type="checkbox" checked={policy.safety?.deleteDryRun !== false} onChange={(event) => setPolicy((current: any) => ({ ...current, safety: { ...current.safety, deleteDryRun: event.target.checked } }))} /><span><span className="flex items-center gap-2 font-medium"><StatusBadge value={policy.safety?.deleteDryRun !== false ? "DRY RUN" : "LIVE"} /> Dry run only</span><span className="mt-1 block text-muted-foreground">When enabled, Delete performs all candidate and provider checks but cannot call the provider delete API.</span></span></label></div>
+            {policy.safety?.deleteDryRun === false && <p className="rounded border border-destructive/50 bg-destructive/5 p-3 text-destructive"><b>Live deletion is enabled.</b> Each eligible ProviderItem still requires explicit confirmation and is revalidated immediately before deletion.</p>}
             <label className="flex items-center gap-2"><input type="checkbox" checked={policy.safety?.requireRecoverableBeforeDelete !== false} onChange={(event) => setPolicy((current: any) => ({ ...current, safety: { ...current.safety, requireRecoverableBeforeDelete: event.target.checked } }))} /> Require recoverability before candidate</label>
             <label className="flex items-center gap-2"><input type="checkbox" checked={policy.safety?.allowDeleteWhenIdentityUncertain === true} onChange={(event) => setPolicy((current: any) => ({ ...current, safety: { ...current.safety, allowDeleteWhenIdentityUncertain: event.target.checked } }))} /> Allow uncertain identity (not recommended)</label>
             <label className="flex items-center gap-2"><input type="checkbox" checked={policy.safety?.allowDeleteWhenMetadataIncomplete === true} onChange={(event) => setPolicy((current: any) => ({ ...current, safety: { ...current.safety, allowDeleteWhenMetadataIncomplete: event.target.checked } }))} /> Allow incomplete metadata (not recommended)</label>

@@ -18,6 +18,8 @@ export interface VersionManagerPolicy {
 }
 
 export interface SafetyPolicy {
+  /** When true, delete actions validate the current provider item but never call the provider delete API. */
+  deleteDryRun: boolean;
   requireRecoverableBeforeDelete: boolean;
   allowDeleteWhenIdentityUncertain: boolean;
   allowDeleteWhenMetadataIncomplete: boolean;
@@ -419,7 +421,7 @@ export const defaultVersionManagerPolicy: VersionManagerPolicy = {
   acquireMissingRemote: false,
   acquisitionMode: "ARR",
   preferCompletePack: false,
-  safety: { requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false },
+  safety: { deleteDryRun: true, requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false },
   policyVersion: "1",
 };
 
