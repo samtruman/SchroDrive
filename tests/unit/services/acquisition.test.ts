@@ -65,6 +65,7 @@ describe("retention gap read model", () => {
     duplicate.fingerprint.storage = { ...duplicate.fingerprint.storage, provider: "alldebrid", torrentId: "duplicate" };
     const [gap] = deriveRetentionGaps(evaluateVersionGroups([...versions, duplicate], [configured]), [configured]);
     expect(gap.gapType).toBe("NO_UNIQUE_WINNER");
+    expect(gap.versionGroupId).toBeTruthy();
     expect(gap.whatIsMissing).toBe("A single retained winner");
     expect(gap.existingVersions).toHaveLength(2);
   });

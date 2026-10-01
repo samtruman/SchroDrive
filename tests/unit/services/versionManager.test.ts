@@ -245,7 +245,7 @@ describe("version manager", () => {
     expect(reviewed.evaluations[0].reasons.some((reason) => reason.code === "required_subtitle_language_missing")).toBe(true);
   });
 
-  test("does not use size to choose between different audio language sets", () => {
+  test("uses size between equally ranked files at the same resolution after language requirements pass", () => {
     const first = fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.ITA.mkv", 10_000), "alldebrid")[0];
     const second = fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.ITA.ENG.mkv", 50_000), "alldebrid")[0];
     for (const [index, version] of [first, second].entries()) {
@@ -253,8 +253,22 @@ describe("version manager", () => {
       version.fingerprint.storage.recoverability = { status: "RECOVERABLE", source: "PROVIDER_CAPABILITY", reason: "fixture" };
     }
     const [group] = evaluateVersionGroups([first, second], [profile({ preferredResolution: "1080p", sizePreference: "LARGER", minimumSizeDifferencePercent: 0 })]);
-    expect(group.versions.every((version) => version.decision === "REVIEW")).toBe(true);
-    expect(group.versions.every((version) => version.reasons.some((reason) => reason.code === "policy_tie"))).toBe(true);
+    expect(group.versions.find((version) => version.id === second.id)?.decision).toBe("KEEP");
+    expect(group.versions.find((version) => version.id === first.id)?.decision).toBe("DELETE_CANDIDATE");
+  });
+
+  test("marks only the leading copies as selectable when a lower resolution shares their group", () => {
+    const first1080 = fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.GROUPA.mkv", 20_000), "alldebrid")[0];
+    const second1080 = fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.GROUPB.mkv", 20_000), "alldebrid")[0];
+    const lower720 = fingerprintTorrent(torrent("Example.Movie.2025.720p.WEB-DL.GROUPC.mkv", 10_000), "alldebrid")[0];
+    for (const [index, version] of [first1080, second1080, lower720].entries()) {
+      version.fingerprint.storage.infoHash = String(index + 1).repeat(40);
+      version.fingerprint.storage.recoverability = { status: "RECOVERABLE", source: "PROVIDER_CAPABILITY", reason: "fixture" };
+    }
+    const [group] = evaluateVersionGroups([lower720, first1080, second1080], [profile({ preferredResolution: "1080p", sizePreference: "LARGER", minimumSizeDifferencePercent: 0, languagePolicy: { required: { values: [], mode: "ALL" }, preferred: [], original: false } })]);
+    const leading = group.versions.filter((version) => version.reasons.some((reason) => reason.code === "policy_tie" && reason.facts?.leadingTie === true));
+    expect(leading.map((version) => version.id).sort()).toEqual([first1080.id, second1080.id].sort());
+    expect(group.versions.find((version) => version.id === lower720.id)?.reasons.some((reason) => reason.code === "policy_tie" && reason.facts?.leadingTie === false)).toBe(true);
   });
 
   test("does not let a hard requirement failure be compensated by scoring", () => {

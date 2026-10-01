@@ -22,7 +22,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { normalizeIdentitySearchPrefill } from "./identity-search-prefill";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
-import { DeleteImpactCards, ReviewActionGuide } from "./operator-guidance";
+import { DecisionEvidence, DeleteImpactCards, ReviewActionGuide, VersionLine } from "./operator-guidance";
 import { ProviderMigration } from "./provider-migration";
 import { ConfirmationDialog } from "./confirmation-dialog";
 
@@ -65,7 +65,7 @@ function displayIdentity(item: any): any {
   if (identity.kind === "movie" && numericMovie && identityLooksLikeRelease) {
     return { ...identity, title: numericMovie[1], year: Number(numericMovie[2]) };
   }
-  return { ...identity, title: identity.title || item?.title || item?.versions?.[0]?.title || item?.alternativeVersions?.[0]?.title || "Unidentified content", year: identity.year, kind: identity.kind };
+  return { ...identity, title: identity.title || item?.title || item?.sourceBasename || basename || item?.versions?.[0]?.title || item?.alternativeVersions?.[0]?.title || "Unidentified content", year: identity.year, kind: identity.kind };
 }
 
 function episodeLabel(item: any): string {
@@ -96,6 +96,11 @@ function reviewGuidance(entry: any): { heading: string; explanation: string; act
     heading: "Identity needs an operator decision",
     explanation: "The organizer could not identify this file with enough confidence.",
     action: "Resolve Identity when the match is wrong or uncertain; Accept as detected only when the displayed identity is correct; Dismiss only hides this organizer task.",
+  };
+  if (entry.issueTypes?.includes("IDENTITY_ISSUE")) return {
+    heading: "The file identity is unknown",
+    explanation: "The filename and provider item are known, but the movie or episode could not be identified reliably. Retention is blocked to protect the file.",
+    action: "Open Details, use Resolve Identity to select the correct TMDb title, then run a new scan.",
   };
   return {
     heading: "Automatic decision is blocked",
@@ -468,7 +473,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
         <section>
           <h3 className="mb-2 font-semibold">Policy / Decision</h3>
           <p><b>Decision:</b> <StatusBadge value={item.decision || versions[0]?.decision || "REVIEW"} /></p>
-          {candidates.length > 0 && <div className="mt-3 space-y-3 rounded border p-3"><p className="font-semibold">Decision comparison</p>{candidates.map((version: any) => <div key={version.id}><p><b>Candidate:</b> {versionDetails(version).name}</p><p>{(version.reasons || []).map((reason: any) => typeof reason === "string" ? reason : reason.message).join(" · ")}</p>{[...keeps, ...(item.alternativeVersions || [])].filter((keep: any) => !version.groupId || keep.groupId === version.groupId).map((keep: any) => <p key={keep.id}><b>Kept instead:</b> {versionDetails(keep).name}</p>)}</div>)}</div>}
+          {candidates.length > 0 && <div className="mt-3 space-y-3 rounded border p-3"><p className="font-semibold">Decision comparison</p>{candidates.map((version: any) => <div key={version.id} className="space-y-2"><div><p className="font-medium">Candidate</p><VersionLine version={version} /></div>{[...keeps, ...(item.alternativeVersions || [])].filter((keep: any) => !version.groupId || keep.groupId === version.groupId).map((keep: any) => <div key={keep.id} className="rounded border border-emerald-500/30 p-2"><p className="font-medium">Kept instead</p><VersionLine version={keep} /><DecisionEvidence candidate={version} kept={keep} /></div>)}</div>)}</div>}
           <p className="mt-2 text-muted-foreground">{isPolicyTie ? "No retained winner has been selected: the admissible versions remain tied and are all kept in Review." : "The retained version is the single best admissible version under the local retention policy."}</p>
           <div className="mt-2 space-y-1 text-xs text-muted-foreground">{versions.flatMap((version: any) => (version.reasons || []).map((reason: any) => <p key={`${version.id}-${reason.code}`}>• {reason.message}</p>))}</div>
         </section>
@@ -479,7 +484,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
         </section>
         <details className="rounded border p-3 lg:col-span-2">
           <summary className="cursor-pointer font-semibold">
-            Evidence / diagnostics
+            Technical diagnostics · raw data
           </summary>
           <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap text-xs text-muted-foreground">
             {JSON.stringify(
@@ -698,6 +703,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const [deleteScope, setDeleteScope] = useState("candidates");
   const [selected, setSelected] = useState<any>(null);
   const [reviewStatus, setReviewStatus] = useState<"pending" | "dismissed">("pending");
+  const [focusedReviewGroupId, setFocusedReviewGroupId] = useState("");
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null);
   const [deleteBusy, setDeleteBusy] = useState("");
   const [deleteNotice, setDeleteNotice] = useState("");
@@ -709,6 +715,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     const params = new URLSearchParams(window.location.search);
     setPreset(params.get("view") || initialPreset);
     setIdentityOnly(params.get("reason") === "identity");
+    setFocusedReviewGroupId(params.get("group") || "");
   }, [pathname, initialPreset]);
   const preview = useJson<any>(
     `/api/version-manager/preview?${providerQuery}`,
@@ -751,7 +758,6 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       setDeleteNotice(body.executed ? `Deleted ${item.provider}:${item.providerItemId}. Provider library updated.` : `Dry run passed for ${item.provider}:${item.providerItemId}. No provider data was deleted.`);
     } catch (value: any) {
       setDeleteError(value.message || "Delete action failed");
-      throw value;
     } finally { setDeleteBusy(""); }
   }
   function requestDelete(item: any) {
@@ -868,6 +874,18 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     const versions = entry.versions?.length ? entry.versions : (reviewPreview.data?.groups || []).flatMap((group: any) => group.versions || []).filter((version: any) => ids.has(version.id));
     return { ...entry, versions, review: entry.review || entry.organizerReview };
   };
+  const visibleReviewEntries = (review?.entries || []).filter((entry: any) =>
+    (!identityOnly || entry.issueTypes?.includes("IDENTITY_ISSUE")) &&
+    (!focusedReviewGroupId || entry.versionGroupId === focusedReviewGroupId) &&
+    (!query.trim() || JSON.stringify({
+      title: entry.title,
+      year: entry.year,
+      season: entry.season,
+      episode: entry.episode,
+      sourceBasename: entry.sourceBasename,
+      versions: (entry.versions || []).map((version: any) => version.fingerprint?.storage?.path),
+    }).toLowerCase().includes(query.trim().toLowerCase())),
+  );
   return (
     <div className="space-y-6">
       <Header
@@ -1058,7 +1076,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                       <div className="rounded border p-3"><p className="font-medium">What you can do</p><p className="text-muted-foreground">{item.nextAction}</p></div>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      {(item.gapType === "IDENTITY_UNRESOLVED" || item.gapType === "NO_UNIQUE_WINNER" || item.gapType === "RECOVERABILITY_UNCONFIRMED") && <Button asChild size="sm" variant="outline"><Link href="/media-manager/library/review">Open Review</Link></Button>}
+                      {(item.gapType === "IDENTITY_UNRESOLVED" || item.gapType === "NO_UNIQUE_WINNER" || item.gapType === "RECOVERABILITY_UNCONFIRMED") && <Button asChild size="sm" variant="outline"><Link href={`/media-manager/library/review?group=${encodeURIComponent(item.versionGroupId)}`}>Open Review</Link></Button>}
                       {item.gapType === "REQUIREMENTS_NOT_MET" && <Button asChild size="sm" variant="outline"><Link href="/media-manager/settings/profiles">Open Retention Settings</Link></Button>}
                       <Button
                         size="sm"
@@ -1114,7 +1132,17 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
             </select>
             <span className="text-xs text-muted-foreground">Dismissed items remain auditable and can be restored.</span>
           </div>
+          <div className="relative">
+            <Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+            <Input className="pl-9" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search Review by title, episode or filename…" />
+          </div>
           <ReviewActionGuide />
+          {focusedReviewGroupId && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm">
+              <span>Showing the exact item opened from Missing.</span>
+              <Button asChild size="sm" variant="outline"><Link href="/media-manager/library/review">Show all review items</Link></Button>
+            </div>
+          )}
           <ErrorBox error={reviewError} />
           {!review ? (
             <p className="text-sm text-muted-foreground">
@@ -1122,18 +1150,19 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
             </p>
           ) : (
             <div className="space-y-3">
-              {(review.entries || []).filter((entry: any) => !identityOnly || entry.issueTypes?.includes("IDENTITY_ISSUE")).map((entry: any) => (
+              {visibleReviewEntries.map((entry: any) => (
                 <Card key={entry.key}>
                   <CardContent className="space-y-3 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
                         <p className="font-medium">{entry.title || entry.sourceBasename || "Unidentified content"}</p>
-                        <p className="break-all text-xs text-muted-foreground">{entry.year || "—"} · {entry.kind || "unknown"}{episodeLabel(entry) ? ` · ${episodeLabel(entry)}` : ""}{entry.sourceBasename ? ` · ${entry.sourceBasename}` : ""}</p>
+                        <p className="break-all text-xs text-muted-foreground">{entry.year || "Year unknown"} · {entry.kind || "type unknown"}{episodeLabel(entry) ? ` · ${episodeLabel(entry)}` : ""}</p>
                       </div>
                       <div className="flex flex-wrap gap-1">{(entry.issueTypes || []).map((issue: string) => <StatusBadge key={issue} value={issue} />)}</div>
                     </div>
                     {(() => { const guidance = reviewGuidance(entry); return <div className="grid gap-2 text-sm md:grid-cols-2"><div className="rounded border p-3"><p className="font-medium">Why it is here · {guidance.heading}</p><p className="mt-1 text-muted-foreground">{guidance.explanation}</p></div><div className="rounded border p-3"><p className="font-medium">What you can do</p><p className="mt-1 text-muted-foreground">{guidance.action}</p></div></div>; })()}
-                    {(entry.reasonCodes || []).includes("policy_tie") && <div className="space-y-2 rounded border border-amber-500/40 p-3"><p className="font-medium">Choose the one copy to keep</p><p className="text-xs text-muted-foreground">This choice applies only to this content on {provider.providers.find((item: any) => item.id === provider.providerId)?.name || provider.providerId}. Every other tied copy becomes a deletion candidate and still passes the normal safety checks.</p><div className="grid gap-2 lg:grid-cols-2">{(entry.versions || []).map((version: any) => { const storage = version.fingerprint?.storage || {}; const video = version.fingerprint?.video || {}; const filename = String(storage.path || version.id).split(/[\\/]/).pop(); return <div key={version.id} className="flex items-start justify-between gap-3 rounded border p-3"><div className="min-w-0"><p className="break-words text-sm font-medium">{filename}</p><p className="text-xs text-muted-foreground">{video.resolution || "Resolution unknown"} · {storage.size ? `${Math.round(Number(storage.size) / 1_000_000)} MB` : "Size unknown"}</p></div><Button size="sm" onClick={() => void chooseReviewWinner(entry, version)}>Keep this copy</Button></div>; })}</div><Button asChild size="sm" variant="outline"><Link href="/media-manager/settings/profiles">Change ranking rules instead</Link></Button></div>}
+                    {entry.issueTypes?.includes("IDENTITY_ISSUE") && (entry.versions || []).length > 0 && <div className="rounded border p-3 text-sm"><p className="font-medium">Affected provider file</p>{(entry.versions || []).slice(0, 3).map((version: any) => { const storage = version.fingerprint?.storage || {}; const filename = String(storage.path || version.id).split(/[\\/]/).pop(); return <p key={version.id} className="mt-1 break-all text-muted-foreground"><b>{storage.provider || "Provider"}:</b> {filename}</p>; })}</div>}
+                    {(entry.reasonCodes || []).includes("policy_tie") && <div className="space-y-2 rounded border border-amber-500/40 p-3"><p className="font-medium">Choose the one copy to keep</p><p className="text-xs text-muted-foreground">Only the equally ranked leading copies are shown. This choice applies only to this content on {provider.providers.find((item: any) => item.id === provider.providerId)?.name || provider.providerId}. The other copies become deletion candidates and still pass the normal safety checks.</p><div className="grid gap-2 lg:grid-cols-2">{(entry.versions || []).filter((version: any) => (version.reasons || []).some((reason: any) => reason.code === "policy_tie" && reason.facts?.leadingTie !== false)).map((version: any) => { const storage = version.fingerprint?.storage || {}; const video = version.fingerprint?.video || {}; const filename = String(storage.path || version.id).split(/[\\/]/).pop(); return <div key={version.id} className="flex items-start justify-between gap-3 rounded border p-3"><div className="min-w-0"><p className="break-words text-sm font-medium">{filename}</p><p className="text-xs text-muted-foreground">{video.resolution || "Resolution unknown"} · {storage.size ? `${Math.round(Number(storage.size) / 1_000_000)} MB` : "Size unknown"}</p></div><Button size="sm" onClick={() => void chooseReviewWinner(entry, version)}>Keep this copy</Button></div>; })}</div><Button asChild size="sm" variant="outline"><Link href="/media-manager/settings/profiles">Change ranking rules instead</Link></Button></div>}
                     {entry.organizerReview && entry.decision !== "dismissed" && <IdentityResolver reviewId={entry.organizerReview.id} identity={entry.identity} initialQuery={entry.title} initialType={entry.kind === "episode" ? "tv" : "movie"} initialYear={entry.year} existingOverride={entry.organizerReview.override} actionLabel={entry.organizerReview.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />}
                     <div className="flex flex-wrap gap-2">
                       {entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "accepted" }, entry.organizerReview)}><Check className="mr-2 h-4 w-4" />Accept as detected</Button><Button size="sm" variant="destructive" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "dismissed" }, entry.organizerReview)}><X className="mr-2 h-4 w-4" />Dismiss</Button><Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry.organizerReview)}><RefreshCw className="mr-2 h-4 w-4" />Retry / Resume</Button></>)}
@@ -1144,8 +1173,8 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                   </CardContent>
                 </Card>
               ))}
-              {review.entries && review.entries.filter((entry: any) => !identityOnly || entry.issueTypes?.includes("IDENTITY_ISSUE")).length === 0 && (
-                <Card><CardContent className="p-6 text-sm text-muted-foreground">No review items match the selected filter.</CardContent></Card>
+              {review.entries && visibleReviewEntries.length === 0 && (
+                <Card><CardContent className="p-6 text-sm text-muted-foreground">{focusedReviewGroupId ? "This item is no longer in the selected provider's Review queue." : "No review items match the selected filter."}</CardContent></Card>
               )}
             </div>
           )}
@@ -1158,7 +1187,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
           <DetailPanel item={selected} onClose={() => setSelected(null)} onReviewAction={requestReviewAction} onSaved={() => { void loadReview(); setSelected(null); }} />
         </DialogContent>
       </Dialog>}
-      {confirmation && <ConfirmationDialog open={Boolean(confirmation)} onOpenChange={(open) => !open && setConfirmation(null)} title={confirmation.title} description={confirmation.description} context={confirmation.context} confirmLabel={confirmation.confirmLabel} variant={confirmation.variant} onConfirm={async () => { await confirmation.onConfirm(); setConfirmation(null); }} />}
+      {confirmation && <ConfirmationDialog open={Boolean(confirmation)} onOpenChange={(open) => !open && setConfirmation(null)} title={confirmation.title} description={confirmation.description} context={confirmation.context} confirmLabel={confirmation.confirmLabel} variant={confirmation.variant} onConfirm={async () => { const action = confirmation.onConfirm; setConfirmation(null); void action(); }} />}
     </div>
   );
 }
@@ -1988,10 +2017,10 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
         <Card id="media-manager-retention" className="scroll-mt-20">
           <CardHeader><CardTitle>Retention</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm">
-            <p className="text-muted-foreground">One version wins. Size is a final tie-breaker only when resolution and detected audio-language sets are equivalent.</p>
+            <p className="text-muted-foreground">One version wins. After mandatory audio and subtitle requirements pass, size is the final tie-breaker between equally ranked files at the same resolution.</p>
             <label className="flex items-center gap-2"><input type="checkbox" checked={policy.preferCompletePack === true} onChange={(event) => setPolicy((current: any) => ({ ...current, preferCompletePack: event.target.checked }))} /> Prefer complete packs during delete impact analysis</label>
             {retentionProfile && <div className="grid gap-2 rounded border p-3 sm:grid-cols-[1fr_auto] sm:items-end">
-              <label className="grid gap-1 text-xs"><span>When resolution and audio languages are equivalent</span><select className="rounded border bg-background p-2 text-sm" value={retentionProfile.sizePreference || "IGNORE"} onChange={(event) => updateProfile(retentionProfileIndex, { sizePreference: event.target.value as Profile["sizePreference"] })}><option value="LARGER">Keep larger file</option><option value="SMALLER">Keep smaller file</option><option value="IGNORE">Do not use size</option></select></label>
+              <label className="grid gap-1 text-xs"><span>For equally ranked files at the same resolution</span><select className="rounded border bg-background p-2 text-sm" value={retentionProfile.sizePreference || "IGNORE"} onChange={(event) => updateProfile(retentionProfileIndex, { sizePreference: event.target.value as Profile["sizePreference"] })}><option value="LARGER">Keep larger file</option><option value="SMALLER">Keep smaller file</option><option value="IGNORE">Do not use size</option></select></label>
               <label className="grid gap-1 text-xs"><span>Minimum size difference %</span><input className="w-28 rounded border bg-background p-2 text-sm" type="number" min="0" max="100" value={retentionProfile.minimumSizeDifferencePercent ?? 0} onChange={(event) => updateProfile(retentionProfileIndex, { minimumSizeDifferencePercent: Math.max(0, Number(event.target.value) || 0) })} /></label>
             </div>}
           </CardContent>

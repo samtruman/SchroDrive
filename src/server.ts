@@ -413,8 +413,13 @@ export function startServer() {
       const refreshJob = result.executed ? startVersionManagerScan(providerId) : undefined;
       return res.json({ ok: true, policyDryRun, mode, refreshJob, ...result });
     } catch (error: any) {
-      if (providerId && providerItemId) recordVersionManagerDeleteAudit({ provider: providerId, providerItemId, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "FAILED", detail: error?.message || "Delete execution failed" });
-      return res.status(409).json({ ok: false, policyDryRun, mode, error: error?.message || "Delete execution failed" });
+      const providerTimedOut = !dryRun && (error?.code === "ECONNABORTED" || /timeout/i.test(String(error?.message || "")));
+      const refreshJob = providerTimedOut && providerId ? startVersionManagerScan(providerId) : undefined;
+      const detail = providerTimedOut
+        ? "Provider response timed out; deletion outcome is unknown. An inventory refresh was started and the delete must not be retried until reconciliation completes."
+        : error?.message || "Delete execution failed";
+      if (providerId && providerItemId) recordVersionManagerDeleteAudit({ provider: providerId, providerItemId, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: providerTimedOut ? "UNKNOWN" : "FAILED", detail });
+      return res.status(providerTimedOut ? 504 : 409).json({ ok: false, policyDryRun, mode, outcome: providerTimedOut ? "UNKNOWN" : "FAILED", refreshJob, error: detail });
     }
   });
 
@@ -446,8 +451,8 @@ export function startServer() {
       const snapshot = getLatestVersionManagerSnapshot(provider.id);
       const group = snapshot?.groups.find((candidate: any) => candidate.id === groupId);
       const version = group?.versions.find((candidate: any) => candidate.id === versionId);
-      const tied = group?.versions.some((candidate: any) => candidate.reasons?.some((reason: any) => reason.code === "policy_tie"));
-      if (!group || !version || !tied) return res.status(409).json({ ok: false, error: "The selected version is not part of an active ranking tie" });
+      const tied = version?.reasons?.some((reason: any) => reason.code === "policy_tie" && reason.facts?.leadingTie !== false);
+      if (!group || !version || !tied) return res.status(409).json({ ok: false, error: "The selected version is not one of the leading tied copies" });
       const winner = saveManualRetentionWinner(provider.id, groupId, versionId);
       return res.json({ ok: true, provider: provider.id, winner });
     } catch (error: any) { return res.status(400).json({ ok: false, error: error?.message || "Unable to save manual winner" }); }

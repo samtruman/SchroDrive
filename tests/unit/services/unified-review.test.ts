@@ -64,6 +64,25 @@ describe("unified Media Manager review queue", () => {
     expect(result.entries[0].allowedActions).toEqual(["DETAILS"]);
   });
 
+  test("exposes the provider filename and identity action for an unidentified policy item", () => {
+    const unidentified = group({
+      identity: { title: "", normalizedTitle: "", kind: "unknown", confidence: 0.2, source: "provider", resolutionStatus: "uncertain" },
+      versions: [{
+        ...(group().versions[0] as any),
+        id: "unidentified-v",
+        fingerprint: {
+          ...(group().versions[0] as any).fingerprint,
+          storage: { provider: "alldebrid", torrentId: "123", path: "/shows/Unknown.Release.1080p.mkv" },
+        },
+        reasons: [{ code: "identity_uncertain", message: "Identity uncertain", facts: {} }],
+      }] as any,
+    });
+    const [entry] = buildUnifiedReviewQueue([unidentified]).entries;
+    expect(entry.sourceBasename).toBe("Unknown.Release.1080p.mkv");
+    expect(entry.allowedActions).toContain("RESOLVE_IDENTITY");
+    expect(entry.allowIdentityActions).toBe(true);
+  });
+
   test("deduplicates Organizer and policy issues for the same canonical identity", () => {
     const identity = { title: "Example", normalizedTitle: "example", year: 2024, kind: "movie" as const, confidence: 0.98, source: "provider" as const, resolutionStatus: "resolved" as const, tmdbId: "100" };
     const policy = group({ identity, versions: [{ ...(group().versions[0] as any), id: "same-v", fingerprint: { ...(group().versions[0] as any).fingerprint, identity }, reasons: [{ code: "recoverability_unknown", message: "Recoverability unknown", facts: {} }] }] as any });

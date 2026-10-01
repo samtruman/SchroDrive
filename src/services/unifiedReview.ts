@@ -202,11 +202,15 @@ export function buildUnifiedReviewQueue(groups: VersionGroup[], organizerReviews
     const state = states.includes("NOT_RECOVERABLE") ? "NOT_RECOVERABLE" : states.includes("UNKNOWN") ? "UNKNOWN" : "RECOVERABLE";
     const sources = [...new Set(reviewVersions.map((version) => version.fingerprint.storage.recoverability?.source || (version.fingerprint.storage.infoHash ? "INFOHASH" : "UNKNOWN")))];
     const fallback = reviewVersions.map((version) => `${version.fingerprint.storage.provider}:${version.fingerprint.storage.torrentId}:${version.fingerprint.storage.fileId || ""}`).sort().join("|");
+    const sourcePath = reviewVersions[0]?.fingerprint.storage.path;
+    const sourceBasename = sourcePath?.split(/[\\/]/).pop() || sourcePath;
     add({
       key: keyForIdentity(group.identity, fallback), identity: group.identity, title: group.identity.title, year: group.identity.year, kind: group.identity.kind,
       season: group.identity.season, episode: group.identity.episode, issueTypes, reasonCodes, blockers: [...new Set(reviewVersions.flatMap((version) => version.reasons.map((reason) => reason.message)))],
       policyDecision: "REVIEW", recoverability: { status: state, sources }, identityResolutionStatus: identityStatus, versionGroupId: group.id,
-      versionIds: reviewVersions.map((version) => version.id), versions: reviewVersions, allowedActions: ["DETAILS"], allowIdentityActions: false,
+      sourceBasename, sourcePath,
+      versionIds: reviewVersions.map((version) => version.id), versions: reviewVersions,
+      allowedActions: hasIdentity ? ["RESOLVE_IDENTITY", "DETAILS"] : ["DETAILS"], allowIdentityActions: hasIdentity,
     });
   }
   const result = [...entries.values()];

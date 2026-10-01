@@ -34,7 +34,8 @@ export function applyManualRetentionWinners(groups: VersionGroup[], providerId: 
     if (!override) return group;
     const selected = group.versions.find((version) => version.id === override.versionId);
     const isTie = group.versions.some((version) => version.reasons.some((reason) => reason.code === "policy_tie"));
-    if (!selected || !isTie) return group;
+    const selectedIsLeadingTie = selected?.reasons.some((reason) => reason.code === "policy_tie" && reason.facts?.leadingTie !== false);
+    if (!selected || !isTie || !selectedIsLeadingTie) return group;
     return {
       ...group,
       versions: group.versions.map((version) => {

@@ -79,7 +79,7 @@ export interface VersionProfile {
   scoring?: Record<string, number>;
   /** Structured scoring rules; `scoring` remains for backwards compatibility. */
   scoringRules?: ScoringRule[];
-  /** Final tie-breaker after language and technical ranking. */
+  /** Final tie-breaker between otherwise equally ranked versions at the same resolution. */
   sizePreference?: "LARGER" | "SMALLER" | "IGNORE";
   /** Ignore insignificant size differences when applying the size tie-breaker. */
   minimumSizeDifferencePercent?: number;
@@ -584,8 +584,6 @@ function compareForProfile(left: VersionEvaluation, right: VersionEvaluation, pr
   const preference = profile.sizePreference || "IGNORE";
   if (preference === "IGNORE") return 0;
   if (left.fingerprint.video.resolution !== right.fingerprint.video.resolution) return 0;
-  const audioLanguages = (version: VersionEvaluation) => [...new Set(version.fingerprint.audio.map((stream) => normalizeLanguage(stream.language)))].sort().join(",");
-  if (audioLanguages(left) !== audioLanguages(right)) return 0;
   const leftSize = Number(left.fingerprint.storage.size || 0);
   const rightSize = Number(right.fingerprint.storage.size || 0);
   if (!leftSize || !rightSize || leftSize === rightSize) return 0;
@@ -618,11 +616,18 @@ export function evaluateVersionGroups(versions: VersionRecord[], profiles = defa
     const activeProfiles = profiles.filter((profile) => profile.enabled && (profile.target !== "DIRECT_PLAY" || policy.enableRemote));
     const evaluations = members.map((version): VersionEvaluation => ({ ...version, decision: "REVIEW", evaluations: activeProfiles.map((profile) => evaluateProfile(version, profile)), reasons: [] }));
     const tiedProfiles = new Set<string>();
+    const leadingTiedVersionIds = new Set<string>();
     for (const profile of activeProfiles) {
       const eligible = evaluations.filter((version) => version.fingerprint.identity.confidence >= 0.65 && version.evaluations.find((evaluation) => evaluation.profileId === profile.id)?.eligible);
       const ordered = [...eligible].sort((a, b) => compareForProfile(a, b, profile));
       const winner = ordered.length > 1 && compareForProfile(ordered[0], ordered[1], profile) === 0 ? undefined : ordered[0];
-      if (ordered.length > 1 && !winner) tiedProfiles.add(profile.id);
+      if (ordered.length > 1 && !winner) {
+        tiedProfiles.add(profile.id);
+        for (const version of ordered) {
+          if (compareForProfile(ordered[0], version, profile) !== 0) break;
+          leadingTiedVersionIds.add(version.id);
+        }
+      }
       if (winner) {
         winner.decision = "KEEP";
         winner.satisfiesProfiles = [...new Set([...(winner.satisfiesProfiles || []), profile.id])];
@@ -649,7 +654,7 @@ export function evaluateVersionGroups(versions: VersionRecord[], profiles = defa
         version.reasons.push({
           code: tiedProfiles.size ? "policy_tie" : hasHardRequirementFailure ? "hard_requirement_failed" : "identity_uncertain",
           message: tiedProfiles.size ? "The configured policy cannot distinguish the leading versions" : hasHardRequirementFailure ? "A mandatory requirement failed; operator review is required" : "Identity confidence is insufficient for an automatic candidate decision",
-          facts: { confidence: version.fingerprint.identity.confidence },
+          facts: { confidence: version.fingerprint.identity.confidence, leadingTie: leadingTiedVersionIds.has(version.id) },
         });
       }
     }

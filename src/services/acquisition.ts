@@ -120,6 +120,7 @@ export type RetentionGapType = "NO_UNIQUE_WINNER" | "REQUIREMENTS_NOT_MET" | "ID
 
 export interface RetentionGap {
   id: string;
+  versionGroupId: string;
   contentIdentity: ContentIdentity;
   mediaType: "movie" | "tv";
   season?: number;
@@ -178,6 +179,7 @@ export function deriveRetentionGaps(groups: VersionGroup[], profiles: VersionPro
     }
     return [{
       id: `gap:${group.id}:${profile.id}`,
+      versionGroupId: group.id,
       contentIdentity: group.identity,
       mediaType,
       season: group.identity.season,
