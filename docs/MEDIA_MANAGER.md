@@ -74,10 +74,14 @@ Executor. The persisted Safety setting controls `DRY_RUN` or `LIVE` mode. Both
 modes revalidate the snapshot, replacement, recoverability, protection, and
 current provider presence. Live mode additionally requires the exact
 ProviderItem confirmation. After a confirmed deletion the selected provider is
-rescanned and the UI refreshes its snapshot. A provider timeout is recorded as
-an unknown outcome and starts reconciliation; the operator must not retry until
-that refresh completes. `/api/version-manager/delete-preview` remains a
-compatibility policy projection.
+removed immediately from a new local canonical snapshot, so the UI does not
+wait for a full provider scan. A full reconciliation scan is started only when
+the provider response times out or the outcome is otherwise unknown; the
+operator must not retry until that refresh completes. The candidates view also
+supports selecting individual resources or all currently visible resources.
+Batch execution preflights the complete selection, deletes sequentially, stops
+on the first provider failure, and never includes protected or attention items.
+`/api/version-manager/delete-preview` remains a compatibility policy projection.
 
 `preferCompletePack` is persisted as a policy preference for future pack-aware
 impact evaluation. Pack completeness must be checked per episode before it

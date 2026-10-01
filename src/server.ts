@@ -38,7 +38,7 @@ import { evaluateVersionGroups, validateRule, validateScoringRules, versionManag
 import { loadMediaManagerInventory, type MediaManagerInventoryStats } from "./services/mediaManagerInventory";
 import { deriveRetentionGaps } from "./services/acquisition";
 import { SeerrAcquisitionAdapter } from "./services/seerrAcquisitionAdapter";
-import { getLatestVersionManagerRecords, getLatestVersionManagerScan, getLatestVersionManagerSnapshot, getVersionManagerPolicy, getVersionProfiles, saveVersionManagerPolicy, saveVersionManagerPreviewAudit, saveVersionManagerScan, saveVersionProfiles } from "./services/versionManagerStore";
+import { getLatestVersionManagerRecords, getLatestVersionManagerScan, getLatestVersionManagerSnapshot, getVersionManagerPolicy, getVersionProfiles, saveVersionManagerPolicy, saveVersionManagerPreviewAudit, saveVersionManagerScan, saveVersionManagerSnapshot, saveVersionProfiles } from "./services/versionManagerStore";
 import { probeVersionRecords } from "./services/versionManagerProbe";
 import { enrichVersionMetadata } from "./services/versionManagerMetadata";
 import { searchTmdbCandidates } from "./services/tmdbService";
@@ -52,7 +52,7 @@ import { buildUnifiedReviewQueue } from "./services/unifiedReview";
 import { getVersionManagerScanRuntimeStatus, getVersionManagerScanStatus, startVersionManagerScan } from "./services/versionManagerScanJob";
 import { createMagnetBackup, deleteMagnetBackup, getMagnetBackupSchedule, listMagnetBackups, magnetBackupDirectory, readMagnetBackup, saveMagnetBackupSchedule, startMagnetBackupScheduler, verifyMagnetBackup } from "./services/magnetBackup";
 import { buildDeleteImpact } from "./services/deleteImpact";
-import { executeVersionManagerDelete } from "./services/deleteExecutor";
+import { BatchDeleteExecutionError, executeVersionManagerDelete, executeVersionManagerDeleteBatch } from "./services/deleteExecutor";
 import { getMigrationJob, listMigrationJobs, startMigrationJob } from "./services/migrationJob";
 import { previewProviderMigration, rememberMigrationPreview, selectMigrationPreview, validateMigrationRoute } from "./services/providerMigrationPreview";
 import { discoverSeerrArrProfiles } from "./services/seerrArrProfiles";
@@ -84,6 +84,17 @@ function readVersionManagerGroups(providerId: string): { groups: any[]; snapshot
     snapshotPolicyHash: snapshot.policyHash,
     providerId,
   };
+}
+
+function reconcileDeletedProviderItems(providerId: string, groups: any[], deletedIds: string[]): string {
+  const deleted = new Set(deletedIds);
+  const profiles = getVersionProfiles();
+  const policy = getVersionManagerPolicy();
+  const records = groups.flatMap((group: any) => (group.versions || []))
+    .filter((version: any) => !(version.fingerprint?.storage?.provider === providerId && deleted.has(String(version.fingerprint?.storage?.torrentId))))
+    .map((version: any) => ({ id: version.id, fingerprint: version.fingerprint }));
+  const evaluated = applyManualRetentionWinners(evaluateVersionGroups(applyManualIdentityOverrides(records), profiles, policy), providerId);
+  return saveVersionManagerSnapshot(evaluated, profiles, { providerId, status: "VALID", policyHash: versionManagerPolicyHash(policy, profiles) });
 }
 
 function summarizeVersionManagerGroups(groups: any[], policy: ReturnType<typeof getVersionManagerPolicy>, profiles = getVersionProfiles()) {
@@ -410,8 +421,8 @@ export function startServer() {
       if (!provider) return res.status(400).json({ ok: false, error: `Provider ${providerId} is not configured` });
       const result = await executeVersionManagerDelete({ groups: snapshot.groups, provider, providerItemId, dryRun, confirmation: req.body?.confirmation });
       recordVersionManagerDeleteAudit({ provider: providerId, providerItemId, snapshotId: snapshot.snapshotId, mode, status: result.status, detail: dryRun ? "ProviderItem revalidated; provider delete was not called" : "ProviderItem deleted after final revalidation" });
-      const refreshJob = result.executed ? startVersionManagerScan(providerId) : undefined;
-      return res.json({ ok: true, policyDryRun, mode, refreshJob, ...result });
+      const reconciledSnapshotId = result.executed ? reconcileDeletedProviderItems(providerId, snapshot.groups, [providerItemId]) : undefined;
+      return res.json({ ok: true, policyDryRun, mode, reconciledSnapshotId, ...result });
     } catch (error: any) {
       const providerTimedOut = !dryRun && (error?.code === "ECONNABORTED" || /timeout/i.test(String(error?.message || "")));
       const refreshJob = providerTimedOut && providerId ? startVersionManagerScan(providerId) : undefined;
@@ -420,6 +431,34 @@ export function startServer() {
         : error?.message || "Delete execution failed";
       if (providerId && providerItemId) recordVersionManagerDeleteAudit({ provider: providerId, providerItemId, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: providerTimedOut ? "UNKNOWN" : "FAILED", detail });
       return res.status(providerTimedOut ? 504 : 409).json({ ok: false, policyDryRun, mode, outcome: providerTimedOut ? "UNKNOWN" : "FAILED", refreshJob, error: detail });
+    }
+  });
+
+  app.post("/api/version-manager/delete/execute-batch", async (req, res) => {
+    const providerId = String(req.body?.provider || "");
+    const providerItemIds = Array.isArray(req.body?.providerItemIds) ? req.body.providerItemIds.map(String) : [];
+    const requestedSnapshotId = String(req.body?.snapshotId || "");
+    const snapshot = providerId ? readVersionManagerGroups(providerId) : null;
+    const policyDryRun = getVersionManagerPolicy().safety?.deleteDryRun !== false;
+    const dryRun = policyDryRun || req.body?.dryRun === true;
+    const mode = dryRun ? "DRY_RUN" as const : "LIVE" as const;
+    try {
+      if (!providerId || providerItemIds.length === 0 || !requestedSnapshotId) return res.status(400).json({ ok: false, error: "provider, providerItemIds and snapshotId are required" });
+      if (!snapshot) return res.status(503).json({ ok: false, error: "No valid inventory snapshot is available; start a scan" });
+      if (snapshot.snapshotId !== requestedSnapshotId) return res.status(409).json({ ok: false, error: "Inventory changed; reload Delete before continuing" });
+      const provider = registry.get(providerId);
+      if (!provider) return res.status(400).json({ ok: false, error: `Provider ${providerId} is not configured` });
+      const result = await executeVersionManagerDeleteBatch({ groups: snapshot.groups, provider, providerItemIds, dryRun, confirmation: req.body?.confirmation });
+      result.results.forEach((item) => recordVersionManagerDeleteAudit({ provider: providerId, providerItemId: item.providerItemId, snapshotId: snapshot.snapshotId, mode, status: item.status, detail: dryRun ? "Batch dry run revalidated; provider delete was not called" : "ProviderItem deleted by confirmed batch after final revalidation" }));
+      const reconciledSnapshotId = result.executed ? reconcileDeletedProviderItems(providerId, snapshot.groups, providerItemIds) : undefined;
+      return res.json({ ok: true, policyDryRun, mode, reconciledSnapshotId, ...result });
+    } catch (error: any) {
+      const batchError = error instanceof BatchDeleteExecutionError ? error : undefined;
+      const providerTimedOut = !dryRun && (error?.cause?.code === "ECONNABORTED" || error?.code === "ECONNABORTED" || /timeout/i.test(String(error?.message || "")));
+      for (const id of batchError?.completedIds || []) recordVersionManagerDeleteAudit({ provider: providerId, providerItemId: id, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "DELETED", detail: "ProviderItem deleted before the batch stopped" });
+      if (batchError?.failedProviderItemId) recordVersionManagerDeleteAudit({ provider: providerId, providerItemId: batchError.failedProviderItemId, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: providerTimedOut ? "UNKNOWN" : "FAILED", detail: providerTimedOut ? "Provider response timed out; outcome unknown" : error.message });
+      const refreshJob = providerId && ((batchError?.completedIds.length || 0) > 0 || providerTimedOut) ? startVersionManagerScan(providerId) : undefined;
+      return res.status(providerTimedOut ? 504 : 409).json({ ok: false, policyDryRun, mode, outcome: providerTimedOut ? "UNKNOWN" : "FAILED", completedIds: batchError?.completedIds || [], failedProviderItemId: batchError?.failedProviderItemId, refreshJob, error: providerTimedOut ? "Batch stopped because the provider timed out. The last outcome is unknown; wait for reconciliation before retrying." : error?.message || "Batch delete failed" });
     }
   });
 

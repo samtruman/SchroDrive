@@ -706,6 +706,8 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const [focusedReviewGroupId, setFocusedReviewGroupId] = useState("");
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null);
   const [deleteBusy, setDeleteBusy] = useState("");
+  const [selectedDeleteIds, setSelectedDeleteIds] = useState<Set<string>>(new Set());
+  const [hiddenDeletedIds, setHiddenDeletedIds] = useState<Set<string>>(new Set());
   const [deleteNotice, setDeleteNotice] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const reviewQueue = useJson<any>(`/api/version-manager/review?status=pending&${providerQuery}`, Boolean(provider.providerId));
@@ -729,6 +731,8 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     `/api/version-manager/delete?scope=${encodeURIComponent(deleteScope)}&q=${encodeURIComponent(query)}&${providerQuery}`,
     (preset === "delete-preview" || preset === "delete") && Boolean(provider.providerId),
   );
+  useEffect(() => { setSelectedDeleteIds(new Set()); setHiddenDeletedIds(new Set()); }, [provider.providerId, deleteScope, query]);
+  const visibleDeleteItems = (deleteImpact.data?.items || []).filter((item: any) => !hiddenDeletedIds.has(`${item.provider}:${item.providerItemId}`));
   async function waitForRefresh(job: any) {
     if (!job?.id) return;
     for (let attempt = 0; attempt < 180; attempt++) {
@@ -751,11 +755,21 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       const body = await readJsonResponse<any>(response, dryRun ? "Dry-run validation" : "Provider deletion");
       if (body.executed) {
         setDeleteNotice(`Deleted ${item.provider}:${item.providerItemId}. Updating this provider library…`);
-        await waitForRefresh(body.refreshJob);
+        setHiddenDeletedIds((current) => new Set([...current, key]));
+        setSelectedDeleteIds((current) => { const next = new Set(current); next.delete(key); return next; });
+        void (async () => {
+          try {
+            await waitForRefresh(body.refreshJob);
+            await Promise.all([deleteImpact.reload(), deletePreview.reload()]);
+            setHiddenDeletedIds(new Set());
+            setDeleteNotice(`Deleted ${item.provider}:${item.providerItemId}. Provider library updated.`);
+          } catch (value: any) { setDeleteError(value.message || "Background provider refresh failed"); }
+        })();
+        return;
       }
       await deleteImpact.reload();
       await deletePreview.reload();
-      setDeleteNotice(body.executed ? `Deleted ${item.provider}:${item.providerItemId}. Provider library updated.` : `Dry run passed for ${item.provider}:${item.providerItemId}. No provider data was deleted.`);
+      setDeleteNotice(`Dry run passed for ${item.provider}:${item.providerItemId}. No provider data was deleted.`);
     } catch (value: any) {
       setDeleteError(value.message || "Delete action failed");
     } finally { setDeleteBusy(""); }
@@ -764,6 +778,44 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     const dryRun = deleteImpact.data?.dryRun !== false;
     const gib = Number(item.physicalSize || 0) / 1024 / 1024 / 1024;
     setConfirmation({ title: dryRun ? "Run delete simulation?" : "Delete this ProviderItem?", description: dryRun ? "Dry run is enabled. SchröDrive will repeat every safety and provider check, but it cannot call the provider delete API." : "This is a real provider deletion. The current snapshot, replacement, protection and provider presence will be checked again immediately before deletion.", context: <div className="space-y-1"><p><b>Provider:</b> {item.provider}</p><p><b>ProviderItem:</b> {item.providerItemId}</p><p><b>Physical size:</b> {gib ? `${gib.toFixed(2)} GiB` : "unknown"}</p></div>, confirmLabel: dryRun ? "Run dry run" : "Delete ProviderItem", variant: dryRun ? "secondary" : "destructive", onConfirm: () => executeDelete(item) });
+  }
+  async function executeBulkDelete(items: any[]) {
+    const dryRun = deleteImpact.data?.dryRun !== false;
+    const providerItemIds = items.map((item) => String(item.providerItemId));
+    setDeleteBusy("batch");
+    setDeleteNotice("");
+    setDeleteError("");
+    try {
+      const response = await fetch("/api/version-manager/delete/batch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: provider.providerId, providerItemIds, snapshotId: deleteImpact.data?.snapshotId, dryRun, confirmation: dryRun ? undefined : JSON.stringify(providerItemIds) }) });
+      const body = await readJsonResponse<any>(response, dryRun ? "Batch dry-run validation" : "Batch provider deletion");
+      if (body.executed) {
+        const keys = items.map((item) => `${item.provider}:${item.providerItemId}`);
+        setHiddenDeletedIds((current) => new Set([...current, ...keys]));
+        setSelectedDeleteIds(new Set());
+        setDeleteNotice(`Deleted ${providerItemIds.length} ProviderItems. Updating this provider library in the background…`);
+        void (async () => {
+          try {
+            await waitForRefresh(body.refreshJob);
+            await Promise.all([deleteImpact.reload(), deletePreview.reload()]);
+            setHiddenDeletedIds(new Set());
+            setDeleteNotice(`Deleted ${providerItemIds.length} ProviderItems. Provider library updated.`);
+          } catch (value: any) { setDeleteError(value.message || "Background provider refresh failed"); }
+        })();
+        return;
+      }
+      await Promise.all([deleteImpact.reload(), deletePreview.reload()]);
+      setSelectedDeleteIds(new Set());
+      setDeleteNotice(`Dry run passed for ${providerItemIds.length} ProviderItems. No provider data was deleted.`);
+    } catch (value: any) {
+      setDeleteError(value.message || "Batch delete failed");
+    } finally { setDeleteBusy(""); }
+  }
+  function requestBulkDelete() {
+    const items = visibleDeleteItems.filter((item: any) => selectedDeleteIds.has(`${item.provider}:${item.providerItemId}`));
+    if (!items.length) return;
+    const dryRun = deleteImpact.data?.dryRun !== false;
+    const totalGiB = items.reduce((total: number, item: any) => total + Number(item.physicalSize || 0), 0) / 1024 / 1024 / 1024;
+    setConfirmation({ title: dryRun ? `Validate ${items.length} selected resources?` : `Delete ${items.length} selected ProviderItems?`, description: dryRun ? "Dry run is enabled. Every selected resource will be revalidated, but no provider delete API will be called." : "This is a real batch deletion on the selected provider. The complete selection is preflighted first; deletion then stops on the first provider error and starts reconciliation.", context: <div className="space-y-1"><p><b>Provider:</b> {provider.providerId}</p><p><b>Selected:</b> {items.length} ProviderItems</p><p><b>Total physical size:</b> {totalGiB ? `${totalGiB.toFixed(2)} GiB` : "unknown"}</p></div>, confirmLabel: dryRun ? "Run batch dry run" : `Delete ${items.length} selected`, variant: dryRun ? "secondary" : "destructive", onConfirm: () => executeBulkDelete(items) });
   }
   const reviewPreview = useJson<any>(
     `/api/version-manager/preview?${providerQuery}`,
@@ -977,15 +1029,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       )}
       {(preset === "delete" || preset === "delete-preview") && (
         <>
-          <Card className="border-amber-500/50">
-            <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
-              <div>
-                <p className="font-semibold">Delete · impact analysis</p>
-                <p className="text-sm text-muted-foreground">{deleteImpact.data?.dryRun !== false ? "Dry run is enabled: actions revalidate the physical resource against the provider without deleting it." : "Live mode is enabled: eligible resources can be deleted only after final revalidation and explicit confirmation."}</p>
-              </div>
-              <StatusBadge value={deleteImpact.data?.dryRun !== false ? "DRY RUN" : "LIVE"} />
-            </CardContent>
-          </Card>
+          <div className="flex justify-end"><Badge variant={deleteImpact.data?.dryRun !== false ? "secondary" : "destructive"}>{deleteImpact.data?.dryRun !== false ? "DRY RUN · validation only" : "LIVE · final revalidation + confirmation"}</Badge></div>
           <div className="flex flex-wrap items-center gap-2"><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, release, filename or provider item…" /><select value={deleteScope} onChange={(event) => setDeleteScope(event.target.value)} className="rounded border bg-background p-2 text-sm"><option value="candidates">Delete candidates · physically eligible</option><option value="protected">Protected / Not deletable</option><option value="attention">Needs attention</option></select></div>
           <ErrorBox error={deletePreview.error || deleteImpact.error || deleteError} />
           {deleteNotice && <p className="rounded border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm">{deleteNotice}</p>}
@@ -996,9 +1040,10 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                 <Stat label="Versions" value={deletePreview.data?.counts?.versions ?? "—"} />
                 <Stat label="Retained" value={deletePreview.data?.counts?.KEEP ?? "—"} />
                 <Stat label="Logical candidates" value={deletePreview.data?.counts?.DELETE_CANDIDATE ?? "—"} detail="individual versions" />
-                <Stat label="Physical resources" value={deleteImpact.data?.items?.length ?? "—"} detail={deleteScope === "candidates" ? "eligible in this view" : deleteScope === "protected" ? "protected in this view" : "need attention"} />
+                <Stat label="Physical resources" value={deleteImpact.data ? visibleDeleteItems.length : "—"} detail={deleteScope === "candidates" ? "eligible in this view" : deleteScope === "protected" ? "protected in this view" : "need attention"} />
               </div>
-              <DeleteImpactCards items={deleteImpact.data?.items || []} scope={deleteScope} dryRun={deleteImpact.data?.dryRun !== false} busyId={deleteBusy} onDetails={setSelected} onDelete={requestDelete} />
+              {deleteScope === "candidates" && visibleDeleteItems.length > 0 && <div className="flex flex-wrap items-center gap-2 rounded-lg border p-3"><Button size="sm" variant="outline" disabled={Boolean(deleteBusy)} onClick={() => setSelectedDeleteIds(new Set(visibleDeleteItems.map((item: any) => `${item.provider}:${item.providerItemId}`)))}>Select all visible</Button><Button size="sm" variant="ghost" disabled={Boolean(deleteBusy) || selectedDeleteIds.size === 0} onClick={() => setSelectedDeleteIds(new Set())}>Clear</Button><span className="text-sm text-muted-foreground">{selectedDeleteIds.size} selected</span><Button size="sm" variant={deleteImpact.data?.dryRun !== false ? "secondary" : "destructive"} disabled={Boolean(deleteBusy) || selectedDeleteIds.size === 0} onClick={requestBulkDelete}>{deleteBusy === "batch" ? deleteImpact.data?.dryRun !== false ? "Validating selection…" : "Deleting selection…" : deleteImpact.data?.dryRun !== false ? "Validate selected · dry run" : "Delete selected"}</Button></div>}
+              <DeleteImpactCards items={visibleDeleteItems} scope={deleteScope} dryRun={deleteImpact.data?.dryRun !== false} busyId={deleteBusy} selectedIds={selectedDeleteIds} onToggleSelected={(item, selected) => setSelectedDeleteIds((current) => { const next = new Set(current); const key = `${item.provider}:${item.providerItemId}`; if (selected) next.add(key); else next.delete(key); return next; })} onDetails={setSelected} onDelete={requestDelete} />
             </>
           )}
         </>

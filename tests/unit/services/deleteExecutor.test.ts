@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { executeVersionManagerDelete } from "../../../src/services/deleteExecutor";
+import { BatchDeleteExecutionError, executeVersionManagerDelete, executeVersionManagerDeleteBatch } from "../../../src/services/deleteExecutor";
 
 function version(id: string, torrentId: string, decision: "KEEP" | "DELETE_CANDIDATE") {
   return {
@@ -16,6 +16,10 @@ function version(id: string, torrentId: string, decision: "KEEP" | "DELETE_CANDI
 
 function groups() {
   return [{ id: "movie", identity: { title: "Synthetic title", kind: "movie" }, versions: [version("candidate", "remove-me", "DELETE_CANDIDATE"), version("winner", "keep-me", "KEEP")] }] as any;
+}
+
+function batchGroups() {
+  return [{ id: "movie", identity: { title: "Synthetic title", kind: "movie" }, versions: [version("candidate-a", "remove-a", "DELETE_CANDIDATE"), version("candidate-b", "remove-b", "DELETE_CANDIDATE"), version("winner", "keep-me", "KEEP")] }] as any;
 }
 
 function provider(present = true) {
@@ -60,5 +64,29 @@ describe("version manager delete executor", () => {
     const protectedGroups = [{ id: "movie", identity: { title: "Synthetic title", kind: "movie" }, versions: [version("candidate", "shared", "DELETE_CANDIDATE"), version("protected", "shared", "KEEP")] }] as any;
     await expect(executeVersionManagerDelete({ groups: protectedGroups, provider: source, providerItemId: "shared", dryRun: true })).rejects.toThrow("no longer physically eligible");
     expect(source.deleteTorrent).toHaveBeenCalledTimes(0);
+  });
+
+  test("batch dry run preflights every selected item with one provider listing", async () => {
+    const source = provider();
+    source.listTorrents = mock(async () => [{ id: "remove-a" }, { id: "remove-b" }]);
+    const result = await executeVersionManagerDeleteBatch({ groups: batchGroups(), provider: source, providerItemIds: ["remove-a", "remove-b"], dryRun: true });
+    expect(result).toMatchObject({ status: "VALIDATED", executed: false });
+    expect(source.listTorrents).toHaveBeenCalledTimes(1);
+    expect(source.deleteTorrent).toHaveBeenCalledTimes(0);
+  });
+
+  test("batch live mode stops on the first provider failure and reports completed items", async () => {
+    const source = provider();
+    source.listTorrents = mock(async () => [{ id: "remove-a" }, { id: "remove-b" }]);
+    source.deleteTorrent = mock(async (id: string) => { if (id === "remove-b") throw new Error("fixture timeout"); });
+    const ids = ["remove-a", "remove-b"];
+    try {
+      await executeVersionManagerDeleteBatch({ groups: batchGroups(), provider: source, providerItemIds: ids, dryRun: false, confirmation: JSON.stringify(ids) });
+      throw new Error("expected batch failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(BatchDeleteExecutionError);
+      expect((error as BatchDeleteExecutionError).completedIds).toEqual(["remove-a"]);
+      expect((error as BatchDeleteExecutionError).failedProviderItemId).toBe("remove-b");
+    }
   });
 });
