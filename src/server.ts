@@ -50,7 +50,7 @@ import { migrationRouteLevel, providerMigrationCapabilities } from "./services/p
 import { listMigrationAudit, listVersionManagerDeleteAudit, recordAcquisitionAudit, recordMigrationAudit, recordVersionManagerDeleteAudit } from "./core/db";
 import { buildUnifiedReviewQueue } from "./services/unifiedReview";
 import { getVersionManagerScanRuntimeStatus, getVersionManagerScanStatus, startVersionManagerScan } from "./services/versionManagerScanJob";
-import { createMagnetBackup, listMagnetBackups, magnetBackupDirectory, readMagnetBackup, startMagnetBackupScheduler, verifyMagnetBackup } from "./services/magnetBackup";
+import { createMagnetBackup, deleteMagnetBackup, getMagnetBackupSchedule, listMagnetBackups, magnetBackupDirectory, readMagnetBackup, saveMagnetBackupSchedule, startMagnetBackupScheduler, verifyMagnetBackup } from "./services/magnetBackup";
 import { buildDeleteImpact } from "./services/deleteImpact";
 import { executeVersionManagerDelete } from "./services/deleteExecutor";
 import { getMigrationJob, listMigrationJobs, startMigrationJob } from "./services/migrationJob";
@@ -456,7 +456,11 @@ export function startServer() {
 
   /** Read-only magnet backup snapshots. These contain provider references, never media bytes. */
   app.get("/api/version-manager/magnet-backup", (req, res) => {
-    res.json({ ok: true, readOnly: true, storageDirectory: magnetBackupDirectory(), backups: listMagnetBackups(typeof req.query.provider === "string" ? req.query.provider : undefined) });
+    res.json({ ok: true, readOnly: true, storageDirectory: magnetBackupDirectory(), schedule: getMagnetBackupSchedule(), backups: listMagnetBackups(typeof req.query.provider === "string" ? req.query.provider : undefined) });
+  });
+  app.put("/api/version-manager/magnet-backup", (req, res) => {
+    try { return res.json({ ok: true, schedule: saveMagnetBackupSchedule(req.body || {}) }); }
+    catch (error: any) { return res.status(400).json({ ok: false, error: error?.message || "Invalid backup schedule" }); }
   });
   app.post("/api/version-manager/magnet-backup", async (req, res) => {
     try {
@@ -471,6 +475,10 @@ export function startServer() {
     const document = readMagnetBackup(String(req.params.id));
     if (!document) return res.status(404).json({ ok: false, error: "Magnet backup not found" });
     return res.json({ ok: true, readOnly: true, integrity: verifyMagnetBackup(String(req.params.id)), document });
+  });
+  app.delete("/api/version-manager/magnet-backup/:id", (req, res) => {
+    try { return res.json({ ok: true, deleted: deleteMagnetBackup(String(req.params.id)) }); }
+    catch (error: any) { return res.status(error?.message === "Backup not found" ? 404 : 409).json({ ok: false, error: error?.message || "Backup could not be deleted" }); }
   });
 
   /**
