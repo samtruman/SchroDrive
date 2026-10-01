@@ -43,4 +43,14 @@ describe("version manager policy persistence", () => {
       saveVersionManagerPolicy(original);
     }
   });
+
+  test("persists the delete dry-run safety gate", () => {
+    const original = getVersionManagerPolicy();
+    try {
+      saveVersionManagerPolicy({ ...original, safety: { ...original.safety!, deleteDryRun: false } });
+      expect(getVersionManagerPolicy().safety?.deleteDryRun).toBe(false);
+    } finally {
+      saveVersionManagerPolicy(original);
+    }
+  });
 });

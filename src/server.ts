@@ -47,11 +47,12 @@ import { exportMigrationLibrary, normalizeMigrationExportMode, resolveProviderIt
 import { analyzeMigrationImport, executeMigrationImportBulk, executeMigrationImportItem, getRecoverableManifestItem, migrationAuditOutcome } from "./services/migrationImporter";
 import { aggregateMigrationJobs, effectiveMigrationStatus } from "./services/migrationState";
 import { migrationRouteLevel, providerMigrationCapabilities } from "./services/providerMigrationCapabilities";
-import { listMigrationAudit, recordAcquisitionAudit, recordMigrationAudit } from "./core/db";
+import { listMigrationAudit, listVersionManagerDeleteAudit, recordAcquisitionAudit, recordMigrationAudit, recordVersionManagerDeleteAudit } from "./core/db";
 import { buildUnifiedReviewQueue } from "./services/unifiedReview";
 import { getVersionManagerScanRuntimeStatus, getVersionManagerScanStatus, startVersionManagerScan } from "./services/versionManagerScanJob";
 import { createMagnetBackup, listMagnetBackups, magnetBackupDirectory, readMagnetBackup, startMagnetBackupScheduler, verifyMagnetBackup } from "./services/magnetBackup";
 import { buildDeleteImpact } from "./services/deleteImpact";
+import { executeVersionManagerDelete } from "./services/deleteExecutor";
 import { getMigrationJob, listMigrationJobs, startMigrationJob } from "./services/migrationJob";
 import { previewProviderMigration, rememberMigrationPreview, selectMigrationPreview, validateMigrationRoute } from "./services/providerMigrationPreview";
 import { discoverSeerrArrProfiles } from "./services/seerrArrProfiles";
@@ -235,9 +236,9 @@ export function startServer() {
     const evaluated = readVersionManagerGroups();
     res.json({
       ok: true,
-      enabled: false,
-      mode: "dry-run",
-      deleteExecutor: "not_implemented",
+      enabled: true,
+      mode: policy.safety?.deleteDryRun !== false ? "DRY_RUN" : "LIVE",
+      deleteExecutor: "enabled",
       policy,
       policyHash: versionManagerPolicyHash(policy, profiles),
       profiles,
@@ -340,21 +341,51 @@ export function startServer() {
       const evaluatedAt = new Date().toISOString();
       const policyHash = versionManagerPolicyHash(policy, profiles);
       saveVersionManagerPreviewAudit({ policyHash, evaluatedAt, contentCount: counts.contents, versionGroupCount: counts.versionGroups, versionCount: counts.versions, keepCount: counts.KEEP, deleteCandidateCount: counts.DELETE_CANDIDATE, reviewCount: counts.REVIEW, primaryMissing: counts.primaryMissing, remoteMissing: counts.remoteMissing });
-      return res.json({ ok: true, readOnly: true, mode: "dry-run", deleteExecutor: "not_implemented", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, evaluatedAt, policyVersion: policy.policyVersion || "1", policyHash, counts, groups, performance: { totalMs: Date.now() - startedAt, source: "persisted-snapshot" } });
+      const dryRun = policy.safety?.deleteDryRun !== false;
+      return res.json({ ok: true, readOnly: dryRun, mode: dryRun ? "DRY_RUN" : "LIVE", deleteExecutor: "enabled", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, evaluatedAt, policyVersion: policy.policyVersion || "1", policyHash, counts, groups, performance: { totalMs: Date.now() - startedAt, source: "persisted-snapshot" } });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message || "Delete preview failed" });
     }
   });
 
-  /** Read-only physical delete-unit impact. The provider executor remains disabled. */
+  /** Physical delete-unit impact. Execution mode is controlled by the persisted safety flag. */
   app.get("/api/version-manager/delete", (_req, res) => {
     try {
       const snapshot = readVersionManagerGroups();
       if (!snapshot) return res.status(503).json({ ok: false, snapshotAvailable: false, error: "No valid inventory snapshot is available; start a scan" });
       const query = typeof _req.query.q === "string" ? _req.query.q : "";
       const scope = typeof _req.query.scope === "string" ? _req.query.scope : "all";
-      return res.json({ ok: true, readOnly: true, executorEnabled: false, scope, snapshotId: snapshot.snapshotId, items: buildDeleteImpact(snapshot.groups, query, scope) });
+      const dryRun = getVersionManagerPolicy().safety?.deleteDryRun !== false;
+      return res.json({ ok: true, readOnly: dryRun, executorEnabled: true, dryRun, mode: dryRun ? "DRY_RUN" : "LIVE", scope, snapshotId: snapshot.snapshotId, items: buildDeleteImpact(snapshot.groups, query, scope) });
     } catch (error: any) { return res.status(500).json({ ok: false, error: error?.message || "Delete impact unavailable" }); }
+  });
+
+  app.get("/api/version-manager/delete/history", (_req, res) => {
+    try { return res.json({ ok: true, items: listVersionManagerDeleteAudit(200) }); }
+    catch (error: any) { return res.status(500).json({ ok: false, error: error?.message || "Delete history unavailable" }); }
+  });
+
+  app.post("/api/version-manager/delete/execute", async (req, res) => {
+    const providerId = String(req.body?.provider || "");
+    const providerItemId = String(req.body?.providerItemId || "");
+    const requestedSnapshotId = String(req.body?.snapshotId || "");
+    const snapshot = readVersionManagerGroups();
+    const policyDryRun = getVersionManagerPolicy().safety?.deleteDryRun !== false;
+    const dryRun = policyDryRun || req.body?.dryRun === true;
+    const mode = dryRun ? "DRY_RUN" as const : "LIVE" as const;
+    try {
+      if (!providerId || !providerItemId || !requestedSnapshotId) return res.status(400).json({ ok: false, error: "provider, providerItemId and snapshotId are required" });
+      if (!snapshot) return res.status(503).json({ ok: false, error: "No valid inventory snapshot is available; start a scan" });
+      if (snapshot.snapshotId !== requestedSnapshotId) return res.status(409).json({ ok: false, error: "Inventory changed; reload Delete before continuing" });
+      const provider = registry.get(providerId);
+      if (!provider) return res.status(400).json({ ok: false, error: `Provider ${providerId} is not configured` });
+      const result = await executeVersionManagerDelete({ groups: snapshot.groups, provider, providerItemId, dryRun, confirmation: req.body?.confirmation });
+      recordVersionManagerDeleteAudit({ provider: providerId, providerItemId, snapshotId: snapshot.snapshotId, mode, status: result.status, detail: dryRun ? "ProviderItem revalidated; provider delete was not called" : "ProviderItem deleted after final revalidation" });
+      return res.json({ ok: true, policyDryRun, mode, ...result });
+    } catch (error: any) {
+      if (providerId && providerItemId) recordVersionManagerDeleteAudit({ provider: providerId, providerItemId, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "FAILED", detail: error?.message || "Delete execution failed" });
+      return res.status(409).json({ ok: false, policyDryRun, mode, error: error?.message || "Delete execution failed" });
+    }
   });
 
   /** Read-only operator queue combining Organizer and policy/recoverability review. */
@@ -659,6 +690,7 @@ export function startServer() {
         preferCompletePack: req.body.policy?.preferCompletePack === true,
         policyVersion: typeof req.body.policy?.policyVersion === "string" ? req.body.policy.policyVersion : "1",
         safety: {
+          deleteDryRun: req.body.policy?.safety?.deleteDryRun !== false,
           requireRecoverableBeforeDelete: req.body.policy?.safety?.requireRecoverableBeforeDelete !== false,
           allowDeleteWhenIdentityUncertain: req.body.policy?.safety?.allowDeleteWhenIdentityUncertain === true,
           allowDeleteWhenMetadataIncomplete: req.body.policy?.safety?.allowDeleteWhenMetadataIncomplete === true,

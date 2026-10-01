@@ -265,6 +265,18 @@ function runMigrations(database: Database): void {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_version_manager_items_scan
       ON version_manager_items (scan_id, decision)`,
+    `CREATE TABLE IF NOT EXISTS version_manager_delete_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL,
+      provider_item_id TEXT NOT NULL,
+      snapshot_id TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      status TEXT NOT NULL,
+      detail TEXT,
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_version_manager_delete_audit_item
+      ON version_manager_delete_audit (provider, provider_item_id, created_at)`,
     `CREATE TABLE IF NOT EXISTS version_manager_probe_cache (
       cache_key TEXT PRIMARY KEY,
       path TEXT NOT NULL,
@@ -367,6 +379,31 @@ export function recordAcquisitionAudit(record: AcquisitionAuditRecord): void {
   } catch (error: any) {
     console.error(`[${new Date().toISOString()}][db] acquisition audit error: ${error?.message}`);
   }
+}
+
+export interface VersionManagerDeleteAuditRecord {
+  provider: string;
+  providerItemId: string;
+  snapshotId: string;
+  mode: "DRY_RUN" | "LIVE";
+  status: string;
+  detail?: string;
+  createdAt?: string;
+}
+
+export function recordVersionManagerDeleteAudit(record: VersionManagerDeleteAuditRecord): void {
+  getDb().prepare(`INSERT INTO version_manager_delete_audit
+    (provider, provider_item_id, snapshot_id, mode, status, detail, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(
+    record.provider, record.providerItemId, record.snapshotId, record.mode,
+    record.status, record.detail ?? null, record.createdAt || new Date().toISOString(),
+  );
+}
+
+export function listVersionManagerDeleteAudit(limit = 200): VersionManagerDeleteAuditRecord[] {
+  const rows = getDb().prepare(`SELECT provider, provider_item_id, snapshot_id, mode, status, detail, created_at
+    FROM version_manager_delete_audit ORDER BY id DESC LIMIT ?`).all(Math.max(1, Math.min(limit, 1000))) as any[];
+  return rows.map((row) => ({ provider: row.provider, providerItemId: row.provider_item_id, snapshotId: row.snapshot_id, mode: row.mode, status: row.status, detail: row.detail || undefined, createdAt: row.created_at }));
 }
 
 export interface MigrationAuditRecord {

@@ -56,7 +56,7 @@ export function buildDeleteImpact(groups: VersionGroup[], query = "", scope = "a
     if (item.onlyCopy) item.reasons.push("ONLY COPY — No alternative version identified");
     if (item.protectedByKeep) { item.state = "PARTIALLY_REDUNDANT"; item.reasons.push("PROTECTED — ProviderItem contains a KEEP version"); }
     else if (item.alternativeVersions.length) item.reasons.push(`Alternative KEEP versions on ${new Set(item.alternativeVersions.map((version) => version.providerItemId)).size} other ProviderItem(s)`);
-    if (!item.reasons.length) item.reasons.push("ProviderItem is the physical delete unit; executor is disabled");
+    if (!item.reasons.length) item.reasons.push("ProviderItem is the physical delete unit; final provider revalidation is required");
     if (!item.protectedByKeep && (item.onlyCopy || !item.versions.some(version => version.decision === "DELETE_CANDIDATE"))) item.state = "BLOCKED";
   }
   return [...result.values()].filter(item => {
