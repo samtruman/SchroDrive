@@ -69,8 +69,7 @@ async function execute(job: MigrationJob, items: ImportPlanItem[]): Promise<void
       onProgress: (progress) => { job.processed = progress.processed; job.imported = progress.imported; job.skipped = progress.skipped; job.failed = progress.failed; job.updatedAt = new Date().toISOString(); save(job); },
     });
     for (const item of result.results) if (item.infoHash) {
-      const outcome = migrationAuditOutcome(item.status === "SKIPPED_ALREADY_PRESENT" ? "ALREADY_PRESENT" : "READY_TO_IMPORT", item.providerItemId || "");
-      recordMigrationAudit({ sourceProvider: job.sourceProvider, targetProvider: job.targetProvider, infoHash: item.infoHash, initialStatus: "READY_TO_IMPORT", revalidationStatus: outcome.reconciliationStatus, executionStatus: outcome.executionStatus, targetProviderItemId: outcome.targetProviderItemId, reason: item.reason, retryCount: item.retryCount, importExecuted: item.importExecuted });
+      recordMigrationAudit({ sourceProvider: job.sourceProvider, targetProvider: job.targetProvider, infoHash: item.infoHash, initialStatus: "READY_TO_IMPORT", revalidationStatus: item.status === "SKIPPED_ALREADY_PRESENT" ? "ALREADY_PRESENT" : item.status, executionStatus: item.status, targetProviderItemId: item.providerItemId, reason: item.reason, retryCount: item.retryCount, importExecuted: item.status === "IMPORTED" || Boolean(item.importExecuted) });
     }
     job.result = result; job.status = result.systemicFailure || result.failed > 0 ? "PARTIAL" : "COMPLETED";
   } catch (error: any) { job.status = "FAILED"; job.error = error?.message || "Migration failed"; }

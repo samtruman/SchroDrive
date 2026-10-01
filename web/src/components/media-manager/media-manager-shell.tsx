@@ -21,6 +21,9 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { normalizeIdentitySearchPrefill } from "./identity-search-prefill";
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
+import { DeleteImpactCards, ReviewActionGuide } from "./operator-guidance";
+import { ProviderMigration } from "./provider-migration";
 import { ConfirmationDialog } from "./confirmation-dialog";
 
 type View = "overview" | "library" | "migration" | "settings";
@@ -268,7 +271,7 @@ function SectionNav({ view, reviewCount }: { view: View; reviewCount?: number })
   const links = [
     ["Overview", "/media-manager"],
     ["Library", "/media-manager/library"],
-    ["Backup & Migration", "/media-manager/migration/export"],
+    ["Backup & Migration", "/media-manager/migration"],
     ["Settings", "/media-manager/settings/profiles"],
   ] as const;
   return (
@@ -334,7 +337,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
     const storage = fingerprint.storage || {};
     const release = fingerprint.release || {};
     const audio = [...new Set((fingerprint.audio || []).map((item: any) => item.language).filter(Boolean))].join(", ");
-    return { fingerprint, video, storage, release, audio, name: leafName(storage.path || version.releaseName || version.filename) };
+    return { fingerprint, video, storage, release, audio, name: leafName(storage.path || version.files?.[0]?.path || version.releaseName || version.filename) };
   };
   const decisionVersions = versions.filter((version: any) => ["KEEP", "REVIEW", "DELETE_CANDIDATE"].includes(version.decision));
   const candidates = decisionVersions.filter((version: any) => version.decision === "DELETE_CANDIDATE");
@@ -431,7 +434,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
           <h3 className="mb-2 font-semibold">Policy / Decision</h3>
           <p><b>Decision:</b> <StatusBadge value={item.decision || versions[0]?.decision || "REVIEW"} /></p>
           <p className="mt-2"><b>Matched slot:</b> {versions.flatMap((version: any) => version.satisfiesProfiles || []).join(", ") || "none"}</p>
-          {candidates.length > 0 && <div className="mt-3 rounded border border-amber-500/50 bg-amber-500/5 p-3"><p className="font-semibold">Decision comparison</p>{candidates.map((version: any, index: number) => <div key={version.id || index} className="mt-2"><p><b>Delete candidate:</b> {versionDetails(version).name}</p><p className="text-xs text-muted-foreground">{(version.reasons || []).join(" · ") || "Policy marked this version as redundant or lower priority."}</p></div>)}{(keeps.length > 0 || item.alternativeVersions?.length > 0) && <div className="mt-2">{keeps.map((version: any, index: number) => <div key={version.id || index}><p><b>Kept instead:</b> {versionDetails(version).name}</p><p className="text-xs text-muted-foreground">{(version.reasons || []).join(" · ") || "Winning version for the matched retention slot."}</p></div>)}{item.alternativeVersions?.map((version: any, index: number) => <div key={version.id || index}><p><b>Alternative KEEP:</b> {version.title || "Content"} · ProviderItem {version.providerItemId}</p><p className="text-xs text-muted-foreground">{(version.reasons || []).join(" · ") || "Alternative KEEP version identified."}</p></div>)}</div>}</div>}
+          {candidates.length > 0 && <div className="mt-3 space-y-3 rounded border p-3"><p className="font-semibold">Decision comparison</p>{candidates.map((version: any) => <div key={version.id}><p><b>Candidate:</b> {versionDetails(version).name}</p><p>{(version.reasons || []).map((reason: any) => typeof reason === "string" ? reason : reason.message).join(" · ")}</p>{[...keeps, ...(item.alternativeVersions || [])].filter((keep: any) => !version.groupId || keep.groupId === version.groupId).map((keep: any) => <p key={keep.id}><b>Kept instead:</b> {versionDetails(keep).name}</p>)}</div>)}</div>}
           <p className="mt-2 text-muted-foreground">Winning profiles: {versions.flatMap((version: any) => version.satisfiesProfiles || []).join(", ") || "none"}</p>
           <div className="mt-2 space-y-1 text-xs text-muted-foreground">{versions.flatMap((version: any) => (version.reasons || []).map((reason: any) => <p key={`${version.id}-${reason.code}`}>• {reason.message}</p>))}</div>
         </section>
@@ -659,7 +662,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const [multipleVersions, setMultipleVersions] = useState(false);
   const [needsAttention, setNeedsAttention] = useState(false);
   const [sort, setSort] = useState("title");
-  const [deleteScope, setDeleteScope] = useState("all");
+  const [deleteScope, setDeleteScope] = useState("candidates");
   const [selected, setSelected] = useState<any>(null);
   const [reviewStatus, setReviewStatus] = useState<"pending" | "dismissed">("pending");
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null);
@@ -826,7 +829,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
           <Link href="/media-manager/library/delete">Delete</Link>
         </Button>
       </div>
-      {preset !== "review" && preset !== "delete-preview" && (
+      {preset !== "review" && preset !== "delete-preview" && preset !== "delete" && (
         <div className="grid gap-2 rounded-lg border p-3 sm:grid-cols-2 lg:grid-cols-5">
           <div className="relative">
             <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -893,14 +896,14 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
               <StatusBadge value="DRY RUN" />
             </CardContent>
           </Card>
-          <div className="flex flex-wrap items-center gap-2"><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, release, filename or provider item…" /><select value={deleteScope} onChange={(event) => setDeleteScope(event.target.value)} className="rounded border bg-background p-2 text-sm"><option value="all">All items</option><option value="candidates">Delete candidates</option><option value="attention">Needs attention</option></select></div>
+          <div className="flex flex-wrap items-center gap-2"><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, release, filename or provider item…" /><select value={deleteScope} onChange={(event) => setDeleteScope(event.target.value)} className="rounded border bg-background p-2 text-sm"><option value="protected">Protected / Not deletable — no candidates</option><option value="candidates">Delete candidates</option><option value="attention">Needs attention</option></select></div>
           <ErrorBox error={deletePreview.error} />
           {deletePreview.loading ? <p className="text-sm text-muted-foreground">Evaluating policy…</p> : (
             <>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 {Object.entries(deletePreview.data?.counts || {}).map(([label, value]) => <Stat key={label} label={label.replaceAll("_", " ")} value={String(value)} />)}
               </div>
-              <div className="space-y-2">{(deleteImpact.data?.items || []).slice(0, 200).map((item: any) => { const candidate = item.versions.find((version: any) => version.decision === "DELETE_CANDIDATE"); const kept = [...item.versions.filter((version: any) => version.decision === "KEEP"), ...(item.alternativeVersions || [])]; const title = candidate?.title || kept[0]?.title || "Unresolved content"; const versionLabel = (version: any) => `${version?.season !== undefined ? `S${String(version.season).padStart(2, "0")}E${String(version.episode || 0).padStart(2, "0")} · ` : ""}${version?.files?.[0]?.path?.split(/[\\/]/).pop() || "Version details unavailable"}`; return <Card key={`${item.provider}-${item.providerItemId}`} className="cursor-pointer transition-colors hover:border-primary/50" onClick={() => setSelected(item)} role="button" tabIndex={0} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelected(item); } }}><CardContent className="space-y-2 p-3"><div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-medium">{title}</p><p className="text-xs text-muted-foreground">{candidate ? "Candidate for removal" : "Protected KEEP resource — no removal candidate"} · {item.versions.length} physical-file references · {item.physicalSize ? `${Math.round(item.physicalSize / 1_000_000)} MB physical` : "size unknown"}</p></div><StatusBadge value={item.onlyCopy ? "ONLY COPY" : item.protectedByKeep ? "PROTECTED" : item.state === "READY" ? "ELIGIBLE" : "BLOCKED"} /></div><div className="rounded border border-destructive/20 bg-destructive/5 p-2 text-sm"><p className="font-medium">What would be removed?</p><p>{candidate ? versionLabel(candidate) : "Nothing — this physical resource contains only versions that must be kept."}</p><p className="text-xs text-muted-foreground">{candidate?.reasons?.join(" · ") || "No logical deletion candidate is present."}</p></div>{kept.length > 0 && <div className="rounded border border-emerald-500/30 bg-emerald-500/5 p-2 text-sm"><p className="font-medium">Kept instead</p><p>{versionLabel(kept[0])}</p><p className="text-xs text-muted-foreground">{kept[0]?.reasons?.join(" · ") || "Required by an enabled retention slot."}</p></div>}<div className="text-sm"><p className="font-medium">Physical deletion</p><p>{item.protectedByKeep ? "Protected from physical deletion" : item.onlyCopy ? "Blocked — only copy identified" : "Eligible in dry run; executor is disabled"}</p><p className="text-xs text-muted-foreground">{item.protectedByKeep ? "The same physical item also contains a version that must be kept." : item.reasons.join(" · ")}</p></div><details onClick={(event) => event.stopPropagation()} className="text-xs text-muted-foreground"><summary className="cursor-pointer">Technical details</summary><p className="mt-1">ProviderItem: {item.providerItemId}</p><p>Provider: {item.provider || "—"}</p><p>Physical references: {item.versions.length}</p></details></CardContent></Card>; })}</div>
+              <DeleteImpactCards items={deleteImpact.data?.items || []} scope={deleteScope} onDetails={setSelected} />
             </>
           )}
         </>
@@ -1018,6 +1021,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
             </select>
             <span className="text-xs text-muted-foreground">Dismissed items remain auditable and can be restored.</span>
           </div>
+          <ReviewActionGuide />
           <ErrorBox error={reviewError} />
           {!review ? (
             <p className="text-sm text-muted-foreground">
@@ -1036,6 +1040,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                       <div className="flex flex-wrap gap-1">{(entry.issueTypes || []).map((issue: string) => <StatusBadge key={issue} value={issue} />)}</div>
                     </div>
                     <p className="text-sm">{(entry.blockers || []).slice(0, 3).join(" · ") || "Review required"}</p>
+                    {!entry.organizerReview && <p className="text-sm text-muted-foreground">Open Details to inspect the blocker and resolve identity when available. Accept, Dismiss and Retry apply only to organizer review tasks. Recovery blockers require a fresh inventory scan after the provider issue is corrected.</p>}
                     {entry.organizerReview && entry.decision !== "dismissed" && <IdentityResolver reviewId={entry.organizerReview.id} identity={entry.identity} initialQuery={entry.title} initialType={entry.kind === "episode" ? "tv" : "movie"} initialYear={entry.year} existingOverride={entry.organizerReview.override} actionLabel={entry.organizerReview.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />}
                     <div className="flex flex-wrap gap-2">
                       {entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "accepted" }, entry.organizerReview)}><Check className="mr-2 h-4 w-4" />Accept as detected</Button><Button size="sm" variant="destructive" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "dismissed" }, entry.organizerReview)}><X className="mr-2 h-4 w-4" />Dismiss</Button><Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry.organizerReview)}><RefreshCw className="mr-2 h-4 w-4" />Retry / Resume</Button></>)}
@@ -1053,15 +1058,19 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
           )}
         </>
       )}
-      {selected && (
-        <DetailPanel item={selected} onClose={() => setSelected(null)} onReviewAction={requestReviewAction} onSaved={() => { void loadReview(); setSelected(null); }} />
-      )}
+      {selected && <Dialog open onOpenChange={(open) => !open && setSelected(null)}>
+        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-5xl" showCloseButton={false}>
+          <DialogTitle>Content details</DialogTitle>
+          <DialogDescription>Inspect the detected identity, versions, decision reasons and available actions.</DialogDescription>
+          <DetailPanel item={selected} onClose={() => setSelected(null)} onReviewAction={requestReviewAction} onSaved={() => { void loadReview(); setSelected(null); }} />
+        </DialogContent>
+      </Dialog>}
       {confirmation && <ConfirmationDialog open={Boolean(confirmation)} onOpenChange={(open) => !open && setConfirmation(null)} title={confirmation.title} description={confirmation.description} context={confirmation.context} confirmLabel={confirmation.confirmLabel} variant={confirmation.variant} onConfirm={async () => { await confirmation.onConfirm(); setConfirmation(null); }} />}
     </div>
   );
 }
 
-function Migration({ section = "export" }: { section?: string }) {
+function Migration({ section = "migration" }: { section?: string }) {
   const capabilities = useJson<any>("/api/version-manager/migration/capabilities");
   const [sourceProvider, setSourceProvider] = useState("alldebrid");
   const [targetProvider, setTargetProvider] = useState("realdebrid");
@@ -1164,9 +1173,10 @@ function Migration({ section = "export" }: { section?: string }) {
       <Header
         view="migration"
         title="Backup & Migration"
-        description="Portable export, safe import preview and migration history."
+        description="Migrate directly between providers, or use separate file import and export tools."
       />
       <div className="flex flex-wrap gap-2">
+        <Button asChild variant={section === "migration" ? "default" : "outline"}><Link href="/media-manager/migration">Provider migration</Link></Button>
         <Button asChild variant={section === "export" ? "default" : "outline"}>
           <Link href="/media-manager/migration/export">
           <Archive className="mr-2 h-4 w-4" />
@@ -1176,7 +1186,7 @@ function Migration({ section = "export" }: { section?: string }) {
         <Button asChild variant={section === "import" ? "default" : "outline"}>
           <Link href="/media-manager/migration/import">
           <FileUp className="mr-2 h-4 w-4" />
-          Migration Preview
+          Restore / Import file
           </Link>
         </Button>
         <Button asChild variant={section === "history" ? "default" : "outline"}>
@@ -1185,6 +1195,8 @@ function Migration({ section = "export" }: { section?: string }) {
           </Link>
         </Button>
       </div>
+      {section === "migration" && <ProviderMigration />}
+      {section !== "migration" && <>
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Provider capabilities</CardTitle>
@@ -1351,7 +1363,7 @@ function Migration({ section = "export" }: { section?: string }) {
       </Card>
       <Card id="import">
         <CardHeader>
-          <CardTitle className="text-base">Migration Preview</CardTitle>
+          <CardTitle className="text-base">Restore / Import file</CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
           {!importSupported && <ErrorBox error="Migration preview is unavailable for the selected target provider because its declared capabilities are unsupported." />}
@@ -1541,6 +1553,7 @@ function Migration({ section = "export" }: { section?: string }) {
           </div>
         </CardContent>
       </Card>
+      </>}
     </div>
   );
 }
@@ -1705,7 +1718,7 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
   function updateProfile(index: number, patch: Partial<Profile>) { setProfiles((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item)); }
   function addProfile() { const id = `custom-${Date.now()}`; setProfiles((current) => [...current, { id, name: "Custom profile", enabled: true, priority: 0, preferredResolution: "1080p", languagePolicy: { required: { values: [], mode: "ALL" }, preferred: [], original: false, scope: "AUDIO" }, sourceOrder: [], codecOrder: [], audioOrder: [], hardRequirements: { op: "AND", children: [] }, scoring: {}, acquisitionBehavior: "DISABLED" } as any]); }
   return (
-    <div className="mx-auto w-full max-w-7xl space-y-8 px-2">
+    <div className="w-full min-w-0 space-y-6" data-testid="media-manager-settings">
       <Header
         view="settings"
         title="Media Manager Settings"
@@ -1863,6 +1876,6 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
 export function MediaManagerShell({ view, section }: { view: View; section?: string }) {
   if (view === "overview") return <Overview />;
   if (view === "library") return <Library initialPreset={section || "all"} />;
-  if (view === "migration") return <Migration section={section || "export"} />;
+  if (view === "migration") return <Migration section={section || "migration"} />;
   return <SettingsView section={section || "profiles"} />;
 }

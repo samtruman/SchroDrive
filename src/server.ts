@@ -53,6 +53,7 @@ import { getVersionManagerScanRuntimeStatus, getVersionManagerScanStatus, startV
 import { createMagnetBackup, listMagnetBackups, readMagnetBackup, startMagnetBackupScheduler, verifyMagnetBackup } from "./services/magnetBackup";
 import { buildDeleteImpact } from "./services/deleteImpact";
 import { getMigrationJob, listMigrationJobs, startMigrationJob } from "./services/migrationJob";
+import { previewProviderMigration, rememberMigrationPreview, selectMigrationPreview, validateMigrationRoute } from "./services/providerMigrationPreview";
 import { discoverSeerrArrProfiles } from "./services/seerrArrProfiles";
 
 // ===========================================================================
@@ -540,15 +541,38 @@ export function startServer() {
     }
   });
 
+  /** Direct provider inventory reconciliation. No files or provider mutations. */
+  app.post("/api/version-manager/migration/preview", async (req, res) => {
+    try {
+      const source = registry.get(String(req.body?.sourceProvider || ""));
+      const target = registry.get(String(req.body?.targetProvider || ""));
+      if (!source || !target) return res.status(400).json({ ok: false, error: "Select a source and target provider" });
+      const audit = listMigrationAudit(10000).filter(entry => entry.sourceProvider === source.id && entry.targetProvider === target.id);
+      const plan = await previewProviderMigration(source, target, audit);
+      return res.json({ ok: true, ...rememberMigrationPreview(plan) });
+    } catch (error: any) { return res.status(400).json({ ok: false, error: error?.message || "Provider preview failed" }); }
+  });
+
   /** Starts the existing migration executor as a persistent asynchronous job. */
   app.post("/api/version-manager/migration/jobs", (req, res) => {
     try {
       if (req.body?.confirm !== "START_MIGRATION") return res.status(400).json({ ok: false, error: "Explicit START_MIGRATION confirmation is required" });
       const source = String(req.body?.sourceProvider || "").trim().toLowerCase();
       const target = String(req.body?.targetProvider || "").trim().toLowerCase();
-      const items = Array.isArray(req.body?.items) ? req.body.items : [];
+      let items = Array.isArray(req.body?.items) ? req.body.items : [];
       if (!source || !target) return res.status(400).json({ ok: false, error: "Source and target providers are required" });
+      let selection: ReturnType<typeof selectMigrationPreview> | undefined;
+      if (req.body?.previewId) {
+        const sourceProvider = registry.get(source), targetProvider = registry.get(target);
+        if (!sourceProvider || !targetProvider) return res.status(400).json({ ok: false, error: "Unknown providers" });
+        validateMigrationRoute(sourceProvider, targetProvider);
+        selection = selectMigrationPreview(String(req.body.previewId), source, target, req.body.selectedHashes,
+          listMigrationAudit(10000).filter(entry => entry.sourceProvider === source && entry.targetProvider === target));
+        if (selection.jobId) return res.json({ ok: true, job: getMigrationJob(selection.jobId) });
+        items = selection.items;
+      }
       const job = startMigrationJob(source, target, items);
+      selection?.markStarted(job.id);
       return res.status(202).json({ ok: true, readOnly: false, job, statusUrl: `/api/version-manager/migration/jobs/${encodeURIComponent(job.id)}` });
     } catch (error: any) { return res.status(503).json({ ok: false, error: error?.message || "Unable to start migration" }); }
   });
