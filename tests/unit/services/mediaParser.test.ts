@@ -36,6 +36,15 @@ describe("structured media parser", () => {
     expect(parsed.episode).toBe(1);
   });
 
+  test("prefers 1x01 episode notation over a trailing parenthesized year", () => {
+    const parsed = parseMediaFilename("Chernobyl 1x01 1-23-45 (2019) 1080p H265.mkv");
+    expect(parsed.status).toBe("matched");
+    expect(parsed.kind).toBe("episode");
+    expect(parsed.title).toBe("Chernobyl");
+    expect(parsed.season).toBe(1);
+    expect(parsed.episode).toBe(1);
+  });
+
   test("does not treat a four digit movie year as an anime episode", () => {
     const parsed = parseMediaFilename("Davos.1917.2160p.HDR.mkv");
     expect(parsed.kind).toBe("movie");

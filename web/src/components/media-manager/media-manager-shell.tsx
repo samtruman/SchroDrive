@@ -364,7 +364,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
             </p>
             <p>
               <b className="text-foreground">Type:</b>{" "}
-              {identity.mediaType || item.mediaType || "—"}
+              {identity.mediaType || identity.kind || item.mediaType || item.kind || "—"}
             </p>
             <p>
               <b className="text-foreground">TMDb:</b>{" "}
@@ -389,27 +389,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
           {review && onReviewAction && <div className="mt-4 flex flex-wrap gap-2">{review.decision === "dismissed" ? <Button size="sm" onClick={() => onReviewAction(review.id, { action: "retry" }, review)}>Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => onReviewAction(review.id, { decision: "accepted" }, review)}>Accept as detected</Button><Button size="sm" variant="outline" onClick={() => onReviewAction(review.id, { action: "retry" }, review)}>Retry / Resume</Button><Button size="sm" variant="destructive" onClick={() => onReviewAction(review.id, { decision: "dismissed" }, review)}>Dismiss</Button></>}</div>}
         </section>
         <section>
-          <h3 className="mb-2 font-semibold">Profiles</h3>
-          <div className="flex flex-wrap gap-2">
-            {(item.evaluations || item.profiles || []).map(
-              (profile: any, index: number) => (
-                <span
-                  key={profile.profileId || profile.id || index}
-                  className="rounded border px-2 py-1"
-                >
-                  {profile.profileName ||
-                    profile.name ||
-                    profile.profileId ||
-                    profile.id}
-                  :{" "}
-                  {profile.satisfied || profile.eligible
-                    ? "satisfied"
-                    : "missing"}
-                </span>
-              ),
-            )}
-          </div>
-          <h3 className="mb-2 mt-4 font-semibold">Versions</h3>
+          <h3 className="mb-2 font-semibold">Versions</h3>
           <div className="space-y-2">
             {versions.length ? (
               versions.map((version: any, index: number) => (
@@ -433,9 +413,8 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
         <section>
           <h3 className="mb-2 font-semibold">Policy / Decision</h3>
           <p><b>Decision:</b> <StatusBadge value={item.decision || versions[0]?.decision || "REVIEW"} /></p>
-          <p className="mt-2"><b>Matched slot:</b> {versions.flatMap((version: any) => version.satisfiesProfiles || []).join(", ") || "none"}</p>
           {candidates.length > 0 && <div className="mt-3 space-y-3 rounded border p-3"><p className="font-semibold">Decision comparison</p>{candidates.map((version: any) => <div key={version.id}><p><b>Candidate:</b> {versionDetails(version).name}</p><p>{(version.reasons || []).map((reason: any) => typeof reason === "string" ? reason : reason.message).join(" · ")}</p>{[...keeps, ...(item.alternativeVersions || [])].filter((keep: any) => !version.groupId || keep.groupId === version.groupId).map((keep: any) => <p key={keep.id}><b>Kept instead:</b> {versionDetails(keep).name}</p>)}</div>)}</div>}
-          <p className="mt-2 text-muted-foreground">Winning profiles: {versions.flatMap((version: any) => version.satisfiesProfiles || []).join(", ") || "none"}</p>
+          <p className="mt-2 text-muted-foreground">The retained version is the single best admissible version under the local retention policy.</p>
           <div className="mt-2 space-y-1 text-xs text-muted-foreground">{versions.flatMap((version: any) => (version.reasons || []).map((reason: any) => <p key={`${version.id}-${reason.code}`}>• {reason.message}</p>))}</div>
         </section>
         <section>
@@ -462,6 +441,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
 
 function Overview() {
   const status = useJson<any>("/api/version-manager/status");
+  const deleteCandidates = useJson<any>("/api/version-manager/delete?scope=candidates");
   const migration = useJson<any>("/api/version-manager/migration/state");
   const reviewQueue = useJson<any>("/api/version-manager/review?status=pending");
   const profiles = status.data?.profiles || [];
@@ -523,7 +503,7 @@ function Overview() {
       <Header
         view="overview"
         title="Media Manager"
-        description="Inventory, identity, versions, acquisition and recovery in one place."
+        description="Inventory, identity, one-version retention, review and provider migration in one place."
         reviewCount={identityIssues}
       />
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-4">
@@ -553,16 +533,8 @@ function Overview() {
           value={scan?.groupCount ?? evaluation?.counts?.contentCount ?? latestScan?.groupCount ?? "—"}
           detail="ContentIdentity / VersionGroup"
         />
-        <Stat
-          label="Profiles"
-          value={profiles.filter((profile: Profile) => profile.enabled).length}
-          detail="enabled"
-        />
-        <Stat
-          label="Acquisition"
-          value={migration.data?.effective?.readyToImport ?? "—"}
-          detail="effective ready"
-        />
+        <Stat label="Versions" value={evaluation?.counts?.versionCount ?? latestScan?.versionCount ?? "—"} detail="files evaluated" />
+        <Stat label="Needs review" value={evaluation?.counts?.reviewCount ?? latestScan?.reviewCount ?? "—"} detail="uncertain decisions" />
         <Stat label="Safety" value="DRY RUN" detail="Delete disabled" />
       </div>
       <Card>
@@ -581,14 +553,14 @@ function Overview() {
             <p className="mt-1 text-xs text-muted-foreground">Safety and policy blockers</p>
           </Link>
           <Link href="/media-manager/library/missing" className="rounded-md border p-3 transition-colors hover:border-primary">
-            <p className="text-sm text-muted-foreground">Missing</p>
-            <p className="mt-1 text-2xl font-semibold">{evaluation ? (evaluation.counts.primaryMissing || 0) + (evaluation.counts.remoteMissing || 0) : "—"}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Unsatisfied enabled profiles</p>
+            <p className="text-sm text-muted-foreground">No admissible version</p>
+            <p className="mt-1 text-2xl font-semibold">{evaluation ? evaluation.counts.primaryMissing || 0 : "—"}</p>
+            <p className="mt-1 text-xs text-muted-foreground">No version satisfies the active retention policy</p>
           </Link>
           <Link href="/media-manager/library/delete-preview" className="rounded-md border p-3 transition-colors hover:border-primary">
             <p className="text-sm text-muted-foreground">Delete candidates</p>
-            <p className="mt-1 text-2xl font-semibold">{evaluation?.counts?.deleteCandidateCount ?? latestScan?.deleteCandidateCount ?? "—"}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Read-only preview</p>
+            <p className="mt-1 text-2xl font-semibold">{deleteCandidates.loading ? "—" : deleteCandidates.data?.items?.length ?? "—"}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Physically eligible · read-only preview</p>
           </Link>
         </CardContent>
       </Card>
@@ -596,12 +568,12 @@ function Overview() {
       <div className="grid gap-4 lg:grid-cols-3">
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Profiles</CardTitle>
+            <CardTitle className="text-base">Retention policy</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            {profiles.map((profile: Profile) => (
+            {profiles.filter((profile: Profile) => profile.target !== "DIRECT_PLAY").map((profile: Profile) => (
               <div className="flex justify-between text-sm" key={profile.id}>
-                {profile.name || profile.id}
+                Local retention policy
                 <StatusBadge value={profile.enabled ? "ENABLED" : "DISABLED"} />
               </div>
             ))}
@@ -656,7 +628,6 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const [preset, setPreset] = useState("all");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
-  const [profile, setProfile] = useState("all");
   const [mediaType, setMediaType] = useState("all");
   const [decision, setDecision] = useState("all");
   const [multipleVersions, setMultipleVersions] = useState(false);
@@ -746,14 +717,6 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
         const text = JSON.stringify(group).toLowerCase();
         const identity = group.identity || {};
         const versions = group.versions || [];
-        const hasProfile =
-          profile === "all" ||
-          versions.some((version: any) =>
-            (version.evaluations || []).some(
-              (evaluation: any) =>
-                evaluation.profileId?.toLowerCase() === profile,
-            ),
-          );
         const type = String(
           identity.mediaType || group.mediaType || "",
         ).toLowerCase();
@@ -765,7 +728,6 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
           decision === "all" || text.toLowerCase().includes(decision);
         return (
           text.includes(query.toLowerCase()) &&
-          hasProfile &&
           (mediaType === "all" || (mediaType === "tv" ? isTv : !isTv)) &&
           hasStatus &&
           hasDecision &&
@@ -773,14 +735,15 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
           (!needsAttention || versions.some((version: any) => ["REVIEW", "DELETE_CANDIDATE"].includes(version.decision)))
         );
       }),
-    [preview.data, query, status, profile, mediaType, decision, multipleVersions, needsAttention],
+    [preview.data, query, status, mediaType, decision, multipleVersions, needsAttention],
   );
   const libraryRows = useMemo(() => {
     const rows = new Map<string, { kind: "movie" | "show" | "unknown"; title: string; year?: number; groups: any[] }>();
     for (const group of groups) {
       const identity = displayIdentity(group);
       const isEpisode = identity.kind === "episode";
-      const key = isEpisode && (identity.tmdbId || identity.tvdbId) ? `show:${identity.tmdbId || identity.tvdbId}` : `group:${group.id}`;
+      const showIdentity = identity.tmdbId || identity.tvdbId || String(identity.title || "unknown").normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+      const key = isEpisode ? `show:${showIdentity}` : `group:${group.id}`;
       const current: { kind: "movie" | "show" | "unknown"; title: string; year?: number; groups: any[] } = rows.get(key) || { kind: isEpisode ? "show" : identity.kind === "movie" ? "movie" : "unknown", title: identity.title || group.title || "Unidentified content", year: identity.year, groups: [] };
       current.groups.push(group);
       rows.set(key, current);
@@ -800,7 +763,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       <Header
         view="library"
         title="Library"
-        description="One operational view for content, missing profiles and review work."
+        description="Content first, with one winning version and every uncertain or protected case made explicit."
         reviewCount={identityIssueCount}
       />
       <div className="flex flex-wrap gap-2">
@@ -829,7 +792,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
           <Link href="/media-manager/library/delete">Delete</Link>
         </Button>
       </div>
-      {preset !== "review" && preset !== "delete-preview" && preset !== "delete" && (
+      {preset === "all" && (
         <div className="grid gap-2 rounded-lg border p-3 sm:grid-cols-2 lg:grid-cols-5">
           <div className="relative">
             <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -851,15 +814,6 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
             <option value="requested">Requested</option>
             <option value="processing">Processing</option>
             <option value="attention">Attention</option>
-          </select>
-          <select
-            className="rounded border bg-background p-2 text-sm"
-            value={profile}
-            onChange={(event) => setProfile(event.target.value)}
-          >
-            <option value="all">Profile: All</option>
-            <option value="primary">PRIMARY</option>
-            <option value="remote">REMOTE</option>
           </select>
           <select
             className="rounded border bg-background p-2 text-sm"
@@ -885,6 +839,12 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
           </select>
         </div>
       )}
+      {preset === "missing" && (
+        <div className="relative rounded-lg border p-3">
+          <Search className="absolute left-5 top-5.5 h-4 w-4 text-muted-foreground" />
+          <Input className="pl-8" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search content without an admissible version…" />
+        </div>
+      )}
       {(preset === "delete" || preset === "delete-preview") && (
         <>
           <Card className="border-amber-500/50">
@@ -901,7 +861,11 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
           {deletePreview.loading ? <p className="text-sm text-muted-foreground">Evaluating policy…</p> : (
             <>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-                {Object.entries(deletePreview.data?.counts || {}).map(([label, value]) => <Stat key={label} label={label.replaceAll("_", " ")} value={String(value)} />)}
+                <Stat label="Contents" value={deletePreview.data?.counts?.contents ?? "—"} />
+                <Stat label="Versions" value={deletePreview.data?.counts?.versions ?? "—"} />
+                <Stat label="Retained" value={deletePreview.data?.counts?.KEEP ?? "—"} />
+                <Stat label="Logical candidates" value={deletePreview.data?.counts?.DELETE_CANDIDATE ?? "—"} detail="individual versions" />
+                <Stat label="Physical resources" value={deleteImpact.data?.items?.length ?? "—"} detail={deleteScope === "candidates" ? "eligible in this view" : deleteScope === "protected" ? "protected in this view" : "need attention"} />
               </div>
               <DeleteImpactCards items={deleteImpact.data?.items || []} scope={deleteScope} onDetails={setSelected} />
             </>
@@ -942,7 +906,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
           <ErrorBox error={missing.error} />
           {missing.loading ? (
             <p className="text-sm text-muted-foreground">
-              Loading missing profiles…
+              Loading policy gaps…
             </p>
           ) : (
             <div className="space-y-3">
@@ -960,8 +924,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                           "Unknown content"}
                       </p>
                       <p className="text-xs text-muted-foreground">
-                        {item.contentIdentity?.mediaType || "—"} · profile{" "}
-                        {item.profileId || item.missingProfileId || "—"}
+                        {item.contentIdentity?.mediaType || "—"} · no admissible version for the active retention policy
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -983,9 +946,8 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
               {needs.length === 0 && (
                 <Card>
                   <CardContent className="p-6 text-sm text-muted-foreground">
-                    No unsatisfied enabled profile requirements were found in
-                    the current snapshot. Provider acquisition previews remain
-                    unavailable when the corresponding gateway is disabled.
+                    Every content item has an admissible retained version under
+                    the active local policy.
                   </CardContent>
                 </Card>
               )}
@@ -1197,6 +1159,7 @@ function Migration({ section = "migration" }: { section?: string }) {
       </div>
       {section === "migration" && <ProviderMigration />}
       {section !== "migration" && <>
+      {(section === "export" || section === "import") && <>
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Provider capabilities</CardTitle>
@@ -1240,6 +1203,8 @@ function Migration({ section = "migration" }: { section?: string }) {
         />
       </div>
       <ErrorBox error={state.error ? `Migration state is not calculated: ${state.error}` : ""} />
+      </>}
+      {section === "export" && <>
       <Card id="export">
         <CardHeader>
           <CardTitle className="text-base">Export</CardTitle>
@@ -1259,9 +1224,6 @@ function Migration({ section = "migration" }: { section?: string }) {
               >
                 <option>FULL</option>
                 <option>KEEP</option>
-                <option>PRIMARY</option>
-                <option>REMOTE</option>
-                <option>PRIMARY+REMOTE</option>
                 <option>SELECTED</option>
               </select>
             </label>
@@ -1361,6 +1323,8 @@ function Migration({ section = "migration" }: { section?: string }) {
           {(magnetBackups.data?.backups || []).slice(0, 5).map((backup: any) => <div className="flex flex-wrap justify-between gap-2 rounded border p-2 text-xs" key={backup.id}><span>{backup.mode} · {backup.itemCount} items</span><span>{backup.valid ? "VALID" : "INVALID"} · {backup.createdAt}</span></div>)}
         </CardContent>
       </Card>
+      </>}
+      {section === "import" &&
       <Card id="import">
         <CardHeader>
           <CardTitle className="text-base">Restore / Import file</CardTitle>
@@ -1457,6 +1421,8 @@ function Migration({ section = "migration" }: { section?: string }) {
           )}
         </CardContent>
       </Card>
+      }
+      {section === "history" && <>
       <Card id="history">
         <CardHeader>
           <CardTitle className="text-base">Jobs / History</CardTitle>
@@ -1553,6 +1519,7 @@ function Migration({ section = "migration" }: { section?: string }) {
           </div>
         </CardContent>
       </Card>
+      </>}
       </>}
     </div>
   );
@@ -1652,18 +1619,26 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
   const [saveError, setSaveError] = useState("");
   const [persistedSettings, setPersistedSettings] = useState("");
   const [impact, setImpact] = useState<any>(null);
-  const [requiredLanguagesInput, setRequiredLanguagesInput] = useState("");
-  const [preferredLanguagesInput, setPreferredLanguagesInput] = useState("");
+  const [requiredAudioInput, setRequiredAudioInput] = useState("");
+  const [preferredAudioInput, setPreferredAudioInput] = useState("");
+  const [requiredSubtitleInput, setRequiredSubtitleInput] = useState("");
+  const [preferredSubtitleInput, setPreferredSubtitleInput] = useState("");
   useEffect(() => {
     if (status.data?.profiles) {
       const nextProfiles = status.data.profiles as Profile[];
       const nextPolicy = status.data.policy || policy;
       const nextRetentionProfile = nextProfiles.find((profile) => profile.target === "QUALITY" && profile.enabled)
         || nextProfiles.find((profile) => profile.target !== "DIRECT_PLAY");
+      const languagePolicy = nextRetentionProfile?.languagePolicy || {};
+      const legacyTrack = { required: languagePolicy.required || { values: [], mode: "ALL" }, preferred: languagePolicy.preferred || [], original: languagePolicy.original === true, missingRequiredAction: languagePolicy.missingRequiredAction || "REVIEW" };
+      const audioPolicy = languagePolicy.audio || (languagePolicy.scope === "SUBTITLE" ? { required: { values: [], mode: "ALL" }, preferred: [], original: false } : legacyTrack);
+      const subtitlePolicy = languagePolicy.subtitles || (languagePolicy.scope === "SUBTITLE" ? legacyTrack : { required: { values: [], mode: "ALL" }, preferred: [] });
       setProfiles(nextProfiles);
       setPolicy(nextPolicy);
-      setRequiredLanguagesInput((nextRetentionProfile?.languagePolicy?.required?.values || []).join(", "));
-      setPreferredLanguagesInput((nextRetentionProfile?.languagePolicy?.preferred || []).join(", "));
+      setRequiredAudioInput((audioPolicy.required?.values || []).join(", "));
+      setPreferredAudioInput((audioPolicy.preferred || []).join(", "));
+      setRequiredSubtitleInput((subtitlePolicy.required?.values || []).join(", "));
+      setPreferredSubtitleInput((subtitlePolicy.preferred || []).join(", "));
       setPersistedSettings(JSON.stringify({ profiles: nextProfiles, policy: nextPolicy }));
     }
   }, [status.data]);
@@ -1724,6 +1699,20 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
   }
   function updateProfile(index: number, patch: Partial<Profile>) { setProfiles((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item)); }
   const parseLanguages = (value: string) => value.split(/[,;\n]/).map((item) => item.trim()).filter(Boolean);
+  function updateLanguageTrack(kind: "audio" | "subtitles", patch: Record<string, unknown>) {
+    if (!retentionProfile) return;
+    const languagePolicy = retentionProfile.languagePolicy || {};
+    const empty = { required: { values: [], mode: "ALL" }, preferred: [], ...(kind === "audio" ? { original: false } : {}), missingRequiredAction: "REVIEW" };
+    const legacy = { required: languagePolicy.required || empty.required, preferred: languagePolicy.preferred || [], original: languagePolicy.original === true, missingRequiredAction: languagePolicy.missingRequiredAction || "REVIEW" };
+    const fallback = kind === "audio"
+      ? (languagePolicy.scope === "SUBTITLE" ? empty : legacy)
+      : (languagePolicy.scope === "SUBTITLE" ? legacy : empty);
+    updateProfile(retentionProfileIndex, { languagePolicy: { ...languagePolicy, [kind]: { ...fallback, ...(languagePolicy[kind] || {}), ...patch } } } as any);
+  }
+  const currentLanguagePolicy = retentionProfile?.languagePolicy || {};
+  const legacyLanguageTrack = { required: currentLanguagePolicy.required || { values: [], mode: "ALL" }, preferred: currentLanguagePolicy.preferred || [], original: currentLanguagePolicy.original === true, missingRequiredAction: currentLanguagePolicy.missingRequiredAction || "REVIEW" };
+  const audioLanguagePolicy = currentLanguagePolicy.audio || (currentLanguagePolicy.scope === "SUBTITLE" ? { required: { values: [], mode: "ALL" }, preferred: [], original: false, missingRequiredAction: "REVIEW" } : legacyLanguageTrack);
+  const subtitleLanguagePolicy = currentLanguagePolicy.subtitles || (currentLanguagePolicy.scope === "SUBTITLE" ? legacyLanguageTrack : { required: { values: [], mode: "ALL" }, preferred: [], missingRequiredAction: "REVIEW" });
   return (
     <div className="w-full min-w-0 space-y-6" data-testid="media-manager-settings">
       <Header
@@ -1731,19 +1720,14 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
         title="Media Manager Settings"
         description="Configure local retention criteria and safety for files already present."
       />
-      <Card id="media-manager-policy-preview" className="scroll-mt-20">
-        <CardHeader><CardTitle className="text-base">Policy Preview &amp; Safety</CardTitle></CardHeader>
-        <CardContent className="space-y-3 text-sm">
-          <p className="text-muted-foreground">Preview the retention impact without rescanning providers or enabling Delete.</p>
-          <Button variant="outline" onClick={() => void previewImpact()}>Preview impact</Button>
-          {impact && <div className="rounded border bg-muted/20 p-3"><p className="font-medium">Read-only impact preview</p><p>Changed decisions: {impact.changed?.length || 0}. Proposed policy hash: {impact.proposed?.policyHash || "—"}</p></div>}
-        </CardContent>
-      </Card>
       <Card id="media-manager-profiles" className="scroll-mt-20">
-        <CardHeader>
-          <CardTitle className="text-base">Local Retention Policy</CardTitle>
-        </CardHeader>
+        <CardHeader><CardTitle className="text-base">How retention decides</CardTitle></CardHeader>
         <CardContent className="space-y-4">
+          <div className="grid gap-3 md:grid-cols-3">
+            <div className="rounded border p-3"><p className="font-medium">1 · Admissibility</p><p className="text-xs text-muted-foreground">Required audio, subtitles and additional mandatory rules decide whether a version may compete.</p></div>
+            <div className="rounded border p-3"><p className="font-medium">2 · One winner</p><p className="text-xs text-muted-foreground">Among admissible versions, language and resolution preferences select one KEEP. File size is used only for equivalent resolution and audio languages.</p></div>
+            <div className="rounded border p-3"><p className="font-medium">3 · Safe outcome</p><p className="text-xs text-muted-foreground">Uncertain evidence goes to Review. A losing version becomes a candidate only with a surviving replacement and all deletion protections satisfied.</p></div>
+          </div>
           {retentionProfile && (
             <div
               className="flex flex-wrap items-center justify-between gap-3 rounded border p-3"
@@ -1752,11 +1736,11 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
               <div>
                 <p className="font-medium">Current file retention</p>
                 <p className="text-xs text-muted-foreground">
-                  Evaluated locally on files already present; independent from ARR acquisition profiles
+                  Evaluated locally on files already present.
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-3 text-sm">
-                <label>Preferred resolution <input className="ml-1 w-24 rounded border bg-background p-1" value={retentionProfile.preferredResolution || ""} onChange={(event) => updateProfile(retentionProfileIndex, { preferredResolution: event.target.value })} /></label>
+                <label className="grid gap-1 text-xs"><span>Preferred resolution <span className="text-muted-foreground">(preference, not requirement)</span></span><input className="w-28 rounded border bg-background p-2 text-sm" value={retentionProfile.preferredResolution || ""} onChange={(event) => updateProfile(retentionProfileIndex, { preferredResolution: event.target.value })} /></label>
                 <label>
                 <input
                   type="checkbox"
@@ -1780,30 +1764,30 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
             )}
             {saveError && <span className="text-sm text-destructive">{saveError}</span>}
           </div>
-          {impact && <div className="rounded border bg-muted/20 p-3 text-sm"><p className="font-medium">Read-only impact preview</p><p>Changed decisions: {impact.changed?.length || 0}. Proposed policy hash: {impact.proposed?.policyHash || "—"}</p><p className="text-muted-foreground">The active configuration and inventory were not modified.</p></div>}
-          {retentionProfile && <div className="space-y-2 rounded border p-3"><p className="font-medium">Advanced ranking</p><p className="text-xs text-muted-foreground">Ranking runs only after hard requirements pass.</p><details className="rounded border p-2"><summary className="cursor-pointer text-sm">Custom scoring rules</summary><div className="mt-2 space-y-2">{(retentionProfile.scoringRules || []).map((rule, ruleIndex) => <ScoringRuleEditor key={ruleIndex} rule={rule} onChange={(next) => updateProfile(retentionProfileIndex, { scoringRules: (retentionProfile.scoringRules || []).map((item, itemIndex) => itemIndex === ruleIndex ? next : item) })} onRemove={() => updateProfile(retentionProfileIndex, { scoringRules: (retentionProfile.scoringRules || []).filter((_, itemIndex) => itemIndex !== ruleIndex) })} />)}<Button size="sm" variant="outline" onClick={() => updateProfile(retentionProfileIndex, { scoringRules: [...(retentionProfile.scoringRules || []), { op: "COMPARE", field: "resolution", operator: "equals", value: "2160p", weight: 0 }] })}>Add scoring rule</Button>{Object.keys(retentionProfile.scoring || {}).length > 0 && <p className="text-xs text-muted-foreground">Legacy field weights are preserved for compatibility; new rules use the structured editor above.</p>}</div></details></div>}
+          {impact && <div className="space-y-3 rounded border bg-muted/20 p-3 text-sm"><div><p className="font-medium">Read-only impact preview</p><p className="text-muted-foreground">Nothing was saved and no files were changed. {impact.changed?.length || 0} version decisions would change.</p></div><div className="grid gap-2 sm:grid-cols-3">{["KEEP", "DELETE_CANDIDATE", "REVIEW"].map((decision) => <div key={decision} className="rounded border p-2"><p className="text-xs text-muted-foreground">{decision.replaceAll("_", " ")}</p><p className="font-medium">{impact.current?.decisions?.[decision] || 0} → {impact.proposed?.decisions?.[decision] || 0}</p></div>)}</div></div>}
         </CardContent>
       </Card>
       <Card id="media-manager-languages" className="scroll-mt-20">
-        <CardHeader><CardTitle className="text-base">Languages</CardTitle></CardHeader>
+        <CardHeader><CardTitle className="text-base">Language requirements and preferences</CardTitle></CardHeader>
         <CardContent className="space-y-3 text-sm">
-          <p className="text-muted-foreground">Language rules drive local retention. Common aliases such as it/ita/italiano and en/eng/english are normalized; unknown language remains unknown.</p>
-          {retentionProfile && <div className="space-y-3 rounded border p-3">
-            <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-4">
-              <label className="grid gap-1 text-xs"><span>Required languages</span><input className="rounded border bg-background p-2 text-sm" aria-label="Required languages" placeholder="ita, eng" value={requiredLanguagesInput} onChange={(event) => { const value = event.target.value; setRequiredLanguagesInput(value); updateProfile(retentionProfileIndex, { languagePolicy: { ...(retentionProfile.languagePolicy || {}), required: { ...(retentionProfile.languagePolicy?.required || {}), values: parseLanguages(value) } } } as any); }} /></label>
-              <label className="grid gap-1 text-xs"><span>Required match</span><select className="rounded border bg-background p-2 text-sm" value={retentionProfile.languagePolicy?.required?.mode || "ALL"} onChange={(event) => updateProfile(retentionProfileIndex, { languagePolicy: { ...(retentionProfile.languagePolicy || {}), required: { ...(retentionProfile.languagePolicy?.required || {}), mode: event.target.value } } } as any)}><option value="ALL">All required</option><option value="ANY">Any required</option></select></label>
-              <label className="grid gap-1 text-xs"><span>Inspect</span><select className="rounded border bg-background p-2 text-sm" value={retentionProfile.languagePolicy?.scope || "AUDIO"} onChange={(event) => updateProfile(retentionProfileIndex, { languagePolicy: { ...(retentionProfile.languagePolicy || {}), scope: event.target.value } } as any)}><option value="AUDIO">Audio tracks</option><option value="SUBTITLE">Subtitle tracks</option><option value="AUDIO_OR_SUBTITLE">Audio or subtitles</option></select></label>
-              <label className="grid gap-1 text-xs"><span>If required language is missing</span><select className="rounded border bg-background p-2 text-sm" value={retentionProfile.languagePolicy?.missingRequiredAction || "REVIEW"} onChange={(event) => updateProfile(retentionProfileIndex, { languagePolicy: { ...(retentionProfile.languagePolicy || {}), missingRequiredAction: event.target.value } } as any)}><option value="REVIEW">Needs review</option><option value="DELETE_IF_REPLACED">Candidate only if replaced</option></select></label>
-              <label className="grid gap-1 text-xs md:col-span-2"><span>Preferred languages, in priority order</span><input className="rounded border bg-background p-2 text-sm" aria-label="Preferred languages" placeholder="ita, original, eng" value={preferredLanguagesInput} onChange={(event) => { const value = event.target.value; setPreferredLanguagesInput(value); updateProfile(retentionProfileIndex, { languagePolicy: { ...(retentionProfile.languagePolicy || {}), preferred: parseLanguages(value) } } as any); }} /></label>
-              <label className="flex items-center gap-2 self-end rounded border p-2"><input type="checkbox" checked={retentionProfile.languagePolicy?.original === true} onChange={(event) => updateProfile(retentionProfileIndex, { languagePolicy: { ...(retentionProfile.languagePolicy || {}), original: event.target.checked } } as any)} /> Prefer original-language audio</label>
-            </div>
-            <p className="text-xs text-muted-foreground">A non-compliant version becomes a candidate only when this is explicitly enabled and a compliant kept replacement satisfies the active retention policy. Otherwise it stays in Needs attention.</p>
+          <p className="text-muted-foreground">Audio and subtitle tracks are evaluated independently. Separate multiple languages with commas. Aliases such as it/ita/italiano and en/eng/english are normalized.</p>
+          {retentionProfile && <div className="grid gap-4 xl:grid-cols-2">
+            <div className="space-y-3 rounded border p-3"><div><p className="font-medium">Audio tracks</p><p className="text-xs text-muted-foreground">Mandatory languages determine admissibility; preferred languages help choose the single winner.</p></div><div className="grid gap-2 sm:grid-cols-2">
+              <label className="grid gap-1 text-xs"><span>Required audio languages</span><input className="rounded border bg-background p-2 text-sm" aria-label="Required audio languages" placeholder="ita, eng" value={requiredAudioInput} onChange={(event) => { const value = event.target.value; setRequiredAudioInput(value); updateLanguageTrack("audio", { required: { ...audioLanguagePolicy.required, values: parseLanguages(value) } }); }} /></label>
+              <label className="grid gap-1 text-xs"><span>Match</span><select className="rounded border bg-background p-2 text-sm" aria-label="Required audio match" value={audioLanguagePolicy.required?.mode || "ALL"} onChange={(event) => updateLanguageTrack("audio", { required: { ...audioLanguagePolicy.required, mode: event.target.value } })}><option value="ALL">All required</option><option value="ANY">Any required</option></select></label>
+              <label className="grid gap-1 text-xs sm:col-span-2"><span>Preferred audio languages, in order</span><input className="rounded border bg-background p-2 text-sm" aria-label="Preferred audio languages" placeholder="ita, original, eng" value={preferredAudioInput} onChange={(event) => { const value = event.target.value; setPreferredAudioInput(value); updateLanguageTrack("audio", { preferred: parseLanguages(value) }); }} /></label>
+              <label className="grid gap-1 text-xs"><span>If required audio is missing</span><select className="rounded border bg-background p-2 text-sm" aria-label="Missing required audio action" value={audioLanguagePolicy.missingRequiredAction || "REVIEW"} onChange={(event) => updateLanguageTrack("audio", { missingRequiredAction: event.target.value })}><option value="REVIEW">Needs review</option><option value="DELETE_IF_REPLACED">Candidate only with replacement</option></select></label>
+              <label className="flex items-center gap-2 self-end rounded border p-2"><input type="checkbox" checked={audioLanguagePolicy.original === true} onChange={(event) => updateLanguageTrack("audio", { original: event.target.checked })} /> Prefer original-language audio</label>
+            </div></div>
+            <div className="space-y-3 rounded border p-3"><div><p className="font-medium">Subtitle tracks</p><p className="text-xs text-muted-foreground">Subtitle requirements never satisfy an audio requirement, and audio never satisfies a subtitle requirement.</p></div><div className="grid gap-2 sm:grid-cols-2">
+              <label className="grid gap-1 text-xs"><span>Required subtitle languages</span><input className="rounded border bg-background p-2 text-sm" aria-label="Required subtitle languages" placeholder="ita, eng" value={requiredSubtitleInput} onChange={(event) => { const value = event.target.value; setRequiredSubtitleInput(value); updateLanguageTrack("subtitles", { required: { ...subtitleLanguagePolicy.required, values: parseLanguages(value) } }); }} /></label>
+              <label className="grid gap-1 text-xs"><span>Match</span><select className="rounded border bg-background p-2 text-sm" aria-label="Required subtitle match" value={subtitleLanguagePolicy.required?.mode || "ALL"} onChange={(event) => updateLanguageTrack("subtitles", { required: { ...subtitleLanguagePolicy.required, mode: event.target.value } })}><option value="ALL">All required</option><option value="ANY">Any required</option></select></label>
+              <label className="grid gap-1 text-xs sm:col-span-2"><span>Preferred subtitle languages, in order</span><input className="rounded border bg-background p-2 text-sm" aria-label="Preferred subtitle languages" placeholder="ita, eng" value={preferredSubtitleInput} onChange={(event) => { const value = event.target.value; setPreferredSubtitleInput(value); updateLanguageTrack("subtitles", { preferred: parseLanguages(value) }); }} /></label>
+              <label className="grid gap-1 text-xs sm:col-span-2"><span>If required subtitles are missing</span><select className="rounded border bg-background p-2 text-sm" aria-label="Missing required subtitle action" value={subtitleLanguagePolicy.missingRequiredAction || "REVIEW"} onChange={(event) => updateLanguageTrack("subtitles", { missingRequiredAction: event.target.value })}><option value="REVIEW">Needs review</option><option value="DELETE_IF_REPLACED">Candidate only with replacement</option></select></label>
+            </div></div>
           </div>}
+          <p className="text-xs text-muted-foreground">This release uses provider data and filename-derived metadata. Technical stream probing is deferred; unknown evidence stays in Review.</p>
         </CardContent>
-      </Card>
-      <Card id="media-manager-rules" className="scroll-mt-20">
-        <CardHeader><CardTitle className="text-base">Rules</CardTitle></CardHeader>
-        <CardContent className="space-y-2 text-sm"><p className="text-muted-foreground">Hard requirements are evaluated before ranking. The builder keeps field/operator combinations within the supported rule model.</p>{retentionProfile && <details className="rounded border p-3"><summary className="cursor-pointer font-medium">Hard requirements</summary><div className="mt-2"><RuleBuilder node={retentionProfile.hardRequirements || { op: "AND", children: [] }} root onChange={(hardRequirements) => updateProfile(retentionProfileIndex, { hardRequirements } as any)} /></div></details>}</CardContent>
       </Card>
       <div className="grid gap-4 lg:grid-cols-2">
         <Card id="media-manager-safety" className="scroll-mt-20">
@@ -1823,15 +1807,19 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
         <Card id="media-manager-retention" className="scroll-mt-20">
           <CardHeader><CardTitle>Retention</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm">
-            <p className="text-muted-foreground">Retention preferences affect policy evaluation and read-only delete impact; they never enable provider mutation.</p>
+            <p className="text-muted-foreground">One version wins. Size is a final tie-breaker only when resolution and detected audio-language sets are equivalent.</p>
             <label className="flex items-center gap-2"><input type="checkbox" checked={policy.preferCompletePack === true} onChange={(event) => setPolicy((current: any) => ({ ...current, preferCompletePack: event.target.checked }))} /> Prefer complete packs during delete impact analysis</label>
             {retentionProfile && <div className="grid gap-2 rounded border p-3 sm:grid-cols-[1fr_auto] sm:items-end">
-              <label className="grid gap-1 text-xs"><span>When language and technical score tie</span><select className="rounded border bg-background p-2 text-sm" value={retentionProfile.sizePreference || "IGNORE"} onChange={(event) => updateProfile(retentionProfileIndex, { sizePreference: event.target.value as Profile["sizePreference"] })}><option value="LARGER">Keep larger file</option><option value="SMALLER">Keep smaller file</option><option value="IGNORE">Do not use size</option></select></label>
+              <label className="grid gap-1 text-xs"><span>When resolution and audio languages are equivalent</span><select className="rounded border bg-background p-2 text-sm" value={retentionProfile.sizePreference || "IGNORE"} onChange={(event) => updateProfile(retentionProfileIndex, { sizePreference: event.target.value as Profile["sizePreference"] })}><option value="LARGER">Keep larger file</option><option value="SMALLER">Keep smaller file</option><option value="IGNORE">Do not use size</option></select></label>
               <label className="grid gap-1 text-xs"><span>Minimum size difference %</span><input className="w-28 rounded border bg-background p-2 text-sm" type="number" min="0" max="100" value={retentionProfile.minimumSizeDifferencePercent ?? 0} onChange={(event) => updateProfile(retentionProfileIndex, { minimumSizeDifferencePercent: Math.max(0, Number(event.target.value) || 0) })} /></label>
             </div>}
           </CardContent>
         </Card>
       </div>
+      <Card id="media-manager-rules" className="scroll-mt-20">
+        <CardHeader><CardTitle className="text-base">Advanced rules</CardTitle></CardHeader>
+        <CardContent className="space-y-3 text-sm"><p className="text-muted-foreground">Optional expert controls for cases not covered above. Codec and source do not imply quality unless you explicitly add a rule.</p>{retentionProfile && <><details className="rounded border p-3"><summary className="cursor-pointer font-medium">Additional mandatory requirements</summary><p className="mt-2 text-xs text-muted-foreground">A failed requirement makes the version inadmissible; it cannot be rescued by ranking points.</p><div className="mt-2"><RuleBuilder node={retentionProfile.hardRequirements || { op: "AND", children: [] }} root onChange={(hardRequirements) => updateProfile(retentionProfileIndex, { hardRequirements } as any)} /></div></details><details className="rounded border p-3"><summary className="cursor-pointer font-medium">Additional ranking adjustments</summary><p className="mt-2 text-xs text-muted-foreground">Applied only after mandatory requirements pass. A weight of zero has no effect.</p><div className="mt-2 space-y-2">{(retentionProfile.scoringRules || []).map((rule, ruleIndex) => <ScoringRuleEditor key={ruleIndex} rule={rule} onChange={(next) => updateProfile(retentionProfileIndex, { scoringRules: (retentionProfile.scoringRules || []).map((item, itemIndex) => itemIndex === ruleIndex ? next : item) })} onRemove={() => updateProfile(retentionProfileIndex, { scoringRules: (retentionProfile.scoringRules || []).filter((_, itemIndex) => itemIndex !== ruleIndex) })} />)}<Button size="sm" variant="outline" onClick={() => updateProfile(retentionProfileIndex, { scoringRules: [...(retentionProfile.scoringRules || []), { op: "COMPARE", field: "resolution", operator: "equals", value: "2160p", weight: 10 }] })}>Add ranking adjustment</Button>{Object.keys(retentionProfile.scoring || {}).length > 0 && <p className="text-xs text-muted-foreground">Legacy field weights are preserved for compatibility.</p>}</div></details></>}</CardContent>
+      </Card>
       {(hasUnsavedChanges || saving || saved || saveError) && <div className="sticky bottom-4 z-10 flex flex-wrap items-center justify-end gap-3 rounded-lg border bg-background/95 p-3 shadow-lg backdrop-blur">
         {hasUnsavedChanges && <span className="text-sm text-amber-700">Unsaved retention changes</span>}
         {saved && !hasUnsavedChanges && <span className="text-sm text-emerald-700">Retention policy saved</span>}

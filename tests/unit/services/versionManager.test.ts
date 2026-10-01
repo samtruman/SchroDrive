@@ -228,6 +228,35 @@ describe("version manager", () => {
     expect(evaluateVersionGroups([version], [subtitlePolicy])[0].versions[0].decision).toBe("KEEP");
   });
 
+  test("evaluates independent audio and subtitle language policies", () => {
+    const [version] = fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.ITA.mkv", 10_000), "alldebrid");
+    version.fingerprint.subtitles = [{ language: "eng" }];
+    const configured = profile({
+      languagePolicy: {
+        required: { values: [], mode: "ALL" }, preferred: [], original: false,
+        audio: { required: { values: ["ita"], mode: "ALL" }, preferred: [], original: false },
+        subtitles: { required: { values: ["eng"], mode: "ALL" }, preferred: [] },
+      },
+    });
+    expect(evaluateVersionGroups([version], [configured])[0].versions[0].decision).toBe("KEEP");
+    version.fingerprint.subtitles = [{ language: "spa" }];
+    const reviewed = evaluateVersionGroups([version], [configured])[0].versions[0];
+    expect(reviewed.decision).toBe("REVIEW");
+    expect(reviewed.evaluations[0].reasons.some((reason) => reason.code === "required_subtitle_language_missing")).toBe(true);
+  });
+
+  test("does not use size to choose between different audio language sets", () => {
+    const first = fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.ITA.mkv", 10_000), "alldebrid")[0];
+    const second = fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.ITA.ENG.mkv", 50_000), "alldebrid")[0];
+    for (const [index, version] of [first, second].entries()) {
+      version.fingerprint.storage.infoHash = String(index + 1).repeat(40);
+      version.fingerprint.storage.recoverability = { status: "RECOVERABLE", source: "PROVIDER_CAPABILITY", reason: "fixture" };
+    }
+    const [group] = evaluateVersionGroups([first, second], [profile({ preferredResolution: "1080p", sizePreference: "LARGER", minimumSizeDifferencePercent: 0 })]);
+    expect(group.versions.every((version) => version.decision === "REVIEW")).toBe(true);
+    expect(group.versions.every((version) => version.reasons.some((reason) => reason.code === "policy_tie"))).toBe(true);
+  });
+
   test("does not let a hard requirement failure be compensated by scoring", () => {
     const [version] = fingerprintTorrent(torrent("Example.Movie.2025.2160p.WEB-DL.ITA.mkv", 10_000), "alldebrid");
     const configured = profile({ scoring: { resolution: 10000 }, hardRequirements: { op: "COMPARE", field: "resolution", operator: "equals", value: "1080p" } });

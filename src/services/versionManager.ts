@@ -39,12 +39,24 @@ export interface RemoteStatus {
 }
 
 export interface LanguagePolicy {
+  /** Legacy combined language policy, retained for stored configuration compatibility. */
   required: { values: string[]; mode: LanguageMode };
   preferred: string[];
   original: boolean;
   scope?: "AUDIO" | "SUBTITLE" | "AUDIO_OR_SUBTITLE";
   /** What to do with a non-compliant version when a compliant replacement exists. */
   missingRequiredAction?: "REVIEW" | "DELETE_IF_REPLACED";
+  audio?: {
+    required: { values: string[]; mode: LanguageMode };
+    preferred: string[];
+    original: boolean;
+    missingRequiredAction?: "REVIEW" | "DELETE_IF_REPLACED";
+  };
+  subtitles?: {
+    required: { values: string[]; mode: LanguageMode };
+    preferred: string[];
+    missingRequiredAction?: "REVIEW" | "DELETE_IF_REPLACED";
+  };
 }
 
 export interface VersionProfile {
@@ -450,31 +462,70 @@ export const defaultVersionManagerPolicy: VersionManagerPolicy = {
   policyVersion: "1",
 };
 
-function hasRequiredLanguages(version: VersionRecord, policy: LanguagePolicy): boolean {
-  const scope = policy.scope || "AUDIO";
-  const audio = new Set(version.fingerprint.audio.map((stream) => normalizeLanguage(stream.language)));
-  const subtitles = new Set(version.fingerprint.subtitles.map((stream) => normalizeLanguage(stream.language)));
-  const required = policy.required.values.map(normalizeLanguage);
-  const original = version.fingerprint.identity.originalLanguage ? normalizeLanguage(version.fingerprint.identity.originalLanguage) : undefined;
-  const matches = (value: string) => {
-    const resolved = value === "original" ? original : value;
-    if (!resolved) return false;
-    const inAudio = audio.has(resolved);
-    const inSubtitles = subtitles.has(resolved);
-    return scope === "SUBTITLE" ? inSubtitles : scope === "AUDIO_OR_SUBTITLE" ? inAudio || inSubtitles : inAudio;
-  };
-  return policy.required.mode === "ANY" ? required.length === 0 || required.some(matches) : required.every(matches);
+type TrackLanguagePolicy = {
+  required: { values: string[]; mode: LanguageMode };
+  preferred: string[];
+  original?: boolean;
+  missingRequiredAction?: "REVIEW" | "DELETE_IF_REPLACED";
+};
+
+function emptyTrackLanguagePolicy(): TrackLanguagePolicy {
+  return { required: { values: [], mode: "ALL" }, preferred: [], original: false, missingRequiredAction: "REVIEW" };
 }
 
-function preferredLanguageScore(version: VersionRecord, policy: LanguagePolicy): number {
-  const available = new Set(version.fingerprint.audio.map((stream) => normalizeLanguage(stream.language)));
+function resolvedTrackLanguagePolicies(policy: LanguagePolicy): { audio: TrackLanguagePolicy; subtitles: TrackLanguagePolicy; legacyCombined?: boolean } {
+  if (policy.audio || policy.subtitles) {
+    return {
+      audio: { ...emptyTrackLanguagePolicy(), ...(policy.audio || {}), required: { ...emptyTrackLanguagePolicy().required, ...(policy.audio?.required || {}) } },
+      subtitles: { ...emptyTrackLanguagePolicy(), ...(policy.subtitles || {}), required: { ...emptyTrackLanguagePolicy().required, ...(policy.subtitles?.required || {}) } },
+    };
+  }
+  const legacy = { required: policy.required, preferred: policy.preferred, original: policy.original, missingRequiredAction: policy.missingRequiredAction };
+  if (policy.scope === "SUBTITLE") return { audio: emptyTrackLanguagePolicy(), subtitles: legacy };
+  if (policy.scope === "AUDIO_OR_SUBTITLE") return { audio: legacy, subtitles: legacy, legacyCombined: true };
+  return { audio: legacy, subtitles: emptyTrackLanguagePolicy() };
+}
+
+function matchesRequiredLanguages(required: TrackLanguagePolicy["required"], available: Set<string>, original?: string): boolean {
+  const values = required.values.map(normalizeLanguage);
+  const matches = (value: string) => {
+    const resolved = value === "original" ? original : value;
+    return Boolean(resolved && available.has(resolved));
+  };
+  return required.mode === "ANY" ? values.length === 0 || values.some(matches) : values.every(matches);
+}
+
+function languageRequirementFailures(version: VersionRecord, policy: LanguagePolicy): Array<{ kind: "audio" | "subtitles"; policy: TrackLanguagePolicy }> {
+  const resolved = resolvedTrackLanguagePolicies(policy);
+  const audio = new Set(version.fingerprint.audio.map((stream) => normalizeLanguage(stream.language)));
+  const subtitles = new Set(version.fingerprint.subtitles.map((stream) => normalizeLanguage(stream.language)));
+  const original = version.fingerprint.identity.originalLanguage ? normalizeLanguage(version.fingerprint.identity.originalLanguage) : undefined;
+  if (resolved.legacyCombined) {
+    const required = resolved.audio.required;
+    const combined = new Set([...audio, ...subtitles]);
+    return matchesRequiredLanguages(required, combined, original) ? [] : [{ kind: "audio", policy: resolved.audio }];
+  }
+  const failures: Array<{ kind: "audio" | "subtitles"; policy: TrackLanguagePolicy }> = [];
+  if (!matchesRequiredLanguages(resolved.audio.required, audio, original)) failures.push({ kind: "audio", policy: resolved.audio });
+  if (!matchesRequiredLanguages(resolved.subtitles.required, subtitles, original)) failures.push({ kind: "subtitles", policy: resolved.subtitles });
+  return failures;
+}
+
+function preferredTrackLanguageScore(available: Set<string>, policy: TrackLanguagePolicy, original?: string): number {
   let score = 0;
   policy.preferred.map(normalizeLanguage).forEach((language, index) => {
     if (available.has(language)) score = Math.max(score, 1_000 - index * 50);
   });
-  const original = version.fingerprint.identity.originalLanguage ? normalizeLanguage(version.fingerprint.identity.originalLanguage) : undefined;
   if (policy.original && original && available.has(original)) score += 500;
   return score;
+}
+
+function preferredLanguageScore(version: VersionRecord, policy: LanguagePolicy): number {
+  const resolved = resolvedTrackLanguagePolicies(policy);
+  const original = version.fingerprint.identity.originalLanguage ? normalizeLanguage(version.fingerprint.identity.originalLanguage) : undefined;
+  const audio = new Set(version.fingerprint.audio.map((stream) => normalizeLanguage(stream.language)));
+  const subtitles = new Set(version.fingerprint.subtitles.map((stream) => normalizeLanguage(stream.language)));
+  return preferredTrackLanguageScore(audio, resolved.audio, original) + preferredTrackLanguageScore(subtitles, resolved.subtitles, original) / 10;
 }
 
 function rank(value: string | undefined, order: string[]): number {
@@ -486,8 +537,12 @@ function rank(value: string | undefined, order: string[]): number {
 function evaluateProfile(version: VersionRecord, profile: VersionProfile): ProfileEvaluation {
   const reasons: Reason[] = [];
   const breakdown: Record<string, number> = {};
-  if (!hasRequiredLanguages(version, profile.languagePolicy)) {
-    reasons.push({ code: "required_language_missing", message: `Required ${profile.languagePolicy.scope || "AUDIO"} language policy is not satisfied`, facts: { required: profile.languagePolicy.required, availableAudio: version.fingerprint.audio.map((stream) => stream.language), availableSubtitles: version.fingerprint.subtitles.map((stream) => stream.language) } });
+  for (const failure of languageRequirementFailures(version, profile.languagePolicy)) {
+    reasons.push({
+      code: failure.kind === "audio" ? "required_audio_language_missing" : "required_subtitle_language_missing",
+      message: `Required ${failure.kind === "audio" ? "audio" : "subtitle"} language policy is not satisfied`,
+      facts: { required: failure.policy.required, availableAudio: version.fingerprint.audio.map((stream) => stream.language), availableSubtitles: version.fingerprint.subtitles.map((stream) => stream.language) },
+    });
   }
   if (!evaluateRule(profile.hardRequirements, version)) {
     reasons.push({ code: "hard_rule_failed", message: "Configured hard requirement rule is not satisfied", facts: { rule: profile.hardRequirements } });
@@ -497,9 +552,8 @@ function evaluateProfile(version: VersionRecord, profile: VersionProfile): Profi
   }
   const resolutionRank = rank(version.fingerprint.video.resolution, [profile.preferredResolution, "1080p", "720p"]);
   breakdown.resolution = Math.max(0, 40 - resolutionRank * 12);
-  breakdown.source = Math.max(0, 20 - rank(version.fingerprint.release.source, profile.sourceOrder) * 4);
-  breakdown.codec = Math.max(0, 15 - rank(version.fingerprint.video.codec, profile.codecOrder) * 3);
-  breakdown.audio = Math.max(0, 15 - rank(version.fingerprint.audio[0]?.codec, profile.audioOrder) * 3) + (version.fingerprint.audio[0]?.atmos ? 3 : 0);
+  // Source, codec and audio codec describe a file but do not prove visual or
+  // audible quality. They affect ranking only through explicit custom rules.
   breakdown.language = preferredLanguageScore(version, profile.languagePolicy);
   if (profile.target === "DIRECT_PLAY") {
     breakdown.bandwidth = version.fingerprint.storage.size > 0 ? Math.max(0, 20 - Math.log10(version.fingerprint.storage.size / 1_000_000_000 + 1) * 8) : 0;
@@ -527,12 +581,26 @@ function compareForProfile(left: VersionEvaluation, right: VersionEvaluation, pr
   if (leftScore !== rightScore) return rightScore - leftScore;
   const preference = profile.sizePreference || "IGNORE";
   if (preference === "IGNORE") return 0;
+  if (left.fingerprint.video.resolution !== right.fingerprint.video.resolution) return 0;
+  const audioLanguages = (version: VersionEvaluation) => [...new Set(version.fingerprint.audio.map((stream) => normalizeLanguage(stream.language)))].sort().join(",");
+  if (audioLanguages(left) !== audioLanguages(right)) return 0;
   const leftSize = Number(left.fingerprint.storage.size || 0);
   const rightSize = Number(right.fingerprint.storage.size || 0);
   if (!leftSize || !rightSize || leftSize === rightSize) return 0;
   const difference = Math.abs(leftSize - rightSize) / Math.max(leftSize, rightSize) * 100;
   if (difference < Math.max(0, Number(profile.minimumSizeDifferencePercent || 0))) return 0;
   return preference === "LARGER" ? rightSize - leftSize : leftSize - rightSize;
+}
+
+function languageFailuresCanBeRemoved(profile: VersionProfile, reasons: Reason[]): boolean {
+  const resolved = resolvedTrackLanguagePolicies(profile.languagePolicy);
+  return reasons.length > 0 && reasons.every((reason) => {
+    if (reason.code === "required_audio_language_missing") return resolved.audio.missingRequiredAction === "DELETE_IF_REPLACED";
+    if (reason.code === "required_subtitle_language_missing") return resolved.subtitles.missingRequiredAction === "DELETE_IF_REPLACED";
+    // Stored snapshots created before audio/subtitle policies were separated.
+    if (reason.code === "required_language_missing") return profile.languagePolicy.missingRequiredAction === "DELETE_IF_REPLACED";
+    return false;
+  });
 }
 
 function groupKey(version: VersionRecord): string {
@@ -564,9 +632,7 @@ export function evaluateVersionGroups(versions: VersionRecord[], profiles = defa
       const hasHardRequirementFailure = failedEvaluations.length > 0;
       const languageFailureCanBeRemoved = failedEvaluations.length > 0 && failedEvaluations.every((evaluation) => {
         const profile = activeProfiles.find((candidate) => candidate.id === evaluation.profileId);
-        return profile?.languagePolicy.missingRequiredAction === "DELETE_IF_REPLACED"
-          && evaluation.reasons.length > 0
-          && evaluation.reasons.every((reason) => reason.code === "required_language_missing");
+        return Boolean(profile && languageFailuresCanBeRemoved(profile, evaluation.reasons));
       });
       const recoverability = version.fingerprint.storage.recoverability?.status || (version.fingerprint.storage.infoHash ? "RECOVERABLE" : "UNKNOWN");
       const recoverable = recoverability === "RECOVERABLE";
@@ -575,12 +641,12 @@ export function evaluateVersionGroups(versions: VersionRecord[], profiles = defa
       const everyProfileHasReplacement = activeProfiles.every((profile) => evaluations.some((candidate) => candidate.decision === "KEEP" && candidate.evaluations.some((evaluation) => evaluation.profileId === profile.id && evaluation.eligible)));
       if (version.decision === "REVIEW" && (!hasHardRequirementFailure || languageFailureCanBeRemoved) && version.fingerprint.identity.confidence >= 0.65 && evaluations.length > 1 && hasSurvivingKeep && everyProfileHasReplacement && safeForDelete) {
         version.decision = "DELETE_CANDIDATE";
-        version.reasons.push({ code: languageFailureCanBeRemoved ? "required_language_replaced" : "no_profile_slot", message: languageFailureCanBeRemoved ? "A compliant replacement exists for every enabled profile" : "Does not win an enabled profile in this version group", facts: { groupId: id } });
+        version.reasons.push({ code: languageFailureCanBeRemoved ? "required_language_replaced" : "no_profile_slot", message: languageFailureCanBeRemoved ? "A compliant retained replacement exists for this content" : "Not the single best admissible version for this content", facts: { groupId: id } });
       } else if (version.decision === "REVIEW") {
         if (!safeForDelete && version.fingerprint.identity.confidence >= 0.65 && !hasHardRequirementFailure) version.reasons.push({ code: recoverability === "NOT_RECOVERABLE" ? "recoverability_required" : "recoverability_unknown", message: recoverability === "NOT_RECOVERABLE" ? "Delete preview requires a recoverable provider item" : "Recoverability could not be established for this provider item", facts: { recoverabilityStatus: recoverability, infoHashAvailable: recoverable } });
         version.reasons.push({
           code: tiedProfiles.size ? "policy_tie" : hasHardRequirementFailure ? "hard_requirement_failed" : "identity_uncertain",
-          message: tiedProfiles.size ? "The configured policy cannot distinguish the leading versions" : hasHardRequirementFailure ? "A profile hard requirement failed; operator review is required" : "Identity confidence is insufficient for an automatic candidate decision",
+          message: tiedProfiles.size ? "The configured policy cannot distinguish the leading versions" : hasHardRequirementFailure ? "A mandatory requirement failed; operator review is required" : "Identity confidence is insufficient for an automatic candidate decision",
           facts: { confidence: version.fingerprint.identity.confidence },
         });
       }
@@ -656,15 +722,18 @@ function canonicalScoringRule(rule: ScoringRule): unknown {
 }
 
 function canonicalLanguagePolicy(policy: LanguagePolicy): unknown {
-  return {
+  const resolved = resolvedTrackLanguagePolicies(policy);
+  const canonicalTrackPolicy = (track: TrackLanguagePolicy) => ({
     required: {
-      mode: policy.required.mode,
-      values: [...policy.required.values].map((value) => value.trim().toLowerCase()).sort(),
+      mode: track.required.mode,
+      values: [...track.required.values].map((value) => value.trim().toLowerCase()).sort(),
     },
-    preferred: [...policy.preferred].map((value) => value.trim().toLowerCase()),
-    original: policy.original === true,
-    scope: policy.scope || "AUDIO",
-    missingRequiredAction: policy.missingRequiredAction || "REVIEW",
+    preferred: [...track.preferred].map((value) => value.trim().toLowerCase()),
+    missingRequiredAction: track.missingRequiredAction || "REVIEW",
+  });
+  return {
+    audio: { ...canonicalTrackPolicy(resolved.audio), original: resolved.audio.original === true },
+    subtitles: canonicalTrackPolicy(resolved.subtitles),
   };
 }
 
