@@ -4,15 +4,8 @@ import { Card, CardContent } from "@/components/ui/card";
 
 export function ReviewActionGuide() {
   return <section aria-label="Review actions explained" className="rounded-lg border bg-muted/20 p-4 text-sm">
-    <h2 className="mb-2 font-semibold">What can I do here?</h2>
-    <dl className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-      <div><dt className="font-medium">Resolve Identity</dt><dd className="text-muted-foreground">Search TMDb and confirm the correct film or series when detection is wrong or uncertain.</dd></div>
-      <div><dt className="font-medium">Accept as detected</dt><dd className="text-muted-foreground">Approve the displayed identity without correcting it. Use only when it is correct; the organizer may then continue processing it.</dd></div>
-      <div><dt className="font-medium">Dismiss</dt><dd className="text-muted-foreground">Remove the organizer task from Pending without deleting media. Find it under Dismissed and restore it later.</dd></div>
-      <div><dt className="font-medium">Retry / Resume</dt><dd className="text-muted-foreground">Return the task to the organizer workflow after fixing its cause. This does not select a different identity.</dd></div>
-      <div><dt className="font-medium">Details</dt><dd className="text-muted-foreground">Open identity, filenames, versions and reasons in a dialog. Viewing details changes nothing.</dd></div>
-    </dl>
-    <p className="mt-3 text-muted-foreground">Policy and recoverability issues are evaluated from inventory. They cannot be dismissed as organizer tasks; fix the stated cause and scan again.</p>
+    <h2 className="font-semibold">Only unresolved work appears here</h2>
+    <p className="mt-1 text-muted-foreground">Each card explains the blocker and exposes the action that can resolve it. Identity problems can be matched or retried; ranking ties let you choose the copy to keep; metadata and recoverability problems state what must be restored before reevaluation.</p>
   </section>;
 }
 
@@ -24,7 +17,7 @@ function VersionLine({ version }: { version: any }) {
   return <div className="min-w-0"><p className="break-words">{version.season !== undefined ? `S${String(version.season).padStart(2,"0")}E${String(version.episode ?? 0).padStart(2,"0")} · ` : ""}{name}</p><p className="text-xs text-muted-foreground">{[video.resolution, fp.release?.source, video.codec, video.dolbyVision ? "Dolby Vision" : video.hdr10 ? "HDR10" : video.dynamicRange, languages, storage.provider || version.provider].filter(Boolean).join(" · ")}</p><p className="mt-1 text-xs">{reasons(version)}</p></div>;
 }
 
-export function DeleteImpactCards({ items, scope, dryRun, busyId, onDetails, onValidate, onDelete }: { items: any[]; scope: string; dryRun: boolean; busyId?: string; onDetails: (item: any) => void; onValidate: (item: any) => void; onDelete: (item: any) => void }) {
+export function DeleteImpactCards({ items, scope, dryRun, busyId, onDetails, onDelete }: { items: any[]; scope: string; dryRun: boolean; busyId?: string; onDetails: (item: any) => void; onDelete: (item: any) => void }) {
   return <section className="space-y-3" aria-label={scope === "protected" ? "Protected resources" : "Deletion candidates"}>
     <div><h2 className="font-semibold">{scope === "protected" ? "Protected / Not deletable" : scope === "attention" ? "Needs review" : "Deletion candidates"} · {items.length} physical resources</h2><p className="text-sm text-muted-foreground">{scope === "protected" ? "These resources contain a logical candidate, but physical deletion is blocked by a KEEP/shared item, missing replacement, review, or recoverability requirement." : scope === "attention" ? "These resources have no actionable removal candidate. Resolve the review, identity, replacement, or recoverability blocker before reassessing them." : dryRun ? "Each physical resource has a confirmed KEEP replacement. Validate dry run repeats all checks against the provider without deleting anything." : "Each physical resource has a confirmed KEEP replacement. You can validate safely or delete it after an explicit confirmation; every action repeats all checks first."}</p></div>
     {!items.length && <p className="rounded border p-4 text-sm">No resources match this view.</p>}
@@ -39,7 +32,7 @@ export function DeleteImpactCards({ items, scope, dryRun, busyId, onDetails, onV
         })}
         {!candidates.length && <p className="text-sm">No removal candidate. {item.versions.some((v: any) => v.decision === "REVIEW") ? "Resolve the review blockers before a decision can be made." : "The versions in this resource are retained."}</p>}
         <div className="text-sm"><p className="font-semibold">Physical deletion: {item.state === "READY" && !item.onlyCopy && !item.protectedByKeep ? dryRun ? "eligible; validation only while Dry run is enabled" : "eligible after final provider revalidation" : "blocked"}</p><p className="text-muted-foreground">{item.reasons.join(" · ")}</p></div>
-        <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => onDetails(item)}>Details</Button>{scope === "candidates" && <Button size="sm" variant="secondary" disabled={busyId === `${item.provider}:${item.providerItemId}`} onClick={() => onValidate(item)}>{busyId === `${item.provider}:${item.providerItemId}` ? "Validating…" : "Validate dry run"}</Button>}{scope === "candidates" && !dryRun && <Button size="sm" variant="destructive" disabled={Boolean(busyId)} onClick={() => onDelete(item)}>Delete ProviderItem</Button>}</div>
+        <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => onDetails(item)}>Details</Button>{scope === "candidates" && <Button size="sm" variant={dryRun ? "secondary" : "destructive"} disabled={Boolean(busyId)} onClick={() => onDelete(item)}>{busyId === `${item.provider}:${item.providerItemId}` ? dryRun ? "Validating…" : "Deleting…" : dryRun ? "Delete · dry run" : "Delete ProviderItem"}</Button>}</div>
       </CardContent></Card>;
     })}
   </section>;

@@ -34,6 +34,15 @@ describe("version manager policy persistence", () => {
     expect(getVersionManagerScanJob(job.id)?.status).toBe("FAILED");
   });
 
+  test("keeps provider snapshots independent", () => {
+    saveVersionManagerSnapshot([], [], { providerId: "alldebrid", policyHash: "ad", status: "VALID" });
+    saveVersionManagerSnapshot([], [], { providerId: "realdebrid", policyHash: "rd", status: "VALID" });
+    expect(getLatestVersionManagerSnapshot("alldebrid")?.providerId).toBe("alldebrid");
+    expect(getLatestVersionManagerSnapshot("alldebrid")?.policyHash).toBe("ad");
+    expect(getLatestVersionManagerSnapshot("realdebrid")?.providerId).toBe("realdebrid");
+    expect(getLatestVersionManagerSnapshot("realdebrid")?.policyHash).toBe("rd");
+  });
+
   test("persists retention preferences used by delete impact evaluation", () => {
     const original = getVersionManagerPolicy();
     try {

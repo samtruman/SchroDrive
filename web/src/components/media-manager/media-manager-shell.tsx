@@ -80,7 +80,7 @@ function reviewGuidance(entry: any): { heading: string; explanation: string; act
   if (codes.has("policy_tie")) return {
     heading: "Equivalent versions: no unique winner",
     explanation: `${count || "Multiple"} admissible copies have the same ranking under the current policy. They are here because the one-winner rule cannot choose safely; no deletion candidate was created.`,
-    action: "Open Details and compare the provider, filename, size, audio and subtitles. Leave both retained, or add a ranking rule that expresses a real preference, then run a new scan.",
+    action: "Choose the copy to keep below. The other tied copies will become deletion candidates, or change the ranking rules when the preference should apply to the whole provider.",
   };
   if (codes.has("required_audio_language_missing") || codes.has("required_subtitle_language_missing") || codes.has("hard_rule_failed") || codes.has("hard_requirement_failed")) return {
     heading: "Mandatory requirements are not met",
@@ -303,6 +303,24 @@ function useJson<T>(url: string, enabled = true) {
   return { data, loading, error, reload: load };
 }
 
+function useMediaManagerProvider() {
+  const providerData = useJson<any>("/api/version-manager/providers");
+  const [providerId, setProviderId] = useState("");
+  useEffect(() => {
+    const providers = providerData.data?.providers || [];
+    if (!providers.length) return;
+    const saved = window.localStorage.getItem("media-manager-provider");
+    const next = providers.some((provider: any) => provider.id === saved) ? saved : (providers.find((provider: any) => provider.default)?.id || providers[0].id);
+    setProviderId((current) => providers.some((provider: any) => provider.id === current) ? current : next);
+  }, [providerData.data]);
+  const selectProvider = useCallback((value: string) => { setProviderId(value); window.localStorage.setItem("media-manager-provider", value); }, []);
+  return { providers: providerData.data?.providers || [], providerId, selectProvider, loading: providerData.loading, error: providerData.error };
+}
+
+function ProviderSelector({ providers, value, onChange }: { providers: any[]; value: string; onChange: (value: string) => void }) {
+  return <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-card p-3"><div><p className="text-sm font-semibold">Managed provider</p><p className="text-xs text-muted-foreground">Library decisions never cross provider boundaries.</p></div><select aria-label="Managed provider" className="min-w-48 rounded border bg-background p-2 text-sm" value={value} onChange={(event) => onChange(event.target.value)}>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name || provider.id}</option>)}</select></div>;
+}
+
 function SectionNav({ view, reviewCount }: { view: View; reviewCount?: number }) {
   const links = [
     ["Overview", "/media-manager"],
@@ -477,11 +495,13 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
 }
 
 function Overview() {
-  const status = useJson<any>("/api/version-manager/status");
+  const provider = useMediaManagerProvider();
+  const providerQuery = provider.providerId ? `provider=${encodeURIComponent(provider.providerId)}` : "";
+  const status = useJson<any>(`/api/version-manager/status?${providerQuery}`, Boolean(provider.providerId));
   const deleteDryRun = status.data?.policy?.safety?.deleteDryRun !== false;
-  const deleteCandidates = useJson<any>("/api/version-manager/delete?scope=candidates");
+  const deleteCandidates = useJson<any>(`/api/version-manager/delete?scope=candidates&${providerQuery}`, Boolean(provider.providerId));
   const migration = useJson<any>("/api/version-manager/migration/state");
-  const reviewQueue = useJson<any>("/api/version-manager/review?status=pending");
+  const reviewQueue = useJson<any>(`/api/version-manager/review?status=pending&${providerQuery}`, Boolean(provider.providerId));
   const profiles = status.data?.profiles || [];
   const identityIssues = reviewQueue.data?.summary?.identityIssues ?? 0;
   const latestScan = status.data?.latestScan;
@@ -496,7 +516,7 @@ function Overview() {
     let cancelled = false;
     const loadJob = async () => {
       try {
-        const response = await fetch("/api/version-manager/scan", { cache: "no-store" });
+        const response = await fetch(`/api/version-manager/scan?${providerQuery}`, { cache: "no-store" });
         const body = await readJsonResponse<any>(response, "Scan status");
         if (!cancelled) setScanJob(body.job || null);
       } catch (value: any) {
@@ -505,7 +525,7 @@ function Overview() {
     };
     void loadJob();
     return () => { cancelled = true; };
-  }, []);
+  }, [providerQuery]);
 
   useEffect(() => {
     if (!scanning || !scanJob?.id) return;
@@ -517,19 +537,19 @@ function Overview() {
         if (["COMPLETED", "FAILED", "PARTIAL"].includes(body.job?.status)) {
           await status.reload();
           if (body.job.status === "COMPLETED") {
-            const result = await fetch("/api/version-manager/preview", { cache: "no-store" });
+            const result = await fetch(`/api/version-manager/preview?${providerQuery}`, { cache: "no-store" });
             setScan(await readJsonResponse<any>(result, "Inventory snapshot"));
           }
         }
       } catch (value: any) { setScanError(value.message || "Unable to read scan status"); }
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [scanJob?.id, scanning, status.reload]);
+  }, [scanJob?.id, scanning, status.reload, providerQuery]);
 
   async function runScan() {
     setScanError("");
     try {
-      const response = await fetch("/api/version-manager/scan", { method: "POST", cache: "no-store" });
+      const response = await fetch(`/api/version-manager/scan?${providerQuery}`, { method: "POST", cache: "no-store" });
       const body = await readJsonResponse<any>(response, "Starting library scan");
       setScanJob(body.job);
     } catch (value: any) {
@@ -544,6 +564,8 @@ function Overview() {
         description="Inventory, identity, one-version retention, review and provider migration in one place."
         reviewCount={identityIssues}
       />
+      <ProviderSelector providers={provider.providers} value={provider.providerId} onChange={(value) => { provider.selectProvider(value); setScan(null); setScanJob(null); }} />
+      <ErrorBox error={provider.error} />
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-4">
         <div>
           <p className="font-medium">Library status</p>
@@ -663,6 +685,8 @@ function Overview() {
 
 function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const pathname = usePathname();
+  const provider = useMediaManagerProvider();
+  const providerQuery = provider.providerId ? `provider=${encodeURIComponent(provider.providerId)}` : "";
   const [preset, setPreset] = useState("all");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
@@ -678,7 +702,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const [deleteBusy, setDeleteBusy] = useState("");
   const [deleteNotice, setDeleteNotice] = useState("");
   const [deleteError, setDeleteError] = useState("");
-  const reviewQueue = useJson<any>("/api/version-manager/review?status=pending");
+  const reviewQueue = useJson<any>(`/api/version-manager/review?status=pending&${providerQuery}`, Boolean(provider.providerId));
   const [identityOnly, setIdentityOnly] = useState(false);
   const identityIssueCount = reviewQueue.data?.summary?.identityIssues ?? 0;
   useEffect(() => {
@@ -687,18 +711,30 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     setIdentityOnly(params.get("reason") === "identity");
   }, [pathname, initialPreset]);
   const preview = useJson<any>(
-    "/api/version-manager/preview",
-    preset === "all",
+    `/api/version-manager/preview?${providerQuery}`,
+    preset === "all" && Boolean(provider.providerId),
   );
   const deletePreview = useJson<any>(
-    "/api/version-manager/delete-preview",
-    preset === "delete-preview" || preset === "delete",
+    `/api/version-manager/delete-preview?${providerQuery}`,
+    (preset === "delete-preview" || preset === "delete") && Boolean(provider.providerId),
   );
   const deleteImpact = useJson<any>(
-    `/api/version-manager/delete?scope=${encodeURIComponent(deleteScope)}&q=${encodeURIComponent(query)}`,
-    preset === "delete-preview" || preset === "delete",
+    `/api/version-manager/delete?scope=${encodeURIComponent(deleteScope)}&q=${encodeURIComponent(query)}&${providerQuery}`,
+    (preset === "delete-preview" || preset === "delete") && Boolean(provider.providerId),
   );
-  async function executeDelete(item: any, dryRun: boolean) {
+  async function waitForRefresh(job: any) {
+    if (!job?.id) return;
+    for (let attempt = 0; attempt < 180; attempt++) {
+      const response = await fetch(`/api/version-manager/scan/${encodeURIComponent(job.id)}`, { cache: "no-store" });
+      const body = await readJsonResponse<any>(response, "Refreshing provider library");
+      if (body.job?.status === "COMPLETED") return;
+      if (["FAILED", "PARTIAL"].includes(body.job?.status)) throw new Error(body.job.lastError || "Provider library refresh failed");
+      await new Promise((resolve) => window.setTimeout(resolve, 1000));
+    }
+    throw new Error("Provider library refresh timed out");
+  }
+  async function executeDelete(item: any) {
+    const dryRun = deleteImpact.data?.dryRun !== false;
     const key = `${item.provider}:${item.providerItemId}`;
     setDeleteBusy(key);
     setDeleteNotice("");
@@ -706,32 +742,37 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     try {
       const response = await fetch("/api/version-manager/delete", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: item.provider, providerItemId: item.providerItemId, snapshotId: deleteImpact.data?.snapshotId, dryRun, confirmation: dryRun ? undefined : item.providerItemId }) });
       const body = await readJsonResponse<any>(response, dryRun ? "Dry-run validation" : "Provider deletion");
-      setDeleteNotice(body.executed ? `Deleted ${item.provider}:${item.providerItemId}. Run a new scan to refresh the library.` : `Validated ${item.provider}:${item.providerItemId}. No provider data was deleted.`);
+      if (body.executed) {
+        setDeleteNotice(`Deleted ${item.provider}:${item.providerItemId}. Updating this provider library…`);
+        await waitForRefresh(body.refreshJob);
+      }
       await deleteImpact.reload();
       await deletePreview.reload();
+      setDeleteNotice(body.executed ? `Deleted ${item.provider}:${item.providerItemId}. Provider library updated.` : `Dry run passed for ${item.provider}:${item.providerItemId}. No provider data was deleted.`);
     } catch (value: any) {
       setDeleteError(value.message || "Delete action failed");
       throw value;
     } finally { setDeleteBusy(""); }
   }
-  function requestLiveDelete(item: any) {
+  function requestDelete(item: any) {
+    const dryRun = deleteImpact.data?.dryRun !== false;
     const gib = Number(item.physicalSize || 0) / 1024 / 1024 / 1024;
-    setConfirmation({ title: "Delete this ProviderItem?", description: "This is a real provider deletion. The current snapshot, replacement, protection and provider presence will be checked again immediately before deletion.", context: <div className="space-y-1"><p><b>Provider:</b> {item.provider}</p><p><b>ProviderItem:</b> {item.providerItemId}</p><p><b>Physical size:</b> {gib ? `${gib.toFixed(2)} GiB` : "unknown"}</p></div>, confirmLabel: "Delete ProviderItem", variant: "destructive", onConfirm: () => executeDelete(item, false) });
+    setConfirmation({ title: dryRun ? "Run delete simulation?" : "Delete this ProviderItem?", description: dryRun ? "Dry run is enabled. SchröDrive will repeat every safety and provider check, but it cannot call the provider delete API." : "This is a real provider deletion. The current snapshot, replacement, protection and provider presence will be checked again immediately before deletion.", context: <div className="space-y-1"><p><b>Provider:</b> {item.provider}</p><p><b>ProviderItem:</b> {item.providerItemId}</p><p><b>Physical size:</b> {gib ? `${gib.toFixed(2)} GiB` : "unknown"}</p></div>, confirmLabel: dryRun ? "Run dry run" : "Delete ProviderItem", variant: dryRun ? "secondary" : "destructive", onConfirm: () => executeDelete(item) });
   }
   const reviewPreview = useJson<any>(
-    "/api/version-manager/preview",
-    preset === "review",
+    `/api/version-manager/preview?${providerQuery}`,
+    preset === "review" && Boolean(provider.providerId),
   );
   const missing = useJson<any>(
-    "/api/version-manager/missing",
-    preset === "missing",
+    `/api/version-manager/missing?${providerQuery}`,
+    preset === "missing" && Boolean(provider.providerId),
   );
   const [review, setReview] = useState<any>(null);
   const [reviewError, setReviewError] = useState("");
   const loadReview = useCallback(async () => {
     try {
       const response = await fetch(
-        `/api/version-manager/review?status=${reviewStatus}`,
+        `/api/version-manager/review?status=${reviewStatus}&${providerQuery}`,
         { cache: "no-store" },
       );
       const body = await readJsonResponse<any>(response, "Review queue request");
@@ -740,7 +781,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     } catch (value: any) {
       setReviewError(value.message || "Unable to load review");
     }
-  }, [reviewStatus]);
+  }, [reviewStatus, providerQuery]);
   useEffect(() => {
     if (preset === "review") void loadReview();
   }, [loadReview, preset, reviewStatus]);
@@ -771,6 +812,14 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       variant: isDismiss ? "destructive" : isAccept ? "secondary" : "default",
       onConfirm: () => reviewAction(id, body),
     });
+  }
+  async function chooseReviewWinner(entry: any, version: any) {
+    setReviewError("");
+    try {
+      const response = await fetch("/api/version-manager/review", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: provider.providerId, groupId: entry.versionGroupId, versionId: version.id }) });
+      await readJsonResponse<any>(response, "Selecting retained version");
+      await Promise.all([loadReview(), reviewQueue.reload(), reviewPreview.reload()]);
+    } catch (error: any) { setReviewError(error.message || "Unable to select retained version"); }
   }
   const groups = useMemo(
     () =>
@@ -827,6 +876,8 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
         description="Content first, with one winning version and every uncertain or protected case made explicit."
         reviewCount={identityIssueCount}
       />
+      <ProviderSelector providers={provider.providers} value={provider.providerId} onChange={(value) => { provider.selectProvider(value); setSelected(null); setDeleteNotice(""); setDeleteError(""); }} />
+      <ErrorBox error={provider.error} />
       <div className="flex flex-wrap gap-2">
         <Button
           asChild
@@ -929,7 +980,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                 <Stat label="Logical candidates" value={deletePreview.data?.counts?.DELETE_CANDIDATE ?? "—"} detail="individual versions" />
                 <Stat label="Physical resources" value={deleteImpact.data?.items?.length ?? "—"} detail={deleteScope === "candidates" ? "eligible in this view" : deleteScope === "protected" ? "protected in this view" : "need attention"} />
               </div>
-              <DeleteImpactCards items={deleteImpact.data?.items || []} scope={deleteScope} dryRun={deleteImpact.data?.dryRun !== false} busyId={deleteBusy} onDetails={setSelected} onValidate={(item) => { void executeDelete(item, true).catch(() => undefined); }} onDelete={requestLiveDelete} />
+              <DeleteImpactCards items={deleteImpact.data?.items || []} scope={deleteScope} dryRun={deleteImpact.data?.dryRun !== false} busyId={deleteBusy} onDetails={setSelected} onDelete={requestDelete} />
             </>
           )}
         </>
@@ -1082,6 +1133,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                       <div className="flex flex-wrap gap-1">{(entry.issueTypes || []).map((issue: string) => <StatusBadge key={issue} value={issue} />)}</div>
                     </div>
                     {(() => { const guidance = reviewGuidance(entry); return <div className="grid gap-2 text-sm md:grid-cols-2"><div className="rounded border p-3"><p className="font-medium">Why it is here · {guidance.heading}</p><p className="mt-1 text-muted-foreground">{guidance.explanation}</p></div><div className="rounded border p-3"><p className="font-medium">What you can do</p><p className="mt-1 text-muted-foreground">{guidance.action}</p></div></div>; })()}
+                    {(entry.reasonCodes || []).includes("policy_tie") && <div className="space-y-2 rounded border border-amber-500/40 p-3"><p className="font-medium">Choose the one copy to keep</p><p className="text-xs text-muted-foreground">This choice applies only to this content on {provider.providers.find((item: any) => item.id === provider.providerId)?.name || provider.providerId}. Every other tied copy becomes a deletion candidate and still passes the normal safety checks.</p><div className="grid gap-2 lg:grid-cols-2">{(entry.versions || []).map((version: any) => { const storage = version.fingerprint?.storage || {}; const video = version.fingerprint?.video || {}; const filename = String(storage.path || version.id).split(/[\\/]/).pop(); return <div key={version.id} className="flex items-start justify-between gap-3 rounded border p-3"><div className="min-w-0"><p className="break-words text-sm font-medium">{filename}</p><p className="text-xs text-muted-foreground">{video.resolution || "Resolution unknown"} · {storage.size ? `${Math.round(Number(storage.size) / 1_000_000)} MB` : "Size unknown"}</p></div><Button size="sm" onClick={() => void chooseReviewWinner(entry, version)}>Keep this copy</Button></div>; })}</div><Button asChild size="sm" variant="outline"><Link href="/media-manager/settings/profiles">Change ranking rules instead</Link></Button></div>}
                     {entry.organizerReview && entry.decision !== "dismissed" && <IdentityResolver reviewId={entry.organizerReview.id} identity={entry.identity} initialQuery={entry.title} initialType={entry.kind === "episode" ? "tv" : "movie"} initialYear={entry.year} existingOverride={entry.organizerReview.override} actionLabel={entry.organizerReview.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />}
                     <div className="flex flex-wrap gap-2">
                       {entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "accepted" }, entry.organizerReview)}><Check className="mr-2 h-4 w-4" />Accept as detected</Button><Button size="sm" variant="destructive" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "dismissed" }, entry.organizerReview)}><X className="mr-2 h-4 w-4" />Dismiss</Button><Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry.organizerReview)}><RefreshCw className="mr-2 h-4 w-4" />Retry / Resume</Button></>)}
@@ -1412,7 +1464,7 @@ function Migration({ section = "migration" }: { section?: string }) {
         <CardHeader><CardTitle className="text-base">Magnet Backup</CardTitle></CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">Stores provider magnet references and file metadata only; it never downloads media bytes.</p>
-          <div className="rounded border p-3 text-sm"><p className="font-medium">Server backup folder</p><p className="mt-1 break-all font-mono text-xs text-muted-foreground">{magnetBackups.loading ? "Loading…" : magnetBackups.data?.storageDirectory || "Unavailable"}</p><p className="mt-1 text-xs text-muted-foreground">Backup Now and Incremental Backup write JSON files in this persistent server folder. The manifest.json and magnets.txt buttons above download files to your browser instead.</p></div>
+          <div className="rounded border p-3 text-sm"><p className="font-medium">Server backup folder</p><p className="mt-1 text-xs text-muted-foreground">Backup Now, incremental backups and scheduled backups use this server path. Changing it does not move or delete files in the previous folder.</p>{backupSchedule ? <input aria-label="Server backup folder" className="mt-2 w-full rounded border bg-background p-2 font-mono text-xs" value={backupSchedule.storageDirectory || magnetBackups.data?.storageDirectory || "/data/magnet-backups"} onChange={(event) => setBackupSchedule((current: any) => ({ ...current, storageDirectory: event.target.value }))} /> : <p className="mt-1 break-all font-mono text-xs text-muted-foreground">{magnetBackups.loading ? "Loading…" : magnetBackups.data?.storageDirectory || "Unavailable"}</p>}</div>
           {backupSchedule && <div className="space-y-3 rounded border p-3"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-medium">Automatic backup schedule</p><p className="text-xs text-muted-foreground">The scheduler runs inside SchröDrive and uses the selected timezone.</p></div><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={backupSchedule.enabled === true} onChange={(event) => setBackupSchedule((current: any) => ({ ...current, enabled: event.target.checked, provider: current.provider || sourceProvider }))} /> Enabled</label></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <label className="grid gap-1 text-xs"><span>Provider</span><select className="rounded border bg-background p-2 text-sm" value={backupSchedule.provider || sourceProvider} onChange={(event) => setBackupSchedule((current: any) => ({ ...current, provider: event.target.value }))}>{providerList.filter((provider: any) => provider.configured).map((provider: any) => <option key={provider.providerId} value={provider.providerId}>{provider.displayName || provider.providerId}</option>)}</select></label>
             <label className="grid gap-1 text-xs"><span>Backup type</span><select className="rounded border bg-background p-2 text-sm" value={backupSchedule.mode || "FULL"} onChange={(event) => setBackupSchedule((current: any) => ({ ...current, mode: event.target.value }))}><option value="FULL">Full</option><option value="INCREMENTAL">Incremental</option></select></label>

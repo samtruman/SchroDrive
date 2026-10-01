@@ -5,7 +5,7 @@ const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8978";
 
 async function forward(request: NextRequest) {
   try {
-    const response = await fetch(`${BACKEND_URL}/api/version-manager/scan`, {
+    const response = await fetch(`${BACKEND_URL}/api/version-manager/scan${request.nextUrl.search}`, {
       method: request.method,
       cache: "no-store",
       headers: request.method === "POST" ? { "content-type": "application/json" } : undefined,

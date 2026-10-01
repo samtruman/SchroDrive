@@ -8,11 +8,17 @@ import { exportMigrationLibrary, type MigrationManifest } from "./migrationExpor
 export type MagnetBackupMode = "FULL" | "INCREMENTAL";
 export interface MagnetBackupRecord { id: string; mode: MagnetBackupMode; provider: string; createdAt: string; itemCount: number; magnetCount: number; sha256: string; file: string; baseBackupId?: string; added: number; modified: number; removed: number; valid: boolean; }
 export interface MagnetBackupDocument { schemaVersion: "1.0"; kind: "MAGNET_BACKUP"; mode: MagnetBackupMode; provider: string; createdAt: string; baseBackupId?: string; manifest?: MigrationManifest; changes?: { added: MigrationManifest["items"]; modified: MigrationManifest["items"]; removed: MigrationManifest["items"] }; }
-export interface MagnetBackupSchedule { enabled: boolean; provider: string; mode: MagnetBackupMode; frequency: "DAILY" | "WEEKLY"; time: string; weekday: number; timezone: string; keepLatest: number; keepMonthly: number; updatedAt: string; lastRunAt?: string; lastStatus?: "SUCCESS" | "FAILED"; lastError?: string; }
-function root(): string { return path.join(config.dataDir, "magnet-backups"); }
+export interface MagnetBackupSchedule { enabled: boolean; provider: string; mode: MagnetBackupMode; frequency: "DAILY" | "WEEKLY"; time: string; weekday: number; timezone: string; keepLatest: number; keepMonthly: number; storageDirectory: string; updatedAt: string; lastRunAt?: string; lastStatus?: "SUCCESS" | "FAILED"; lastError?: string; }
+const defaultRoot = () => path.join(config.dataDir, "magnet-backups");
+const settingsPath = () => path.join(config.dataDir, "magnet-backup-settings.json");
+function configuredStorageDirectory(): string {
+  try { const value = JSON.parse(fs.readFileSync(settingsPath(), "utf8"))?.storageDirectory; return typeof value === "string" && path.isAbsolute(value) ? path.normalize(value) : defaultRoot(); }
+  catch { return defaultRoot(); }
+}
+function root(): string { return configuredStorageDirectory(); }
 export function magnetBackupDirectory(): string { return root(); }
 function indexPath(): string { return path.join(root(), "index.json"); }
-function schedulePath(): string { return path.join(root(), "schedule.json"); }
+function legacySchedulePath(): string { return path.join(defaultRoot(), "schedule.json"); }
 function readIndex(): MagnetBackupRecord[] { try { return JSON.parse(fs.readFileSync(indexPath(), "utf8")) as MagnetBackupRecord[]; } catch { return []; } }
 function atomicWrite(file: string, value: unknown): void { fs.mkdirSync(path.dirname(file), { recursive: true }); const temporary = `${file}.${process.pid}.tmp`; fs.writeFileSync(temporary, JSON.stringify(value, null, 2), { mode: 0o600 }); fs.renameSync(temporary, file); }
 function digest(value: unknown): string { return crypto.createHash("sha256").update(JSON.stringify(value)).digest("hex"); }
@@ -40,15 +46,17 @@ function configuredCronTime(): string {
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
-function defaultSchedule(): MagnetBackupSchedule { return { enabled: config.magnetBackupEnabled, provider: "", mode: "FULL", frequency: "DAILY", time: configuredCronTime(), weekday: 0, timezone: config.magnetBackupTimezone, keepLatest: config.magnetBackupDailyRetention, keepMonthly: config.magnetBackupMonthlyRetention, updatedAt: new Date().toISOString() }; }
+function defaultSchedule(): MagnetBackupSchedule { return { enabled: config.magnetBackupEnabled, provider: "", mode: "FULL", frequency: "DAILY", time: configuredCronTime(), weekday: 0, timezone: config.magnetBackupTimezone, keepLatest: config.magnetBackupDailyRetention, keepMonthly: config.magnetBackupMonthlyRetention, storageDirectory: defaultRoot(), updatedAt: new Date().toISOString() }; }
 function normalizeSchedule(value: Partial<MagnetBackupSchedule>, previous = defaultSchedule()): MagnetBackupSchedule {
   const time = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value.time || "")) ? String(value.time) : previous.time;
   const timezone = String(value.timezone || previous.timezone || "Europe/Rome");
   try { new Intl.DateTimeFormat("en", { timeZone: timezone }).format(); } catch { throw new Error("Invalid backup timezone"); }
-  return { ...previous, enabled: value.enabled === true, provider: String(value.provider ?? previous.provider).trim().toLowerCase(), mode: value.mode === "INCREMENTAL" ? "INCREMENTAL" : "FULL", frequency: value.frequency === "WEEKLY" ? "WEEKLY" : "DAILY", time, weekday: Math.max(0, Math.min(6, Number(value.weekday ?? previous.weekday) || 0)), timezone, keepLatest: Math.max(1, Math.min(1000, Number(value.keepLatest ?? previous.keepLatest) || 1)), keepMonthly: Math.max(0, Math.min(120, Number(value.keepMonthly ?? previous.keepMonthly) || 0)), updatedAt: value.updatedAt || previous.updatedAt || new Date().toISOString(), lastRunAt: Object.prototype.hasOwnProperty.call(value, "lastRunAt") ? value.lastRunAt : previous.lastRunAt, lastStatus: Object.prototype.hasOwnProperty.call(value, "lastStatus") ? value.lastStatus : previous.lastStatus, lastError: Object.prototype.hasOwnProperty.call(value, "lastError") ? value.lastError : previous.lastError };
+  const storageDirectory = path.normalize(String(value.storageDirectory || previous.storageDirectory || defaultRoot()).trim());
+  if (!path.isAbsolute(storageDirectory)) throw new Error("Backup folder must be an absolute server path");
+  return { ...previous, enabled: value.enabled === true, provider: String(value.provider ?? previous.provider).trim().toLowerCase(), mode: value.mode === "INCREMENTAL" ? "INCREMENTAL" : "FULL", frequency: value.frequency === "WEEKLY" ? "WEEKLY" : "DAILY", time, weekday: Math.max(0, Math.min(6, Number(value.weekday ?? previous.weekday) || 0)), timezone, keepLatest: Math.max(1, Math.min(1000, Number(value.keepLatest ?? previous.keepLatest) || 1)), keepMonthly: Math.max(0, Math.min(120, Number(value.keepMonthly ?? previous.keepMonthly) || 0)), storageDirectory, updatedAt: value.updatedAt || previous.updatedAt || new Date().toISOString(), lastRunAt: Object.prototype.hasOwnProperty.call(value, "lastRunAt") ? value.lastRunAt : previous.lastRunAt, lastStatus: Object.prototype.hasOwnProperty.call(value, "lastStatus") ? value.lastStatus : previous.lastStatus, lastError: Object.prototype.hasOwnProperty.call(value, "lastError") ? value.lastError : previous.lastError };
 }
-export function getMagnetBackupSchedule(): MagnetBackupSchedule { try { return normalizeSchedule(JSON.parse(fs.readFileSync(schedulePath(), "utf8")) as MagnetBackupSchedule); } catch { return defaultSchedule(); } }
-export function saveMagnetBackupSchedule(value: Partial<MagnetBackupSchedule>): MagnetBackupSchedule { const previous = getMagnetBackupSchedule(); const next = normalizeSchedule({ ...previous, ...value, updatedAt: new Date().toISOString() }, previous); if (next.enabled && !next.provider) throw new Error("Select a provider for scheduled backups"); atomicWrite(schedulePath(), next); return next; }
+export function getMagnetBackupSchedule(): MagnetBackupSchedule { try { return normalizeSchedule(JSON.parse(fs.readFileSync(settingsPath(), "utf8")) as MagnetBackupSchedule); } catch { try { return normalizeSchedule(JSON.parse(fs.readFileSync(legacySchedulePath(), "utf8")) as MagnetBackupSchedule); } catch { return defaultSchedule(); } } }
+export function saveMagnetBackupSchedule(value: Partial<MagnetBackupSchedule>): MagnetBackupSchedule { const previous = getMagnetBackupSchedule(); const next = normalizeSchedule({ ...previous, ...value, updatedAt: new Date().toISOString() }, previous); if (next.enabled && !next.provider) throw new Error("Select a provider for scheduled backups"); fs.mkdirSync(next.storageDirectory, { recursive: true }); fs.accessSync(next.storageDirectory, fs.constants.R_OK | fs.constants.W_OK); atomicWrite(settingsPath(), next); return next; }
 
 /** Delete one local backup document. A full baseline referenced by an incremental is protected. */
 export function deleteMagnetBackup(id: string): MagnetBackupRecord {

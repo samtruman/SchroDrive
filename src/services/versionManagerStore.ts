@@ -85,6 +85,7 @@ export type VersionManagerSnapshotStatus = "VALID" | "PARTIAL" | "INVALID" | "UN
 
 export interface VersionManagerSnapshot {
   id: string;
+  providerId: string;
   groups: VersionGroup[];
   profiles: VersionProfile[];
   policyHash?: string;
@@ -95,14 +96,15 @@ export interface VersionManagerSnapshot {
 export function saveVersionManagerSnapshot(
   groups: VersionGroup[],
   profiles: VersionProfile[],
-  options: { policyHash?: string; status?: VersionManagerSnapshotStatus } = {},
+  options: { policyHash?: string; status?: VersionManagerSnapshotStatus; providerId?: string } = {},
 ): string {
-  const id = `scan-${Date.now()}`;
+  const providerId = options.providerId || "legacy";
+  const id = `scan-${providerId}-${Date.now()}`;
   const database = getDb();
   const now = new Date().toISOString();
   const transaction = database.transaction(() => {
-    database.prepare("INSERT INTO version_manager_scans (id, group_count, version_count, profiles_json, groups_json, policy_hash, snapshot_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-      .run(id, groups.length, groups.reduce((total, group) => total + group.versions.length, 0), JSON.stringify(profiles), JSON.stringify(groups), options.policyHash ?? null, options.status ?? "VALID", now);
+    database.prepare("INSERT INTO version_manager_scans (id, provider_id, group_count, version_count, profiles_json, groups_json, policy_hash, snapshot_status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(id, providerId, groups.length, groups.reduce((total, group) => total + group.versions.length, 0), JSON.stringify(profiles), JSON.stringify(groups), options.policyHash ?? null, options.status ?? "VALID", now);
     const insert = database.prepare("INSERT INTO version_manager_items (scan_id, group_id, item_id, decision, fingerprint_json, reasons_json) VALUES (?, ?, ?, ?, ?, ?)");
     for (const group of groups) for (const version of group.versions) insert.run(id, group.id, version.id, version.decision, JSON.stringify(version.fingerprint), JSON.stringify({ reasons: version.reasons, evaluations: version.evaluations }));
   });
@@ -110,19 +112,24 @@ export function saveVersionManagerSnapshot(
   return id;
 }
 
-export function getLatestVersionManagerScan(): { id: string; groupCount: number; versionCount: number; createdAt: string; reviewCount?: number; deleteCandidateCount?: number; primaryMissing?: number; remoteMissing?: number } | undefined {
-  const row = getDb().prepare("SELECT id, group_count, version_count, created_at FROM version_manager_scans WHERE snapshot_status = 'VALID' ORDER BY created_at DESC LIMIT 1").get() as any;
+export function getLatestVersionManagerScan(providerId?: string): { id: string; providerId: string; groupCount: number; versionCount: number; createdAt: string; reviewCount?: number; deleteCandidateCount?: number; primaryMissing?: number; remoteMissing?: number } | undefined {
+  const row = providerId
+    ? getDb().prepare("SELECT id, provider_id, group_count, version_count, created_at FROM version_manager_scans WHERE snapshot_status = 'VALID' AND provider_id = ? ORDER BY created_at DESC LIMIT 1").get(providerId) as any
+    : getDb().prepare("SELECT id, provider_id, group_count, version_count, created_at FROM version_manager_scans WHERE snapshot_status = 'VALID' ORDER BY created_at DESC LIMIT 1").get() as any;
   if (!row) return undefined;
   const audit = getDb().prepare("SELECT review_count, delete_candidate_count, primary_missing, remote_missing FROM version_manager_preview_audit ORDER BY id DESC LIMIT 1").get() as any;
-  return { id: row.id, groupCount: row.group_count, versionCount: row.version_count, createdAt: row.created_at, reviewCount: audit?.review_count, deleteCandidateCount: audit?.delete_candidate_count, primaryMissing: audit?.primary_missing, remoteMissing: audit?.remote_missing };
+  return { id: row.id, providerId: row.provider_id || "legacy", groupCount: row.group_count, versionCount: row.version_count, createdAt: row.created_at, reviewCount: audit?.review_count, deleteCandidateCount: audit?.delete_candidate_count, primaryMissing: audit?.primary_missing, remoteMissing: audit?.remote_missing };
 }
 
-export function getLatestVersionManagerSnapshot(): VersionManagerSnapshot | undefined {
-  const row = getDb().prepare("SELECT id, groups_json, profiles_json, policy_hash, snapshot_status, created_at FROM version_manager_scans WHERE snapshot_status = 'VALID' ORDER BY created_at DESC LIMIT 1").get() as any;
+export function getLatestVersionManagerSnapshot(providerId?: string): VersionManagerSnapshot | undefined {
+  const row = providerId
+    ? getDb().prepare("SELECT id, provider_id, groups_json, profiles_json, policy_hash, snapshot_status, created_at FROM version_manager_scans WHERE snapshot_status = 'VALID' AND provider_id = ? ORDER BY created_at DESC LIMIT 1").get(providerId) as any
+    : getDb().prepare("SELECT id, provider_id, groups_json, profiles_json, policy_hash, snapshot_status, created_at FROM version_manager_scans WHERE snapshot_status = 'VALID' ORDER BY created_at DESC LIMIT 1").get() as any;
   if (!row) return undefined;
   try {
     return {
       id: row.id,
+      providerId: row.provider_id || "legacy",
       groups: row.groups_json ? JSON.parse(row.groups_json) : [],
       profiles: JSON.parse(row.profiles_json),
       policyHash: row.policy_hash || undefined,
@@ -132,8 +139,8 @@ export function getLatestVersionManagerSnapshot(): VersionManagerSnapshot | unde
   } catch { return undefined; }
 }
 
-export function getLatestVersionManagerRecords(): VersionRecord[] {
-  const scan = getLatestVersionManagerScan();
+export function getLatestVersionManagerRecords(providerId?: string): VersionRecord[] {
+  const scan = getLatestVersionManagerScan(providerId);
   if (!scan) return [];
   return (getDb().prepare("SELECT item_id, fingerprint_json FROM version_manager_items WHERE scan_id = ?").all(scan.id) as any[]).flatMap((row) => {
     try { return [{ id: row.item_id, fingerprint: JSON.parse(row.fingerprint_json) } as VersionRecord]; } catch { return []; }
@@ -145,6 +152,7 @@ export type VersionManagerScanPhase = "idle" | "provider_listing" | "file_tree" 
 
 export interface VersionManagerScanJob {
   id: string;
+  providerId: string;
   status: VersionManagerScanStatus;
   phase: VersionManagerScanPhase;
   completed: number;
@@ -159,7 +167,7 @@ export interface VersionManagerScanJob {
 
 function mapJob(row: any): VersionManagerScanJob {
   return {
-    id: row.id, status: row.status, phase: row.phase,
+    id: row.id, providerId: row.provider_id || "legacy", status: row.status, phase: row.phase,
     completed: Number(row.completed || 0), total: row.total === null || row.total === undefined ? undefined : Number(row.total),
     startedAt: row.started_at, updatedAt: row.updated_at, finishedAt: row.finished_at || undefined,
     lastError: row.last_error || undefined, snapshotId: row.snapshot_id || undefined, snapshotValid: Boolean(row.snapshot_valid),
@@ -171,10 +179,10 @@ export function recoverInterruptedVersionManagerScanJobs(): void {
   getDb().prepare("UPDATE version_manager_scan_jobs SET status = 'FAILED', phase = 'idle', last_error = 'Scan interrupted by process restart', finished_at = ?, updated_at = ? WHERE status IN ('SCANNING', 'ENRICHING', 'EVALUATING', 'PERSISTING')").run(now, now);
 }
 
-export function createVersionManagerScanJob(): VersionManagerScanJob {
-  const id = `scan-job-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+export function createVersionManagerScanJob(providerId = "legacy"): VersionManagerScanJob {
+  const id = `scan-job-${providerId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const now = new Date().toISOString();
-  getDb().prepare("INSERT INTO version_manager_scan_jobs (id, status, phase, started_at, updated_at) VALUES (?, 'SCANNING', 'provider_listing', ?, ?)").run(id, now, now);
+  getDb().prepare("INSERT INTO version_manager_scan_jobs (id, provider_id, status, phase, started_at, updated_at) VALUES (?, ?, 'SCANNING', 'provider_listing', ?, ?)").run(id, providerId, now, now);
   return getVersionManagerScanJob(id)!;
 }
 
@@ -191,7 +199,9 @@ export function getVersionManagerScanJob(id: string): VersionManagerScanJob | un
   return row ? mapJob(row) : undefined;
 }
 
-export function getActiveVersionManagerScanJob(): VersionManagerScanJob | undefined {
-  const row = getDb().prepare("SELECT * FROM version_manager_scan_jobs WHERE status IN ('SCANNING', 'ENRICHING', 'EVALUATING', 'PERSISTING') ORDER BY started_at DESC LIMIT 1").get() as any;
+export function getActiveVersionManagerScanJob(providerId?: string): VersionManagerScanJob | undefined {
+  const row = providerId
+    ? getDb().prepare("SELECT * FROM version_manager_scan_jobs WHERE provider_id = ? AND status IN ('SCANNING', 'ENRICHING', 'EVALUATING', 'PERSISTING') ORDER BY started_at DESC LIMIT 1").get(providerId) as any
+    : getDb().prepare("SELECT * FROM version_manager_scan_jobs WHERE status IN ('SCANNING', 'ENRICHING', 'EVALUATING', 'PERSISTING') ORDER BY started_at DESC LIMIT 1").get() as any;
   return row ? mapJob(row) : undefined;
 }
