@@ -83,6 +83,8 @@ export interface VersionProfile {
   sizePreference?: "LARGER" | "SMALLER" | "IGNORE";
   /** Ignore insignificant size differences when applying the size tie-breaker. */
   minimumSizeDifferencePercent?: number;
+  /** Prefer one release group consistently when comparing episodes in a season. */
+  releaseGroupConsistency?: "DISABLED" | "SEASON";
   acquisitionBehavior?: "AUTOMATIC" | "APPROVAL_REQUIRED" | "DISABLED";
   /** Read-only acquisition mapping discovered from Seerr's ARR settings. */
   arrProfiles?: {
@@ -445,7 +447,7 @@ export const defaultVersionProfiles: VersionProfile[] = [
     languagePolicy: { required: { values: [], mode: "ALL" }, preferred: [], original: true },
     hardRequirements: { op: "AND", children: [] },
     sourceOrder: ["REMUX", "BLURAY", "WEB-DL", "WEBRIP", "HDTV"], codecOrder: ["HEVC", "AV1", "H264"], audioOrder: ["TRUEHD", "DTS-HD MA", "DTS-HD", "DDP", "EAC3", "AAC"],
-    sizePreference: "LARGER", minimumSizeDifferencePercent: 10,
+    sizePreference: "LARGER", minimumSizeDifferencePercent: 10, releaseGroupConsistency: "DISABLED",
   },
   {
     id: "remote", name: "REMOTE / DIRECT PLAY", enabled: false, target: "DIRECT_PLAY", preferredResolution: "1080p",
@@ -609,10 +611,48 @@ function groupKey(version: VersionRecord): string {
   return [identity.kind, identity.normalizedTitle, identity.year || "", identity.season ?? "", identity.episode ?? ""].join(":");
 }
 
+function applyReleaseGroupConsistency(groups: VersionGroup[], profiles: VersionProfile[]): VersionGroup[] {
+  const profile = profiles.find((candidate) => candidate.enabled && candidate.target === "QUALITY" && candidate.releaseGroupConsistency === "SEASON");
+  if (!profile) return groups;
+  const seasons = new Map<string, VersionGroup[]>();
+  for (const group of groups) {
+    const identity = group.identity;
+    if (identity.kind !== "episode" || identity.season === undefined || !identity.normalizedTitle) continue;
+    const key = `${identity.normalizedTitle}:${identity.year || ""}:${identity.season}`;
+    seasons.set(key, [...(seasons.get(key) || []), group]);
+  }
+  for (const seasonGroups of seasons.values()) {
+    const counts = new Map<string, number>();
+    for (const group of seasonGroups) {
+      const kept = group.versions.find((version) => version.decision === "KEEP" && version.satisfiesProfiles?.includes(profile.id));
+      const releaseGroup = kept?.fingerprint.release?.group?.trim();
+      if (releaseGroup) counts.set(releaseGroup, (counts.get(releaseGroup) || 0) + 1);
+    }
+    const ordered = [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+    if (!ordered.length || (ordered.length > 1 && ordered[0][1] === ordered[1][1])) continue;
+    const preferredGroup = ordered[0][0];
+    for (const group of seasonGroups) {
+      const eligible = group.versions.filter((version) => version.fingerprint.release?.group?.trim() === preferredGroup && version.evaluations.some((evaluation) => evaluation.profileId === profile.id && evaluation.eligible));
+      if (!eligible.length) continue;
+      const winner = [...eligible].sort((left, right) => compareForProfile(left, right, profile))[0];
+      const current = group.versions.find((version) => version.decision === "KEEP" && version.satisfiesProfiles?.includes(profile.id));
+      if (current?.id === winner.id) continue;
+      if (current) {
+        current.decision = "DELETE_CANDIDATE";
+        current.reasons.push({ code: "season_release_group_replaced", message: `Release group ${preferredGroup} is preferred for this season`, facts: { preferredReleaseGroup: preferredGroup, season: group.identity.season } });
+      }
+      winner.decision = "KEEP";
+      winner.satisfiesProfiles = [...new Set([...(winner.satisfiesProfiles || []), profile.id])];
+      winner.reasons.push({ code: "season_release_group_preference", message: `Preferred release group for season: ${preferredGroup}`, facts: { preferredReleaseGroup: preferredGroup, season: group.identity.season } });
+    }
+  }
+  return groups;
+}
+
 export function evaluateVersionGroups(versions: VersionRecord[], profiles = defaultVersionProfiles, policy: VersionManagerPolicy = defaultVersionManagerPolicy): VersionGroup[] {
   const groups = new Map<string, VersionRecord[]>();
   for (const version of versions) groups.set(groupKey(version), [...(groups.get(groupKey(version)) || []), version]);
-  return [...groups.entries()].map(([id, members]) => {
+  const evaluatedGroups = [...groups.entries()].map(([id, members]) => {
     const activeProfiles = profiles.filter((profile) => profile.enabled && (profile.target !== "DIRECT_PLAY" || policy.enableRemote));
     const evaluations = members.map((version): VersionEvaluation => ({ ...version, decision: "REVIEW", evaluations: activeProfiles.map((profile) => evaluateProfile(version, profile)), reasons: [] }));
     const tiedProfiles = new Set<string>();
@@ -679,6 +719,7 @@ export function evaluateVersionGroups(versions: VersionRecord[], profiles = defa
     }));
     return { id, identity: members[0].fingerprint.identity, versions: evaluations, remote, profileStatuses };
   });
+  return applyReleaseGroupConsistency(evaluatedGroups, profiles);
 }
 
 const OPERATOR_ALIASES: Record<string, string> = {
@@ -762,6 +803,7 @@ function canonicalProfile(profile: VersionProfile): unknown {
     scoringRules: (profile.scoringRules || []).map(canonicalScoringRule).sort(canonicalCompare),
     sizePreference: profile.sizePreference || "IGNORE",
     minimumSizeDifferencePercent: profile.minimumSizeDifferencePercent ?? 0,
+    releaseGroupConsistency: profile.releaseGroupConsistency || "DISABLED",
     arrProfiles: profile.arrProfiles ? {
       movie: profile.arrProfiles.movie ? { provider: "radarr", serverId: profile.arrProfiles.movie.serverId, qualityProfileId: profile.arrProfiles.movie.qualityProfileId } : null,
       tv: profile.arrProfiles.tv ? { provider: "sonarr", serverId: profile.arrProfiles.tv.serverId, qualityProfileId: profile.arrProfiles.tv.qualityProfileId } : null,

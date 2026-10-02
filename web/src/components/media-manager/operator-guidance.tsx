@@ -73,8 +73,11 @@ export function DeleteImpactCards({ items, scope, dryRun, busyId, selectedIds, o
   const logicalGroups = new Map<string, { title: string; items: any[] }>();
   for (const item of items) {
     const anchor = item.versions.find((version: any) => version.decision === "DELETE_CANDIDATE") || item.versions[0];
-    const groupId = anchor?.groupId || `${item.provider}:${item.providerItemId}`;
-    const key = `${item.provider}:${groupId}`;
+    // The retention group id can be broader than one episode when season-level
+    // release consistency is enabled. Delete must still render one logical
+    // content at a time, so include the complete episode identity here.
+    const identityKey = [anchor?.kind, anchor?.normalizedTitle || anchor?.title, anchor?.year, anchor?.season, anchor?.episode].map((value) => value ?? "").join(":");
+    const key = `${item.provider}:${identityKey || anchor?.groupId || item.providerItemId}`;
     const group: { title: string; items: any[] } = logicalGroups.get(key) || { title: anchor?.title || "Unresolved content", items: [] };
     group.items.push(item);
     logicalGroups.set(key, group);
