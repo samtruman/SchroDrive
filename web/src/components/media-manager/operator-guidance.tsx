@@ -48,22 +48,40 @@ export function VersionLine({ version }: { version: any }) {
 }
 
 export function DeleteImpactCards({ items, scope, dryRun, busyId, selectedIds, onToggleSelected, onDetails, onDelete }: { items: any[]; scope: string; dryRun: boolean; busyId?: string; selectedIds?: Set<string>; onToggleSelected?: (item: any, selected: boolean) => void; onDetails: (item: any) => void; onDelete: (item: any) => void }) {
+  const logicalGroups = new Map<string, { title: string; items: any[] }>();
+  for (const item of items) {
+    const anchor = item.versions.find((version: any) => version.decision === "DELETE_CANDIDATE") || item.versions[0];
+    const groupId = anchor?.groupId || `${item.provider}:${item.providerItemId}`;
+    const key = `${item.provider}:${groupId}`;
+    const group: { title: string; items: any[] } = logicalGroups.get(key) || { title: anchor?.title || "Unresolved content", items: [] };
+    group.items.push(item);
+    logicalGroups.set(key, group);
+  }
+  const groupedItems = [...logicalGroups.values()].sort((a, b) => a.title.localeCompare(b.title));
   return <section className="space-y-3" aria-label={scope === "protected" ? "Protected resources" : "Deletion candidates"}>
-    <div><h2 className="font-semibold">{scope === "protected" ? "Protected / Not deletable" : scope === "attention" ? "Needs review" : "Deletion candidates"} · {items.length} physical resources</h2><p className="text-sm text-muted-foreground">{scope === "protected" ? "These resources contain a logical candidate, but physical deletion is blocked by a KEEP/shared item, missing replacement, review, or recoverability requirement." : scope === "attention" ? "These resources have no actionable removal candidate. Resolve the review, identity, replacement, or recoverability blocker before reassessing them." : dryRun ? "Each physical resource has a confirmed KEEP replacement. Validate dry run repeats all checks against the provider without deleting anything." : "Each physical resource has a confirmed KEEP replacement. You can validate safely or delete it after an explicit confirmation; every action repeats all checks first."}</p></div>
+    <div><h2 className="font-semibold">{scope === "protected" ? "Protected / Not deletable" : scope === "attention" ? "Needs review" : "Deletion candidates"} · {items.length} physical resources · {groupedItems.length} logical contents</h2><p className="text-sm text-muted-foreground">{scope === "protected" ? "These resources contain a logical candidate, but physical deletion is blocked by a KEEP/shared item, missing replacement, review, or recoverability requirement." : scope === "attention" ? "These resources have no actionable removal candidate. Resolve the review, identity, replacement, or recoverability blocker before reassessing them." : dryRun ? "Each physical resource has a confirmed KEEP replacement. Validate dry run repeats all checks against the provider without deleting anything." : "Each physical resource has a confirmed KEEP replacement. You can validate safely or delete it after an explicit confirmation; every action repeats all checks first."}</p></div>
     {!items.length && <p className="rounded border p-4 text-sm">No resources match this view.</p>}
-    {items.map(item => {
-      const candidates = item.versions.filter((v: any) => v.decision === "DELETE_CANDIDATE");
-      const title = (candidates[0] || item.versions[0])?.title || "Unresolved content";
-      const selectionKey = `${item.provider}:${item.providerItemId}`;
-      return <Card key={`${item.provider}:${item.providerItemId}`} data-testid="delete-resource"><CardContent className="space-y-3 p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2"><div className="flex items-center gap-3">{scope === "candidates" && <input type="checkbox" aria-label={`Select ${title}`} checked={selectedIds?.has(selectionKey) || false} disabled={Boolean(busyId)} onChange={(event) => onToggleSelected?.(item, event.target.checked)} className="h-4 w-4" />}<h3 className="font-semibold">{title}</h3></div><span className="rounded border px-2 py-1 text-xs">{item.protectedByKeep ? "PROTECTED" : item.state === "READY" ? `ELIGIBLE · ${dryRun ? "DRY RUN" : "LIVE"}` : "NOT DELETABLE"}</span></div>
-        {candidates.map((candidate: any) => {
-          const kept = [...item.versions.filter((v: any) => v.decision === "KEEP"), ...(item.alternativeVersions || [])].filter((v: any) => v.groupId === candidate.groupId);
-          return <div key={candidate.id} className="grid gap-3 md:grid-cols-2"><div className="rounded border border-amber-500/30 p-3 text-sm"><p className="mb-1 font-semibold">Candidate</p><VersionLine version={candidate} /></div><div className="rounded border border-emerald-500/30 p-3 text-sm"><p className="mb-1 font-semibold">Kept instead · same content / episode</p>{kept.length ? kept.map((v: any) => <div key={v.id} className="space-y-1"><VersionLine version={v} /><DecisionEvidence candidate={candidate} kept={v} /></div>) : <p>No confirmed KEEP replacement. Physical deletion is blocked.</p>}</div></div>;
-        })}
-        {!candidates.length && <p className="text-sm">No removal candidate. {item.versions.some((v: any) => v.decision === "REVIEW") ? "Resolve the review blockers before a decision can be made." : "The versions in this resource are retained."}</p>}
-        <div className="text-sm"><p className="font-semibold">Physical deletion: {item.state === "READY" && !item.onlyCopy && !item.protectedByKeep ? dryRun ? "eligible; validation only while Dry run is enabled" : "eligible after final provider revalidation" : "blocked"}</p><p className="text-muted-foreground">{item.reasons.join(" · ")}</p></div>
-        <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" onClick={() => onDetails(item)}>Details</Button>{scope === "candidates" && <Button size="sm" variant={dryRun ? "secondary" : "destructive"} disabled={Boolean(busyId)} onClick={() => onDelete(item)}>{busyId === `${item.provider}:${item.providerItemId}` ? dryRun ? "Validating…" : "Deleting…" : dryRun ? "Delete · dry run" : "Delete ProviderItem"}</Button>}</div>
+    {groupedItems.map(group => {
+      const retained: any[] = group.items.flatMap((item: any) => [...item.versions, ...(item.alternativeVersions || [])]).filter((v: any) => v.decision === "KEEP" || v.isRetained || v.retained === true).slice(0, 1);
+      return <Card key={`${group.title}:${group.items.map((item: any) => item.providerItemId).join(",")}`} data-testid="delete-logical-group"><CardContent className="space-y-4 p-4">
+        <div className="flex flex-wrap items-center justify-between gap-2"><h3 className="font-semibold">{group.title}</h3><span className="rounded border px-2 py-1 text-xs">{group.items.length} physical resource{group.items.length === 1 ? "" : "s"} · one logical content</span></div>
+        <div className="overflow-x-auto rounded-lg border"><table className="w-full min-w-[980px] text-left text-sm"><thead className="border-b bg-muted/20"><tr><th className="p-3 font-semibold">Kept</th><th className="p-3 font-semibold">Excluded / deletion candidates</th><th className="p-3 font-semibold">Reason</th><th className="p-3 font-semibold">Action</th></tr></thead><tbody>
+          {group.items.map((item: any, itemIndex: number) => {
+            const candidates = item.versions.filter((v: any) => v.decision === "DELETE_CANDIDATE");
+            const reviews = item.versions.filter((v: any) => v.decision === "REVIEW");
+            const selectionKey = `${item.provider}:${item.providerItemId}`;
+            const keptForItem = item.versions.filter((v: any) => v.decision === "KEEP");
+            const primaryKept = keptForItem[0] || retained[0];
+            const decisionText = candidates.length ? "DELETE CANDIDATE" : reviews.length ? "REVIEW" : primaryKept ? "KEEP" : "RETAINED";
+            const reasonText = candidates.length ? (candidates.flatMap((v: any) => v.reasons || []).join(" · ") || item.reasons.join(" · ")) : item.reasons.join(" · ") || "Retained by the active policy";
+            return <tr key={selectionKey} data-testid="delete-resource" className="border-b align-top last:border-0">
+              {itemIndex === 0 && <td rowSpan={group.items.length} className="p-3 align-top">{primaryKept ? <><span className="mb-2 inline-block rounded border border-emerald-500/30 px-2 py-1 text-xs font-semibold">KEEP · one retained copy</span><VersionLine version={primaryKept} /></> : <span className="text-muted-foreground">No retained winner</span>}</td>}
+              <td className="p-3">{candidates.length ? <div className="space-y-3">{candidates.map((candidate: any) => <div key={candidate.id} className="rounded border border-amber-500/30 p-3"><VersionLine version={candidate} /><p className="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300">{candidate.reasons?.length ? reasons(candidate) : "Lower-ranked admissible copy"}</p></div>)}</div> : <span className="text-muted-foreground">No deletion candidate</span>}</td>
+              <td className="p-3"><span className="mb-2 inline-block rounded border px-2 py-1 text-xs">{decisionText}</span><p className="text-muted-foreground">{reasonText}</p><p className="mt-2 text-xs text-muted-foreground">ProviderItem {item.providerItemId} · {item.provider}</p></td>
+              <td className="p-3"><div className="flex min-w-[150px] flex-col gap-2">{scope === "candidates" && <input type="checkbox" aria-label={`Select ${group.title} ${item.providerItemId}`} checked={selectedIds?.has(selectionKey) || false} disabled={Boolean(busyId)} onChange={(event) => onToggleSelected?.(item, event.target.checked)} className="h-4 w-4" />}<Button size="sm" variant="outline" onClick={() => onDetails(item)}>Details</Button>{scope === "candidates" && <Button size="sm" variant={dryRun ? "secondary" : "destructive"} disabled={Boolean(busyId)} onClick={() => onDelete(item)}>{busyId === selectionKey ? dryRun ? "Validating…" : "Deleting…" : dryRun ? "Delete · dry run" : "Delete ProviderItem"}</Button>}<p className="text-xs text-muted-foreground">{item.state === "READY" && !item.onlyCopy && !item.protectedByKeep ? dryRun ? "Eligible; dry run only" : "Eligible after revalidation" : "Blocked"}</p></div></td>
+            </tr>;
+          })}
+        </tbody></table></div>
       </CardContent></Card>;
     })}
   </section>;
