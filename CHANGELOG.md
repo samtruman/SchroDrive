@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog (https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.html).
 
+## Unreleased — CineCircle fork — 2026-10-05
+
+### Fixed
+
+- **DavDebrid filename classification**: the organizer now applies the
+  DavDebrid/Plex parser before its generic heuristics, preventing a movie year
+  from being interpreted as an absolute TV episode. Multi-episode releases
+  retain their ending episode number.
+- **Canonical TV identity**: when a TV release has no year, the organizer
+  reuses an existing year-qualified directory only when the match is unique.
+  Ambiguous identities remain in the generic provider view and are recorded for
+  review instead of creating a second title-only directory.
+- **Provider-view aliases**: equivalent files exposed through AllDebrid
+  `__all__` and `shows` are compared by basename and size, avoiding false
+  collision suffixes and duplicate organized links.
+- **Arr visibility after organization**: after creating a new organized
+  symlink, SchröDrive pushes a targeted `RescanSeries` or `RescanMovie` to the
+  matching Sonarr/Radarr record. The operation is rate-limited per Arr entity
+  and does not import, move, rename, or delete source files.
+- **Arr bridge episode matching**: provider mount discovery no longer accepts
+  a same-show prefix match when season/episode identities disagree. This
+  prevents a request such as `S02E02` from being linked to an `S02E01` folder.
+- **Reconciliation capability reporting**: full-snapshot polling without a
+  recent-snapshot contract is reported explicitly as `polling-full-only`.
+
+### Verified in production
+
+- The Boys S04E04 and S04E05 were added after the change and were organized in
+  `The Boys (2019)/Season 04` as symlinks to the AllDebrid source view.
+- No second title-only folder was created and the original provider files were
+  not overwritten.
+
 ### Version [0.11.2] - 2026-08-15 🔒
 *Status: multi-arch release images, CodeQL security review*
 
@@ -602,4 +634,3 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
   - CLI commands to search and add
   - Docker image and Compose
   - Auto-update support via GitHub Releases
-

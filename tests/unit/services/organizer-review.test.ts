@@ -6,6 +6,7 @@ import {
   getOrganizerReview,
   listOrganizerReviewAudit,
   listOrganizerReviews,
+  autoResolveOrganizerReview,
   recordOrganizerReview,
   retryOrganizerReview,
   validateReviewOverride,
@@ -69,6 +70,26 @@ describe("Organizer review queue", () => {
       year: 2024,
       kind: "movie",
     });
+    clearOrganizerReviews();
+  });
+
+  test("auto-resolves a stale review when structured identity becomes reliable", () => {
+    clearOrganizerReviews();
+    const entry = recordOrganizerReview("/mount/Your Friends And Neighbors S01E02.mkv", parsed);
+    const resolved = autoResolveOrganizerReview(entry.sourcePath, {
+      status: "matched",
+      kind: "episode",
+      title: "Your Friends And Neighbors",
+      season: 1,
+      episode: 2,
+      extension: ".mkv",
+      sourceBasename: "Your Friends And Neighbors S01E02.mkv",
+      confidence: 0.98,
+      reason: "season-episode token",
+    });
+    expect(resolved?.decision).toBe("accepted");
+    expect(listOrganizerReviews()).toHaveLength(0);
+    expect(listOrganizerReviewAudit(entry.id).at(-1)?.action).toBe("auto-resolved");
     clearOrganizerReviews();
   });
 

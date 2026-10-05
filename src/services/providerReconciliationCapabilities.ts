@@ -45,5 +45,5 @@ export function assessReconciliationCapabilities(
   if (hasPush) {
     return { capabilities: { ...capabilities, changeDetection }, mode: 'push-only', reason: 'provider exposes push events but not a complete polling snapshot contract' };
   }
-  return { capabilities: { ...capabilities, recentSnapshot: hasRecent, changeDetection }, mode: 'polling', reason: hasRecent ? 'full/recent polling with worker-side snapshot diff is available' : 'full polling with worker-side snapshot diff is available; recent polling is unavailable' };
+  return { capabilities: { ...capabilities, recentSnapshot: hasRecent, changeDetection }, mode: 'polling-full-only', reason: hasRecent ? 'full/recent polling with worker-side snapshot diff is available' : 'full polling with worker-side snapshot diff is available; recent polling is unavailable' };
 }

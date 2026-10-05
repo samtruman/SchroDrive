@@ -103,6 +103,35 @@ export function recordOrganizerReview(sourcePath: string, parsed: ParsedMediaIde
   return entry;
 }
 
+/**
+ * Automatically resolves a stale pending review when a later parser pass has
+ * a reliable structured identity (for example, a clear S01E02 token). This
+ * keeps historical review records auditable without asking for a manual
+ * decision merely because the release directory omitted a year.
+ */
+export function autoResolveOrganizerReview(sourcePath: string, parsed: ParsedMediaIdentity): OrganizerReviewEntry | undefined {
+  const id = keyFor(sourcePath);
+  const database = getDb();
+  const row = database.prepare("SELECT * FROM organizer_reviews WHERE id = ? AND decision = 'pending'").get(id) as any;
+  if (!row) return undefined;
+
+  const updatedAt = new Date().toISOString();
+  database.prepare("UPDATE organizer_reviews SET parsed_json = ?, decision = 'accepted', updated_at = ? WHERE id = ?")
+    .run(JSON.stringify(parsed), updatedAt, id);
+  database.prepare("INSERT INTO organizer_review_audit (review_id, action, payload_json, created_at) VALUES (?, ?, ?, ?)")
+    .run(id, "auto-resolved", JSON.stringify({ reason: "reliable structured identity", parsed }), updatedAt);
+
+  return {
+    id,
+    sourcePath: row.source_path,
+    sourceBasename: row.source_basename,
+    parsed,
+    decision: "accepted",
+    createdAt: row.created_at,
+    updatedAt,
+  };
+}
+
 export function listOrganizerReviews(includeResolved = false, status?: ReviewDecision): OrganizerReviewEntry[] {
   migrateLegacyIds();
   const decision = status || (includeResolved ? undefined : "pending");
@@ -149,6 +178,29 @@ export function decideOrganizerReview(
     ...(effectiveOverride ? { override: effectiveOverride } : {}),
   };
   return updated;
+}
+
+/** Clears a manual identity override while keeping the review decision. */
+export function clearOrganizerReviewOverride(id: string): OrganizerReviewEntry | undefined {
+  const database = getDb();
+  const row = database.prepare("SELECT * FROM organizer_reviews WHERE id = ?").get(id) as any;
+  if (!row) return undefined;
+  const updatedAt = new Date().toISOString();
+  database.prepare("UPDATE organizer_reviews SET override_json = NULL, updated_at = ? WHERE id = ?")
+    .run(updatedAt, id);
+  database.prepare("INSERT INTO organizer_review_audit (review_id, action, payload_json, created_at) VALUES (?, ?, ?, ?)")
+    .run(id, "clear-match", null, updatedAt);
+  const parsed = parseStoredJson<ParsedMediaIdentity>(row.parsed_json);
+  if (!parsed) return undefined;
+  return {
+    id,
+    sourcePath: row.source_path,
+    sourceBasename: row.source_basename,
+    parsed,
+    decision: row.decision,
+    createdAt: row.created_at,
+    updatedAt,
+  };
 }
 
 /** Re-queues an item for another organizer pass without changing provider files. */

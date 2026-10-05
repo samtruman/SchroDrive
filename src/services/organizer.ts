@@ -24,7 +24,8 @@ import { config } from "../core/config";
 import { classifyTorrent } from "../core/mediaClassifier";
 import { getWebdavOrganiserRoots } from "./mount";
 import { parseMediaFilename, selectMediaCandidate } from "./mediaParser";
-import { getOrganizerReview, recordOrganizerReview, type ReviewOverride } from "./organizerReview";
+import { parseDavDebridFilename } from "./davdebridParser";
+import { autoResolveOrganizerReview, getOrganizerReview, recordOrganizerReview, type ReviewOverride } from "./organizerReview";
 
 // ===========================================================================
 // Types & Constants
@@ -181,6 +182,8 @@ export interface Parsed {
   season?: number;
   /** Episode number (only for type "tv" with standard numbering). */
   episode?: number;
+  /** Optional ending episode for multi-episode releases. */
+  episodeEnd?: number;
   /** Absolute episode number for anime-style numbering. */
   absolute?: number;
   /** File extension including the dot (e.g. ".mkv"). */
@@ -320,10 +323,28 @@ function guessTitleFromFilename(baseNoExt: string): string {
  * @param fullPath - The absolute path (used for parent directory hints).
  * @returns A {@link Parsed} object with the extracted metadata.
  */
-function parseFilename(fileName: string, fullPath: string): Parsed {
+export function parseFilename(fileName: string, fullPath: string): Parsed {
   const ext = path.extname(fileName);
   const baseNoExt = fileName.slice(0, -ext.length);
   const cleaned = sanitize(baseNoExt);
+
+  // Apply the historical DavDebrid/Plex classification boundary before the
+  // broader SchröDrive heuristics. This prevents a four-digit movie year from
+  // being interpreted as an absolute TV episode.
+  const dav = parseDavDebridFilename(fileName);
+  if (dav.type === "movie" && dav.title) {
+    return { type: "movie", title: dav.title, year: dav.year, ext };
+  }
+  if (dav.type === "episode" && dav.title) {
+    return {
+      type: "tv",
+      show: dav.title,
+      season: dav.season,
+      episode: dav.episode,
+      episodeEnd: dav.episodeEnd,
+      ext,
+    };
+  }
 
   const pathHints = findShowHintFromPath(fullPath);
 
@@ -895,6 +916,65 @@ async function pruneStaleSymlinks(dir: string): Promise<{ removedLinks: number; 
   return { removedLinks, removedDirs };
 }
 
+/**
+ * Removes valid symlinks left behind by an older classification or canonical
+ * naming decision.  A link is eligible only when its target is one of the
+ * sources seen in the current scan and the current scan computed a different
+ * destination for that source.  Provider files and regular files are never
+ * touched.
+ */
+async function reconcileObsoleteSymlinks(
+  dir: string,
+  desiredBySource: Map<string, string>,
+  dryRun: boolean,
+): Promise<{ removedLinks: number; removedDirs: number }> {
+  let removedLinks = 0;
+  let removedDirs = 0;
+
+  let entries: fs.Dirent[];
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true });
+  } catch {
+    return { removedLinks, removedDirs };
+  }
+
+  for (const ent of entries) {
+    const full = path.join(dir, ent.name);
+    if (ent.isDirectory()) {
+      const sub = await reconcileObsoleteSymlinks(full, desiredBySource, dryRun);
+      removedLinks += sub.removedLinks;
+      removedDirs += sub.removedDirs;
+
+      try {
+        if ((await fsp.readdir(full)).length === 0 && !dryRun) {
+          await fsp.rmdir(full);
+          removedDirs++;
+        }
+      } catch { /* ignore — directory may have disappeared already */ }
+      continue;
+    }
+
+    if (!ent.isSymbolicLink()) continue;
+    const current = await fsp.readlink(full).catch(() => "");
+    const source = path.resolve(path.dirname(full), current);
+    const desired = desiredBySource.get(source);
+    if (!desired || desired === full) continue;
+
+    console.log(`[${new Date().toISOString()}][organize] obsolete organized symlink`, {
+      path: full,
+      target: source,
+      replacement: desired,
+      dryRun,
+    });
+    if (!dryRun) {
+      await fsp.unlink(full);
+    }
+    removedLinks++;
+  }
+
+  return { removedLinks, removedDirs };
+}
+
 // ===========================================================================
 // Main Orchestration
 // ===========================================================================
@@ -996,6 +1076,7 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
   let tvCount = 0;
   let unknownCount = 0;
   const unknownSamples: string[] = [];
+  const desiredBySource = new Map<string, string>();
   for (const src of files) {
     const base = path.basename(src);
     const structuredIdentity = parseMediaFilename(base, src);
@@ -1070,7 +1151,12 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
       if (unknownSamples.length < 10) unknownSamples.push(src);
     }
 
-    if (structuredIdentity.status !== "matched" && parsed.type === "unknown") {
+    if (structuredIdentity.status === "matched") {
+      // A previous parser pass may have queued this file only because its
+      // release directory lacked a year. A reliable SxxEyy identity makes
+      // that review stale and safe to resolve automatically.
+      autoResolveOrganizerReview(src, structuredIdentity);
+    } else if (parsed.type === "unknown") {
       recordOrganizerReview(src, structuredIdentity);
     }
 
@@ -1082,7 +1168,27 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
     // naming remains unchanged for the common case.
     const safeDst = dryRun ? dst : await resolveCollisionTarget(src, dst);
     await makeSymlink(src, safeDst, dryRun, true);
+    desiredBySource.set(path.resolve(src), safeDst);
     processed++;
+  }
+
+  // A valid link can still be obsolete after a title/year/type correction.
+  // Reconcile only sources seen in this pass, so unrelated/manual links are
+  // left untouched and provider originals are never deleted.
+  if (!dryRun && desiredBySource.size > 0) {
+    let reconciledLinks = 0;
+    let reconciledDirs = 0;
+    for (const dir of [movieDir, tvDir, animeDir]) {
+      const result = await reconcileObsoleteSymlinks(dir, desiredBySource, dryRun);
+      reconciledLinks += result.removedLinks;
+      reconciledDirs += result.removedDirs;
+    }
+    if (reconciledLinks > 0 || reconciledDirs > 0) {
+      console.log(`[${new Date().toISOString()}][organize] reconciled obsolete content`, {
+        removedSymlinks: reconciledLinks,
+        removedEmptyDirs: reconciledDirs,
+      });
+    }
   }
 
   console.log(

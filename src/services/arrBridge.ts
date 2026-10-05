@@ -149,6 +149,34 @@ export function normaliseTorrentName(value: string): string {
     .trim();
 }
 
+/** Returns normalized season/episode identities found in a release name. */
+function extractEpisodeKeys(value: string): Set<string> {
+  const keys = new Set<string>();
+  const input = normaliseTorrentName(value).replace(/\s+/g, ' ');
+  const pattern = /s(\d{1,2})e(\d{1,3})(?:\s*[-&]\s*(?:s\1e)?(\d{1,3}))?/gi;
+  for (const match of input.matchAll(pattern)) {
+    const season = Number(match[1]);
+    const first = Number(match[2]);
+    const last = match[3] ? Number(match[3]) : first;
+    if (!Number.isFinite(season) || !Number.isFinite(first) || !Number.isFinite(last)) continue;
+    for (let episode = Math.min(first, last); episode <= Math.max(first, last); episode += 1) {
+      keys.add(`s${season}e${episode}`);
+    }
+  }
+  return keys;
+}
+
+/** Prevents same-series releases from being matched to another episode. */
+function hasCompatibleEpisodeIdentity(left: string, right: string): boolean {
+  const leftEpisodes = extractEpisodeKeys(left);
+  const rightEpisodes = extractEpisodeKeys(right);
+  if (leftEpisodes.size === 0 || rightEpisodes.size === 0) return true;
+  for (const key of leftEpisodes) {
+    if (rightEpisodes.has(key)) return true;
+  }
+  return false;
+}
+
 interface ProviderTorrentSnapshot {
   provider: string;
   torrent: TorrentInfo;
@@ -183,6 +211,7 @@ export function correlateProviderTorrent(
 
   const fuzzy = preferredSnapshots.find((snapshot) => {
     const providerName = normaliseTorrentName(snapshot.torrent.name);
+    if (!hasCompatibleEpisodeIdentity(torrent.name, snapshot.torrent.name)) return false;
     return providerName.length >= 20 && normalisedName.length >= 20 &&
       (providerName.includes(normalisedName.slice(0, 20)) ||
        normalisedName.includes(providerName.slice(0, 20)));
@@ -382,6 +411,11 @@ async function scanMountsForCompleted(): Promise<void> {
                   (entryNormalised.length >= 20 && nameNormalised.length >= 20 &&
                    (entryNormalised.includes(nameNormalised.slice(0, 20)) ||
                     nameNormalised.includes(entryNormalised.slice(0, 20))))) {
+                // A release name is not enough to identify a TV file: the
+                // first twenty characters are identical for every episode of
+                // the same show. Never associate S02E02 with an S02E01
+                // provider directory just because its title prefix matches.
+                if (!hasCompatibleEpisodeIdentity(torrent.name, entry)) continue;
                 const fullPath = path.join(searchDir, entry);
                 const stat = await fsp.stat(fullPath);
 

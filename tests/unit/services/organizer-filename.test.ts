@@ -5,17 +5,52 @@ import path from "path";
 import { config } from "../../../src/core/config";
 import {
   computeTarget,
+  parseFilename,
   applyOrganizerReviewOverride,
   makeSymlink,
   resolveCollisionTarget,
   selectOrganizerFilename,
   type Parsed,
 } from "../../../src/services/organizer";
+import { parseDavDebridFilename } from "../../../src/services/davdebridParser";
 
 const movie: Parsed = { type: "movie", title: "Example Film", year: 2024, ext: ".mkv" };
 const episode: Parsed = { type: "tv", show: "Example Show", season: 1, episode: 2, ext: ".mkv" };
 
 describe("Organizer filename mode", () => {
+  test("ports the validation regression: year-bearing film is not an episode", () => {
+    expect(parseDavDebridFilename("Validation Feature - 2024 2160p WEB-DL.mkv")).toEqual({
+      type: "movie",
+      title: "Validation Feature",
+      year: 2024,
+    });
+  });
+
+  test("handles validation films with a parenthesized year and release suffix", () => {
+    expect(parseDavDebridFilename("Validation Film (2024) WEB-DL 2160p.mkv")).toMatchObject({
+      type: "movie",
+      title: "Validation Film",
+      year: 2024,
+    });
+  });
+
+  test("keeps the historical episode precedence", () => {
+    const parsed = parseDavDebridFilename("Validation Series S01E02 1080p WEB-DL.mkv");
+    expect(parsed.type).toBe("episode");
+    expect(parsed.season).toBe(1);
+    expect(parsed.episode).toBe(2);
+  });
+
+  test("uses the DavDebrid boundary in the organizer flow", () => {
+    const parsed = parseFilename(
+      "Validation Feature - 2024 2160p WEB-DL.mkv",
+      "/mount/__all__/Validation Feature - 2024 2160p WEB-DL.mkv",
+    );
+    expect(parsed).toMatchObject({ type: "movie", title: "Validation Feature", year: 2024 });
+    expect(computeTarget(parsed, "Validation Feature - 2024 2160p WEB-DL.mkv", "/mount/source.mkv"))
+      .toContain("/Movies/Validation Feature (2024)/");
+  });
+
   test("defaults to canonical and keeps explicit canonical output unchanged", () => {
     expect(config.organizerFilenameMode).toBe("canonical");
     const target = computeTarget(movie, "Example.Film.2024.1080p.WEB-DL.mkv", "/mount/release/file.mkv");

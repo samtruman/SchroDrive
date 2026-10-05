@@ -96,7 +96,15 @@ export function startServer() {
       const updates = req.body?.config || {};
       const result = saveConfigToFile(updates);
       if (result.success) {
-        res.json({ ok: true, message: "Configuration saved", path: result.path });
+        // Saving configuration never restarts the process.  The GUI can use
+        // this flag to show the existing "restart required" notification;
+        // the explicit /api/restart action remains the only restart path.
+        res.json({
+          ok: true,
+          message: "Configuration saved",
+          path: result.path,
+          restartRequired: true,
+        });
       } else {
         res.status(500).json({ ok: false, error: result.error, path: result.path });
       }

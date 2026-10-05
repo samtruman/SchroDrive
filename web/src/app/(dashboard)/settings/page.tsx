@@ -238,6 +238,11 @@ export default function SettingsPage() {
       const data = await res.json()
       if (data.ok) {
         toast.success("Configuration saved to " + data.path)
+        if (data.restartRequired) {
+          toast.warning("Restart required", {
+            description: "Restart the container explicitly for the changes to take effect.",
+          })
+        }
         await fetchConfig()
       } else {
         toast.error("Failed to save: " + data.error)
