@@ -48,7 +48,7 @@ import { analyzeMigrationImport, executeMigrationImportBulk, executeMigrationImp
 import { aggregateMigrationJobs, effectiveMigrationStatus } from "./services/migrationState";
 import { migrationRouteLevel, providerMigrationCapabilities } from "./services/providerMigrationCapabilities";
 import { listMigrationAudit, recordAcquisitionAudit, recordMigrationAudit } from "./core/db";
-import { buildUnifiedReviewQueue } from "./services/unifiedReview";
+import { buildUnifiedReviewQueue, setVersionManagerReviewDismissed } from "./services/unifiedReview";
 import { getVersionManagerScanRuntimeStatus, getVersionManagerScanStatus, startVersionManagerScan } from "./services/versionManagerScanJob";
 import { createMagnetBackup, listMagnetBackups, readMagnetBackup, startMagnetBackupScheduler, verifyMagnetBackup } from "./services/magnetBackup";
 import { buildDeleteImpact } from "./services/deleteImpact";
@@ -370,6 +370,20 @@ export function startServer() {
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message || "Unified review queue failed" });
     }
+  });
+
+  app.post("/api/version-manager/review/:key", (req, res) => {
+    const key = String(req.params.key || "");
+    if (!/^review_[a-f0-9]{64}$/.test(key)) return res.status(400).json({ ok: false, error: "Invalid review key" });
+    if (req.body?.action === "dismiss") {
+      setVersionManagerReviewDismissed(key, true);
+      return res.json({ ok: true, decision: "dismissed" });
+    }
+    if (req.body?.action === "restore") {
+      setVersionManagerReviewDismissed(key, false);
+      return res.json({ ok: true, decision: "pending" });
+    }
+    return res.status(400).json({ ok: false, error: "action must be dismiss or restore" });
   });
 
   /**

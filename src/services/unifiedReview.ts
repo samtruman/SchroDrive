@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { OrganizerReviewEntry } from "./organizerReview";
 import type { VersionGroup, VersionEvaluation } from "./versionManager";
 import { normalizeMediaTitle } from "./mediaParser";
+import { getDb } from "../core/db";
 
 export type UnifiedReviewIssueType = "IDENTITY_ISSUE" | "POLICY_REVIEW" | "RECOVERABILITY_ISSUE";
 
@@ -42,6 +43,21 @@ export interface UnifiedReviewSummary {
 export interface UnifiedReviewQueue {
   entries: UnifiedReviewEntry[];
   summary: UnifiedReviewSummary;
+}
+
+export function listDismissedVersionManagerReviews(): Set<string> {
+  const rows = getDb().prepare("SELECT review_key FROM version_manager_review_dismissals").all() as Array<{ review_key: string }>;
+  return new Set(rows.map((row) => row.review_key));
+}
+
+export function setVersionManagerReviewDismissed(reviewKey: string, dismissed: boolean): void {
+  const database = getDb();
+  if (dismissed) {
+    database.prepare("INSERT OR REPLACE INTO version_manager_review_dismissals (review_key, updated_at) VALUES (?, ?)")
+      .run(reviewKey, new Date().toISOString());
+  } else {
+    database.prepare("DELETE FROM version_manager_review_dismissals WHERE review_key = ?").run(reviewKey);
+  }
 }
 
 function digest(value: string): string {
@@ -149,6 +165,7 @@ function makeOrganizerEntry(entry: OrganizerReviewEntry): UnifiedReviewEntry {
 
 export function buildUnifiedReviewQueue(groups: VersionGroup[], organizerReviews: OrganizerReviewEntry[] = [], status: "pending" | "dismissed" | "all" = "pending"): UnifiedReviewQueue {
   const entries = new Map<string, UnifiedReviewEntry>();
+  const dismissedPolicyReviews = listDismissedVersionManagerReviews();
   const aliases = new Map<string, string>();
   const canonicalByKey = new Map<string, boolean>();
   const add = (value: UnifiedReviewEntry): void => {
@@ -195,11 +212,16 @@ export function buildUnifiedReviewQueue(groups: VersionGroup[], organizerReviews
     const state = states.includes("NOT_RECOVERABLE") ? "NOT_RECOVERABLE" : states.includes("UNKNOWN") ? "UNKNOWN" : "RECOVERABLE";
     const sources = [...new Set(reviewVersions.map((version) => version.fingerprint.storage.recoverability?.source || (version.fingerprint.storage.infoHash ? "INFOHASH" : "UNKNOWN")))];
     const fallback = reviewVersions.map((version) => `${version.fingerprint.storage.provider}:${version.fingerprint.storage.torrentId}:${version.fingerprint.storage.fileId || ""}`).sort().join("|");
+    const key = keyForIdentity(group.identity, fallback);
+    const dismissed = dismissedPolicyReviews.has(key);
+    if (status === "pending" && dismissed) continue;
+    if (status === "dismissed" && !dismissed) continue;
     add({
-      key: keyForIdentity(group.identity, fallback), identity: group.identity, title: group.identity.title, year: group.identity.year, kind: group.identity.kind,
+      key, identity: group.identity, title: group.identity.title, year: group.identity.year, kind: group.identity.kind,
       season: group.identity.season, episode: group.identity.episode, issueTypes, reasonCodes, blockers: [...new Set(reviewVersions.flatMap((version) => version.reasons.map((reason) => reason.message)))],
       policyDecision: "REVIEW", recoverability: { status: state, sources }, identityResolutionStatus: identityStatus, versionGroupId: group.id,
-      versionIds: reviewVersions.map((version) => version.id), allowedActions: ["DETAILS"], allowIdentityActions: false,
+      decision: dismissed ? "dismissed" : "pending", versionIds: reviewVersions.map((version) => version.id),
+      allowedActions: dismissed ? ["RESTORE_TO_REVIEW", "DETAILS"] : ["DISMISS", "DETAILS"], allowIdentityActions: false,
     });
   }
   const result = [...entries.values()];

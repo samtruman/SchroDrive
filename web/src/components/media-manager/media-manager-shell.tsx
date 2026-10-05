@@ -661,7 +661,8 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const [sort, setSort] = useState("title");
   const [deleteScope, setDeleteScope] = useState("all");
   const [selected, setSelected] = useState<any>(null);
-  const [reviewStatus, setReviewStatus] = useState<"pending" | "dismissed">("pending");
+  const [reviewStatus, setReviewStatus] = useState<"pending" | "dismissed" | "all">("pending");
+  const [reviewIssueFilter, setReviewIssueFilter] = useState<"all" | "identity" | "policy" | "recoverability">("all");
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null);
   const reviewQueue = useJson<any>("/api/version-manager/review?status=pending");
   const [identityOnly, setIdentityOnly] = useState(false);
@@ -709,9 +710,12 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   useEffect(() => {
     if (preset === "review") void loadReview();
   }, [loadReview, preset, reviewStatus]);
-  async function reviewAction(id: string, body: Record<string, unknown>) {
+  async function reviewAction(id: string, body: Record<string, unknown>, item?: any) {
+    const endpoint = item?.organizerReview
+      ? `/api/organizer/review/${encodeURIComponent(id)}`
+      : `/api/version-manager/review/${encodeURIComponent(id)}`;
     const response = await fetch(
-      `/api/organizer/review/${encodeURIComponent(id)}`,
+      endpoint,
       {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -734,7 +738,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       context: item?.parsed?.title ? <p><b>Detected title:</b> {item.parsed.title}</p> : undefined,
       confirmLabel: isRestore ? "Restore to Review" : isAccept ? "Accept as detected" : isDismiss ? "Dismiss" : "Retry / Resume",
       variant: isDismiss ? "destructive" : isAccept ? "secondary" : "default",
-      onConfirm: () => reviewAction(id, body),
+      onConfirm: () => reviewAction(id, body, item),
     });
   }
   const groups = useMemo(
@@ -1012,9 +1016,16 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
           </Card>
           <div className="flex flex-wrap items-center gap-2 rounded-lg border p-3">
             <span className="text-sm font-medium">Review status</span>
-            <select className="rounded border bg-background p-2 text-sm" value={reviewStatus} onChange={(event) => setReviewStatus(event.target.value as "pending" | "dismissed")}>
+            <select className="rounded border bg-background p-2 text-sm" value={reviewStatus} onChange={(event) => setReviewStatus(event.target.value as typeof reviewStatus)}>
               <option value="pending">Pending</option>
               <option value="dismissed">Dismissed</option>
+              <option value="all">All statuses</option>
+            </select>
+            <select className="rounded border bg-background p-2 text-sm" value={reviewIssueFilter} onChange={(event) => setReviewIssueFilter(event.target.value as typeof reviewIssueFilter)}>
+              <option value="all">All issues</option>
+              <option value="identity">Identity issues</option>
+              <option value="policy">Policy review</option>
+              <option value="recoverability">Recoverability issues</option>
             </select>
             <span className="text-xs text-muted-foreground">Dismissed items remain auditable and can be restored.</span>
           </div>
@@ -1025,7 +1036,13 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
             </p>
           ) : (
             <div className="space-y-3">
-              {(review.entries || []).filter((entry: any) => !identityOnly || entry.issueTypes?.includes("IDENTITY_ISSUE")).map((entry: any) => (
+              {(review.entries || []).filter((entry: any) => {
+                if (identityOnly && !entry.issueTypes?.includes("IDENTITY_ISSUE")) return false;
+                if (reviewIssueFilter === "identity" && !entry.issueTypes?.includes("IDENTITY_ISSUE")) return false;
+                if (reviewIssueFilter === "policy" && !entry.issueTypes?.includes("POLICY_REVIEW")) return false;
+                if (reviewIssueFilter === "recoverability" && !entry.issueTypes?.includes("RECOVERABILITY_ISSUE")) return false;
+                return true;
+              }).map((entry: any) => (
                 <Card key={entry.id}>
                   <CardContent className="space-y-3 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1039,6 +1056,9 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                     {entry.organizerReview && entry.decision !== "dismissed" && <IdentityResolver reviewId={entry.organizerReview.id} identity={entry.identity} initialQuery={entry.title} initialType={entry.kind === "episode" ? "tv" : "movie"} initialYear={entry.year} existingOverride={entry.organizerReview.override} actionLabel={entry.organizerReview.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />}
                     <div className="flex flex-wrap gap-2">
                       {entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "accepted" }, entry.organizerReview)}><Check className="mr-2 h-4 w-4" />Accept as detected</Button><Button size="sm" variant="destructive" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "dismissed" }, entry.organizerReview)}><X className="mr-2 h-4 w-4" />Dismiss</Button><Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry.organizerReview)}><RefreshCw className="mr-2 h-4 w-4" />Retry / Resume</Button></>)}
+                      {!entry.organizerReview && (entry.decision === "dismissed"
+                        ? <Button size="sm" onClick={() => requestReviewAction(entry.key, { action: "restore" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button>
+                        : <Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.key, { action: "dismiss" }, entry)}><X className="mr-2 h-4 w-4" />Dismiss</Button>)}
                       <Button size="sm" variant="ghost" onClick={() => setSelected(enrichReviewEntry(entry))}>
                         <ExternalLink className="mr-2 h-4 w-4" />Details
                       </Button>
@@ -1046,7 +1066,13 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                   </CardContent>
                 </Card>
               ))}
-              {review.entries && review.entries.filter((entry: any) => !identityOnly || entry.issueTypes?.includes("IDENTITY_ISSUE")).length === 0 && (
+              {review.entries && review.entries.filter((entry: any) => {
+                if (identityOnly && !entry.issueTypes?.includes("IDENTITY_ISSUE")) return false;
+                if (reviewIssueFilter === "identity" && !entry.issueTypes?.includes("IDENTITY_ISSUE")) return false;
+                if (reviewIssueFilter === "policy" && !entry.issueTypes?.includes("POLICY_REVIEW")) return false;
+                if (reviewIssueFilter === "recoverability" && !entry.issueTypes?.includes("RECOVERABILITY_ISSUE")) return false;
+                return true;
+              }).length === 0 && (
                 <Card><CardContent className="p-6 text-sm text-muted-foreground">No review items match the selected filter.</CardContent></Card>
               )}
             </div>
