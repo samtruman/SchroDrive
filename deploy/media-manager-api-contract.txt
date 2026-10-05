@@ -1,0 +1,20 @@
+# API required by the deployed Media Manager GUI.
+# Keep this list aligned with the GUI build before any runtime update.
+/api/version-manager/providers
+/api/version-manager/status
+/api/version-manager/scan
+/api/version-manager/preview
+/api/version-manager/delete-preview
+/api/version-manager/delete
+/api/version-manager/review
+/api/version-manager/missing
+/api/version-manager/migration/state
+/api/version-manager/migration/capabilities
+/api/version-manager/migration/preview
+/api/version-manager/migration/jobs
+/api/version-manager/import/preview
+/api/version-manager/magnet-backup
+/api/organizer/review
+/api/organizer/snapshots
+/api/organizer/jellyfin-preview
+/api/organizer/rollback
