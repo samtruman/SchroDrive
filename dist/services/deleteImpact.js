@@ -1,55 +1,296 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildDeleteImpact = buildDeleteImpact;
+exports.buildSelectedDeleteImpact = buildSelectedDeleteImpact;
+function logicalKey(group) {
+    const identity = group.identity || {};
+    if (identity.kind === "episode" || identity.season !== undefined || identity.episode !== undefined) {
+        return ["episode", identity.normalizedTitle || identity.title || "", identity.year || "", identity.season ?? "", identity.episode ?? ""].join(":");
+    }
+    return [identity.kind || "movie", identity.normalizedTitle || identity.title || "", identity.year || ""].join(":");
+}
+function deleteIdentity(group) {
+    const identity = group.identity || {};
+    return {
+        tmdbId: identity.tmdbId,
+        title: identity.title,
+        originalTitle: identity.originalTitle,
+        year: identity.year,
+        kind: identity.kind,
+        season: identity.season,
+        episode: identity.episode,
+    };
+}
+function reasonMessages(version) {
+    return [...new Set((version.reasons || [])
+            .map((reason) => {
+            if (typeof reason === "string")
+                return reason;
+            const facts = reason.facts || {};
+            const details = [];
+            if (reason.code === "profile_winner") {
+                if (facts.profile)
+                    details.push(`profile ${String(facts.profile)}`);
+                if (typeof facts.score === "number")
+                    details.push(`score ${facts.score}`);
+                const evaluation = version.evaluations?.find((candidate) => candidate.profileId === String(facts.profile));
+                const breakdown = Object.entries(evaluation?.breakdown || {})
+                    .filter(([, value]) => Number.isFinite(Number(value)))
+                    .map(([key, value]) => `${key} ${value}`)
+                    .join(", ");
+                if (breakdown)
+                    details.push(`score breakdown: ${breakdown}`);
+            }
+            return details.length ? `${reason.message} (${details.join("; ")})` : reason.message;
+        })
+            .filter(Boolean))];
+}
+function itemKey(provider, providerItemId) {
+    return `${provider}:${providerItemId}`;
+}
+function addReason(item, reason) {
+    if (!item.reasons.includes(reason))
+        item.reasons.push(reason);
+}
+function matchesScope(item, scope) {
+    const hasCandidate = item.versions.some((version) => version.decision === "DELETE_CANDIDATE");
+    const hasReview = item.versions.some((version) => version.decision === "REVIEW");
+    if (scope === "candidates")
+        return item.state === "READY" && hasCandidate;
+    if (scope === "protected")
+        return hasCandidate && item.state !== "READY";
+    if (scope === "attention")
+        return !hasCandidate && hasReview;
+    return true;
+}
+/**
+ * Projects the complete inventory into physical ProviderItems.
+ *
+ * The logical decision is made per content/episode first. Only then are all
+ * versions sharing a ProviderItem assembled and classified. This is important
+ * for season packs: episodes share a physical delete unit but never become
+ * alternatives for one another.
+ */
 function buildDeleteImpact(groups, query = "", scope = "all") {
     const result = new Map();
-    const q = query.trim().toLowerCase();
-    for (const group of groups)
+    const logicalKeepers = new Map();
+    const seenPhysicalFiles = new Map();
+    for (const group of groups) {
         for (const version of group.versions) {
             const storage = version.fingerprint.storage;
-            const text = JSON.stringify({ group, version }).toLowerCase();
-            if (q && !text.includes(q))
-                continue;
-            if (scope === "candidates" && version.decision !== "DELETE_CANDIDATE")
-                continue;
-            if (scope === "attention" && version.decision !== "REVIEW")
-                continue;
-            const key = `${storage.provider}:${storage.torrentId}`;
-            const item = result.get(key) || { providerItemId: storage.torrentId, provider: storage.provider, state: "READY", onlyCopy: true, versions: [], affectedGroups: [], reasons: [], alternativeVersions: [], physicalSize: 0, protectedByKeep: false };
-            item.versions.push({ id: version.id, title: group.identity.title, season: group.identity.season, episode: group.identity.episode, decision: version.decision, profileIds: version.satisfiesProfiles || [], reasons: (version.reasons || []).map((reason) => reason.message), files: [{ path: storage.path, size: storage.size }] });
-            item.physicalSize = Math.max(item.physicalSize, Number(storage.size || 0));
+            const key = itemKey(storage.provider, storage.torrentId);
+            const item = result.get(key) || {
+                providerItemId: storage.torrentId,
+                provider: storage.provider,
+                state: "BLOCKED",
+                onlyCopy: false,
+                versions: [],
+                affectedGroups: [],
+                reasons: [],
+                alternativeVersions: [],
+                physicalSize: 0,
+                protectedByKeep: false,
+            };
+            item.versions.push({
+                id: version.id,
+                groupId: group.id,
+                logicalKey: logicalKey(group),
+                identity: deleteIdentity(group),
+                title: group.identity.title,
+                season: group.identity.season,
+                episode: group.identity.episode,
+                decision: version.decision,
+                profileIds: version.satisfiesProfiles || [],
+                reasons: reasonMessages(version),
+                fingerprint: version.fingerprint,
+                files: [{ path: storage.path, size: storage.size }],
+            });
             if (!item.affectedGroups.includes(group.id))
                 item.affectedGroups.push(group.id);
+            const physicalFileKey = storage.fileId || storage.path || version.id;
+            const seenFiles = seenPhysicalFiles.get(key) || new Set();
+            if (!seenFiles.has(physicalFileKey)) {
+                seenFiles.add(physicalFileKey);
+                item.physicalSize += Number(storage.size || 0);
+            }
+            seenPhysicalFiles.set(key, seenFiles);
             if (version.decision === "KEEP") {
-                item.onlyCopy = false;
                 item.protectedByKeep = true;
-            }
-            if (version.decision === "REVIEW") {
-                item.state = "BLOCKED";
-                item.reasons.push("Review or identity blocker requires operator decision");
-            }
-            if (version.decision === "DELETE_CANDIDATE" && storage.recoverability?.status !== "RECOVERABLE") {
-                item.state = "BLOCKED";
-                item.reasons.push("Provider item is not confirmed recoverable");
+                logicalKeepers.set(logicalKey(group), [
+                    ...(logicalKeepers.get(logicalKey(group)) || []),
+                    { group, version },
+                ]);
             }
             result.set(key, item);
         }
+    }
     for (const item of result.values()) {
-        const relatedGroups = groups.filter((group) => item.affectedGroups.includes(group.id));
-        const alternatives = relatedGroups.flatMap((group) => group.versions)
-            .filter((version) => version.fingerprint.storage.torrentId !== item.providerItemId && version.decision === "KEEP")
-            .map((version) => ({ id: version.id, title: version.fingerprint.identity.title, season: version.fingerprint.identity.season, episode: version.fingerprint.identity.episode, providerItemId: version.fingerprint.storage.torrentId, decision: version.decision, profileIds: version.satisfiesProfiles || [], reasons: (version.reasons || []).map((reason) => reason.message) }));
-        item.alternativeVersions = alternatives;
-        if (item.onlyCopy)
-            item.reasons.push("ONLY COPY — No alternative version identified");
+        const candidates = item.versions.filter((version) => version.decision === "DELETE_CANDIDATE");
+        const reviews = item.versions.filter((version) => version.decision === "REVIEW");
+        item.alternativeVersions = candidates.flatMap((candidate) => (logicalKeepers.get(candidate.logicalKey) || [])
+            .filter(({ version }) => itemKey(version.fingerprint.storage.provider, version.fingerprint.storage.torrentId) !== itemKey(item.provider, item.providerItemId))
+            .map(({ group, version }) => ({
+            id: version.id,
+            groupId: group.id,
+            logicalKey: logicalKey(group),
+            identity: deleteIdentity(group),
+            title: group.identity.title,
+            season: group.identity.season,
+            episode: group.identity.episode,
+            provider: version.fingerprint.storage.provider,
+            providerItemId: version.fingerprint.storage.torrentId,
+            decision: version.decision,
+            profileIds: version.satisfiesProfiles || [],
+            reasons: reasonMessages(version),
+            fingerprint: version.fingerprint,
+        }))).filter((version, index, all) => all.findIndex((candidate) => candidate.id === version.id) === index);
+        const candidateWithoutAlternative = candidates.some((candidate) => !item.alternativeVersions.some((alternative) => alternative.logicalKey === candidate.logicalKey));
+        item.onlyCopy = candidates.length > 0 && candidateWithoutAlternative;
         if (item.protectedByKeep) {
             item.state = "PARTIALLY_REDUNDANT";
-            item.reasons.push("PROTECTED — ProviderItem contains a KEEP version");
+            addReason(item, "PROTECTED — ProviderItem contains a KEEP version");
         }
-        else if (item.alternativeVersions.length)
-            item.reasons.push(`Alternative KEEP versions on ${new Set(item.alternativeVersions.map((version) => version.providerItemId)).size} other ProviderItem(s)`);
-        if (!item.reasons.length)
-            item.reasons.push("ProviderItem is the physical delete unit; executor is disabled");
+        if (reviews.length > 0) {
+            item.state = "BLOCKED";
+            addReason(item, "Review or identity blocker requires operator decision");
+        }
+        if (candidates.some((candidate) => candidate.fingerprint?.storage.recoverability?.status !== "RECOVERABLE")) {
+            item.state = "BLOCKED";
+            addReason(item, "Provider item is not confirmed recoverable");
+        }
+        if (item.onlyCopy) {
+            item.state = "BLOCKED";
+            addReason(item, "ONLY COPY — No alternative version identified for every candidate episode");
+        }
+        if (candidates.length > 0 && !item.protectedByKeep && !reviews.length && !item.onlyCopy &&
+            item.versions.filter((version) => version.decision === "DELETE_CANDIDATE").every((candidate) => candidate.fingerprint?.storage.recoverability?.status === "RECOVERABLE")) {
+            item.state = "READY";
+            if (item.alternativeVersions.length) {
+                addReason(item, `Alternative KEEP versions on ${new Set(item.alternativeVersions.map((version) => version.providerItemId)).size} other ProviderItem(s)`);
+            }
+            else {
+                addReason(item, "ProviderItem is the physical delete unit; final provider revalidation is required");
+            }
+        }
+        else if (!candidates.length && reviews.length) {
+            item.state = "BLOCKED";
+        }
+        item.reasons = [...new Set(item.reasons)];
     }
-    return [...result.values()].sort((a, b) => a.providerItemId.localeCompare(b.providerItemId));
+    const q = query.trim().toLowerCase();
+    return [...result.values()]
+        .filter((item) => {
+        // Query is applied after full ProviderItem assembly so a matching episode
+        // never hides the KEEP/blocker rows sharing its physical pack.
+        if (q && !JSON.stringify(item).toLowerCase().includes(q))
+            return false;
+        const hasNonKeep = item.versions.some((version) => version.decision !== "KEEP");
+        return hasNonKeep && matchesScope(item, scope);
+    })
+        .sort((a, b) => a.providerItemId.localeCompare(b.providerItemId));
+}
+/**
+ * Reclassifies an explicit operator selection without rewriting the persisted
+ * policy decision. A selected KEEP item is deletable only when every logical
+ * content unit it contains has an admissible, unselected version elsewhere.
+ */
+function buildSelectedDeleteImpact(groups, selection) {
+    const selectedKeys = new Set(selection.map((item) => itemKey(item.provider, item.providerItemId)));
+    const result = new Map();
+    const groupsById = new Map(groups.map((group) => [group.id, group]));
+    const seenPhysicalFiles = new Map();
+    for (const group of groups) {
+        for (const version of group.versions) {
+            const storage = version.fingerprint.storage;
+            const key = itemKey(storage.provider, storage.torrentId);
+            if (!selectedKeys.has(key))
+                continue;
+            const item = result.get(key) || {
+                providerItemId: storage.torrentId,
+                provider: storage.provider,
+                state: "BLOCKED",
+                onlyCopy: false,
+                versions: [],
+                affectedGroups: [],
+                reasons: [],
+                alternativeVersions: [],
+                physicalSize: 0,
+                protectedByKeep: false,
+            };
+            item.versions.push({
+                id: version.id,
+                groupId: group.id,
+                logicalKey: logicalKey(group),
+                identity: deleteIdentity(group),
+                title: group.identity.title,
+                season: group.identity.season,
+                episode: group.identity.episode,
+                decision: version.decision,
+                profileIds: version.satisfiesProfiles || [],
+                reasons: reasonMessages(version),
+                fingerprint: version.fingerprint,
+                files: [{ path: storage.path, size: storage.size }],
+            });
+            if (!item.affectedGroups.includes(group.id))
+                item.affectedGroups.push(group.id);
+            const physicalFileKey = storage.fileId || storage.path || version.id;
+            const seenFiles = seenPhysicalFiles.get(key) || new Set();
+            if (!seenFiles.has(physicalFileKey)) {
+                seenFiles.add(physicalFileKey);
+                item.physicalSize += Number(storage.size || 0);
+            }
+            seenPhysicalFiles.set(key, seenFiles);
+            result.set(key, item);
+        }
+    }
+    for (const item of result.values()) {
+        let missingAlternative = false;
+        for (const groupId of item.affectedGroups) {
+            const group = groupsById.get(groupId);
+            if (!group) {
+                missingAlternative = true;
+                continue;
+            }
+            const survivors = group.versions.filter((version) => {
+                const storage = version.fingerprint.storage;
+                return !selectedKeys.has(itemKey(storage.provider, storage.torrentId)) && version.decision !== "REVIEW";
+            });
+            if (!survivors.length)
+                missingAlternative = true;
+            item.alternativeVersions.push(...survivors.map((version) => ({
+                id: version.id,
+                groupId: group.id,
+                logicalKey: logicalKey(group),
+                identity: deleteIdentity(group),
+                title: group.identity.title,
+                season: group.identity.season,
+                episode: group.identity.episode,
+                provider: version.fingerprint.storage.provider,
+                providerItemId: version.fingerprint.storage.torrentId,
+                decision: version.decision,
+                profileIds: version.satisfiesProfiles || [],
+                reasons: reasonMessages(version),
+                fingerprint: version.fingerprint,
+            })));
+        }
+        item.alternativeVersions = item.alternativeVersions.filter((version, index, all) => all.findIndex((candidate) => candidate.id === version.id && candidate.provider === version.provider && candidate.providerItemId === version.providerItemId) === index);
+        item.onlyCopy = missingAlternative;
+        const hasReview = item.versions.some((version) => version.decision === "REVIEW");
+        const recoverable = item.versions.every((version) => version.fingerprint?.storage.recoverability?.status === "RECOVERABLE");
+        const overridesKeep = item.versions.some((version) => version.decision === "KEEP");
+        if (missingAlternative)
+            addReason(item, "ONLY COPY — At least one selected content unit has no unselected alternative");
+        if (hasReview)
+            addReason(item, "Review or identity blocker requires operator decision");
+        if (!recoverable)
+            addReason(item, "Provider item is not confirmed recoverable");
+        if (overridesKeep)
+            addReason(item, "Operator selection overrides the policy KEEP recommendation for this deletion");
+        if (!missingAlternative && !hasReview && recoverable) {
+            item.state = "READY";
+            addReason(item, `Operator selection leaves admissible versions on ${new Set(item.alternativeVersions.map((version) => itemKey(version.provider, version.providerItemId))).size} other ProviderItem(s)`);
+        }
+        item.reasons = [...new Set(item.reasons)];
+    }
+    return [...result.values()].sort((a, b) => itemKey(a.provider, a.providerItemId).localeCompare(itemKey(b.provider, b.providerItemId)));
 }

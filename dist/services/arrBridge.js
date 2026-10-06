@@ -18,6 +18,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.getDownloadsPath = getDownloadsPath;
+exports.createStableSymlink = createStableSymlink;
 exports.scanDirRecursive = scanDirRecursive;
 exports.clearTrackedForTests = clearTrackedForTests;
 exports.startArrBridge = startArrBridge;
@@ -128,7 +130,7 @@ function extractMagnetName(magnet) {
 }
 /** Returns the base download path for symlinks. */
 function getDownloadsPath() {
-    return path_1.default.join(config_1.config.mountBase, 'downloads');
+    return config_1.config.arrDownloadsPath || path_1.default.join(config_1.config.mountBase, 'downloads');
 }
 /** Ensures the downloads staging directory exists. */
 async function ensureDownloadsDir() {
@@ -139,6 +141,20 @@ async function ensureDownloadsDir() {
     catch {
         // Already exists
     }
+}
+/**
+ * Create a symlink whose target remains valid if *arr moves the link out of
+ * the staging directory. The target is deliberately absolute: the existing
+ * bridge contract requires SchroDrive and *arr to expose the shared mount at
+ * the same path inside their containers.
+ */
+async function createStableSymlink(sourcePath, symlinkPath) {
+    await promises_1.default.mkdir(path_1.default.dirname(symlinkPath), { recursive: true });
+    try {
+        await promises_1.default.unlink(symlinkPath);
+    }
+    catch { /* does not exist */ }
+    await promises_1.default.symlink(path_1.default.resolve(sourcePath), symlinkPath);
 }
 // ===========================================================================
 // Debrid Status Polling
@@ -288,15 +304,7 @@ async function scanMountsForCompleted() {
                 for (const file of foundFiles) {
                     const symlinkPath = path_1.default.join(torrentDir, file.name);
                     try {
-                        // Create relative symlink
-                        await promises_1.default.mkdir(path_1.default.dirname(symlinkPath), { recursive: true });
-                        const relativePath = path_1.default.relative(path_1.default.dirname(symlinkPath), file.path);
-                        // Remove existing symlink if it exists
-                        try {
-                            await promises_1.default.unlink(symlinkPath);
-                        }
-                        catch { /* doesn't exist */ }
-                        await promises_1.default.symlink(relativePath, symlinkPath);
+                        await createStableSymlink(file.path, symlinkPath);
                     }
                     catch (err) {
                         console.error(`${LOG_PREFIX} Failed to create symlink for ${file.name}: ${err?.message}`);

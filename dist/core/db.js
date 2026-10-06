@@ -28,6 +28,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getDb = getDb;
 exports.closeDb = closeDb;
 exports.recordAcquisitionAudit = recordAcquisitionAudit;
+exports.recordVersionManagerDeleteAudit = recordVersionManagerDeleteAudit;
+exports.listVersionManagerDeleteAudit = listVersionManagerDeleteAudit;
 exports.recordMigrationAudit = recordMigrationAudit;
 exports.listMigrationAudit = listMigrationAudit;
 exports.pruneOldEntries = pruneOldEntries;
@@ -295,6 +297,22 @@ function runMigrations(database) {
     )`,
         `CREATE INDEX IF NOT EXISTS idx_version_manager_items_scan
       ON version_manager_items (scan_id, decision)`,
+        `CREATE TABLE IF NOT EXISTS version_manager_review_dismissals (
+      review_key TEXT PRIMARY KEY,
+      updated_at TEXT NOT NULL
+    )`,
+        `CREATE TABLE IF NOT EXISTS version_manager_delete_audit (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      provider TEXT NOT NULL,
+      provider_item_id TEXT NOT NULL,
+      snapshot_id TEXT NOT NULL,
+      mode TEXT NOT NULL,
+      status TEXT NOT NULL,
+      detail TEXT,
+      created_at TEXT NOT NULL
+    )`,
+        `CREATE INDEX IF NOT EXISTS idx_version_manager_delete_audit_item
+      ON version_manager_delete_audit (provider, provider_item_id, created_at)`,
         `CREATE TABLE IF NOT EXISTS version_manager_probe_cache (
       cache_key TEXT PRIMARY KEY,
       path TEXT NOT NULL,
@@ -377,6 +395,16 @@ function recordAcquisitionAudit(record) {
     catch (error) {
         console.error(`[${new Date().toISOString()}][db] acquisition audit error: ${error?.message}`);
     }
+}
+function recordVersionManagerDeleteAudit(record) {
+    getDb().prepare(`INSERT INTO version_manager_delete_audit
+    (provider, provider_item_id, snapshot_id, mode, status, detail, created_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(record.provider, record.providerItemId, record.snapshotId, record.mode, record.status, record.detail ?? null, record.createdAt || new Date().toISOString());
+}
+function listVersionManagerDeleteAudit(limit = 200) {
+    const rows = getDb().prepare(`SELECT provider, provider_item_id, snapshot_id, mode, status, detail, created_at
+    FROM version_manager_delete_audit ORDER BY id DESC LIMIT ?`).all(Math.max(1, Math.min(limit, 1000)));
+    return rows.map((row) => ({ provider: row.provider, providerItemId: row.provider_item_id, snapshotId: row.snapshot_id, mode: row.mode, status: row.status, detail: row.detail || undefined, createdAt: row.created_at }));
 }
 function recordMigrationAudit(record) {
     try {

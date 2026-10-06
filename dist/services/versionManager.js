@@ -257,7 +257,7 @@ exports.defaultVersionManagerPolicy = {
     acquireMissingRemote: false,
     acquisitionMode: "ARR",
     preferCompletePack: false,
-    safety: { requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false },
+    safety: { deleteDryRun: true, requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false },
     policyVersion: "1",
 };
 function hasRequiredLanguages(version, policy) {

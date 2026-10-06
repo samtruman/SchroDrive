@@ -17,12 +17,6 @@ export function ReviewActionGuide() {
 }
 
 const reasons = (version: any) => [...new Set((version.reasons || []).map((r: any) => typeof r === "string" ? r : r.message).filter(Boolean))].join(" · ");
-const sameLogicalContent = (left: any, right: any) => {
-  if (!left || !right) return false;
-  if (left.groupId && right.groupId) return left.groupId === right.groupId;
-  if (left.logicalKey && right.logicalKey) return left.logicalKey === right.logicalKey;
-  return (left.title || "") === (right.title || "") && (left.season ?? "") === (right.season ?? "") && (left.episode ?? "") === (right.episode ?? "");
-};
 function formatBytes(value: unknown): string | undefined {
   const bytes = Number(value);
   if (!Number.isFinite(bytes) || bytes <= 0) return undefined;
@@ -30,12 +24,74 @@ function formatBytes(value: unknown): string | undefined {
   const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / 1024 ** unit).toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
-function VersionLine({ version }: { version: any }) {
-  const fp = version.fingerprint || {}, video = fp.video || {}, storage = fp.storage || {};
+type PhysicalRef = { provider: string; providerItemId: string; physicalSize?: number };
+
+function physicalRef(version: any): PhysicalRef {
+  const storage = version.fingerprint?.storage || {};
+  return {
+    provider: String(version.providerItem?.provider || version.provider || storage.provider || ""),
+    providerItemId: String(version.providerItem?.providerItemId || storage.torrentId || ""),
+    physicalSize: Number(version.providerItem?.physicalSize || storage.size || 0),
+  };
+}
+
+function selectionKey(ref: PhysicalRef): string {
+  return `${ref.provider}:${ref.providerItemId}`;
+}
+
+type PhysicalRelease = { key: string; ref: PhysicalRef; versions: any[] };
+
+export function groupVersionsByPhysicalItem(versions: any[]): PhysicalRelease[] {
+  const releases = new Map<string, PhysicalRelease>();
+  for (const version of versions) {
+    const ref = physicalRef(version);
+    const key = ref.provider && ref.providerItemId ? selectionKey(ref) : `unavailable:${version.id || releases.size}`;
+    const release = releases.get(key) || { key, ref, versions: [] };
+    if (!release.versions.some((candidate: any) => candidate.id === version.id)) release.versions.push(version);
+    releases.set(key, release);
+  }
+  return [...releases.values()];
+}
+
+function VersionRow({ version }: { version: any }) {
+  const fp = version.fingerprint || {}, video = fp.video || {}, storage = fp.storage || {}, identity = version.identity || fp.identity || {};
   const languages = [...new Set((fp.audio || []).map((audio: any) => audio.language).filter(Boolean))].join("/");
   const name = (storage.path || version.files?.[0]?.path || "Filename unavailable").split(/[\\/]/).pop();
   const size = formatBytes(storage.size || version.files?.[0]?.size);
-  return <div className="min-w-0"><p className="break-words">{version.season !== undefined ? `S${String(version.season).padStart(2,"0")}E${String(version.episode ?? 0).padStart(2,"0")} · ` : ""}{name}</p><p className="text-xs text-muted-foreground">{[video.resolution, fp.release?.source, video.codec, video.dolbyVision ? "Dolby Vision" : video.hdr10 ? "HDR10" : video.dynamicRange, languages, size, storage.provider || version.provider].filter(Boolean).join(" · ")}</p><p className="mt-1 text-xs">{reasons(version)}</p></div>;
+  const season = identity.season ?? version.season;
+  const episode = identity.episode ?? version.episode;
+  const episodeLabel = season !== undefined && episode !== undefined ? `S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}` : undefined;
+  return <div className="px-3 py-2">
+    <p className="break-words">{episodeLabel ? `${episodeLabel} · ` : ""}{name}</p>
+    <p className="text-xs text-muted-foreground">{[video.resolution, fp.release?.source, video.codec, video.dolbyVision ? "Dolby Vision" : video.hdr10 ? "HDR10" : video.dynamicRange, languages, size].filter(Boolean).join(" · ")}</p>
+    <p className="mt-1 text-xs">{reasons(version)}</p>
+  </div>;
+}
+
+function PhysicalReleaseCard({ release, selected, selectable, disabled, onToggle }: { release: PhysicalRelease; selected: boolean; selectable: boolean; disabled: boolean; onToggle: (selected: boolean) => void }) {
+  const episodeCount = new Set(release.versions.map((version: any) => {
+    const identity = version.identity || version.fingerprint?.identity || {};
+    return `${identity.season ?? version.season ?? ""}:${identity.episode ?? version.episode ?? ""}`;
+  })).size;
+  const orderedVersions = [...release.versions].sort((left: any, right: any) => {
+    const leftIdentity = left.identity || left.fingerprint?.identity || {};
+    const rightIdentity = right.identity || right.fingerprint?.identity || {};
+    return Number(leftIdentity.season ?? left.season ?? 0) - Number(rightIdentity.season ?? right.season ?? 0)
+      || Number(leftIdentity.episode ?? left.episode ?? 0) - Number(rightIdentity.episode ?? right.episode ?? 0);
+  });
+  const canSelect = selectable && Boolean(release.ref.provider && release.ref.providerItemId);
+  const decisions = new Set(release.versions.map((version: any) => version.decision).filter(Boolean));
+  const releaseRole = decisions.has("REVIEW") ? "Needs review" : decisions.has("KEEP") && decisions.has("DELETE_CANDIDATE") ? "Protected mixed release" : decisions.has("DELETE_CANDIDATE") ? "Deletion candidate" : decisions.has("KEEP") ? "Policy retained" : "Unclassified release";
+  return <div className={`overflow-hidden rounded border ${selected ? "border-destructive/60 bg-destructive/5" : decisions.has("DELETE_CANDIDATE") ? "border-amber-500/40" : decisions.has("KEEP") ? "border-emerald-500/40" : "border-border/70"}`}>
+    <label className={`flex items-start gap-3 p-3 ${canSelect ? "cursor-pointer" : ""}`}>
+      {selectable && <input type="checkbox" checked={selected} disabled={disabled || !canSelect} onChange={(event) => onToggle(event.target.checked)} className="mt-1 h-4 w-4 shrink-0" />}
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center justify-between gap-2"><p className="font-medium">{episodeCount > 1 ? `Season pack · ${episodeCount} linked episodes` : "Single media release"}</p><span className="rounded border px-2 py-0.5 text-xs">{releaseRole}</span></div>
+        <p className="text-xs text-muted-foreground">{release.ref.provider || "Provider unavailable"} · ProviderItem {release.ref.providerItemId || "unavailable"}{selected ? " · selected for deletion" : ""}</p>
+      </div>
+    </label>
+    <div className="divide-y border-t">{orderedVersions.map((version: any, index: number) => <VersionRow key={version.id || index} version={version} />)}</div>
+  </div>;
 }
 
 function groupDeleteItems(items: any[]) {
@@ -43,7 +99,7 @@ function groupDeleteItems(items: any[]) {
   for (const item of items) {
     const contentVersions = [
       ...(item.versions || []).map((version: any) => ({ ...version, providerItem: item })),
-      ...(item.alternativeVersions || []).map((version: any) => ({ ...version, providerItem: { provider: item.provider, providerItemId: version.providerItemId } })),
+      ...(item.alternativeVersions || []).map((version: any) => ({ ...version, providerItem: { provider: version.provider || version.fingerprint?.storage?.provider, providerItemId: version.providerItemId, physicalSize: version.fingerprint?.storage?.size } })),
     ];
     for (const version of contentVersions) {
       const identity = version.identity || version.fingerprint?.identity || {};
@@ -69,34 +125,48 @@ function groupDeleteItems(items: any[]) {
   return [...groups.values()].map((group) => ({ ...group, episodes: [...group.episodes.values()] }));
 }
 
-function episodeLabel(item: any): string {
-  const labels = [...new Set((item.versions || []).filter((version: any) => version.season !== undefined).map((version: any) => `S${String(version.season).padStart(2, "0")}E${String(version.episode ?? "").padStart(2, "0")}`))];
-  return labels.length ? labels.join(", ") : "Film";
+function uniqueRefs(versions: any[]): PhysicalRef[] {
+  const refs = new Map<string, PhysicalRef>();
+  for (const version of versions) {
+    const ref = physicalRef(version);
+    if (ref.provider && ref.providerItemId) refs.set(selectionKey(ref), ref);
+  }
+  return [...refs.values()];
 }
 
-export function DeleteImpactCards({ items, scope, dryRun, busyId, selectedIds, onToggleSelected, onDetails, onDelete }: { items: any[]; scope: string; dryRun: boolean; busyId?: string; selectedIds?: Set<string>; onToggleSelected?: (item: any, selected: boolean) => void; onDetails: (item: any) => void; onDelete: (item: any) => void }) {
+export function DeleteImpactCards({ items, scope, busyId, selectedIds, onChangeSelection }: { items: any[]; scope: string; busyId?: string; selectedIds?: Set<string>; onChangeSelection: (add: PhysicalRef[], removeKeys: string[]) => void }) {
   const groups = groupDeleteItems(items);
+  const selectable = scope === "candidates";
   return <section className="space-y-3" aria-label={scope === "protected" ? "Protected resources" : scope === "attention" ? "Resources needing attention" : "Deletion candidates"}>
-    <div><h2 className="font-semibold">{scope === "protected" ? "Protected / Not deletable" : scope === "attention" ? "Needs review" : "Deletion candidates"} · {items.length} physical resources</h2><p className="text-sm text-muted-foreground">{scope === "protected" ? "These resources contain a logical candidate, but physical deletion is blocked by a KEEP/shared item, missing replacement, review, or recoverability requirement." : scope === "attention" ? "These resources have no actionable removal candidate. Resolve the review, identity, replacement, or recoverability blocker before reassessing them." : "Content is grouped by canonical identity first. Physical ProviderItems and their actions remain separate inside each film or series season."}</p></div>
+    <div><h2 className="font-semibold">{scope === "protected" ? "Protected / Not deletable" : scope === "attention" ? "Needs review" : "Deletion candidates"}</h2><p className="text-sm text-muted-foreground">{scope === "protected" ? "These resources contain a logical candidate, but physical deletion is blocked by a KEEP/shared item, missing replacement, review, or recoverability requirement." : scope === "attention" ? "These resources have no actionable removal candidate. Resolve the review, identity, replacement, or recoverability blocker before reassessing them." : "Select complete physical releases. A season pack is one box and one selection containing all linked episodes; independently stored episodes remain separate boxes."}</p></div>
     {!items.length && <p className="rounded border p-4 text-sm">No resources match this view.</p>}
-    {groups.map((group) => <Card key={group.key} className="border-primary/30"><CardContent className="space-y-4 p-4">
-      <div className="flex flex-wrap items-start justify-between gap-2"><div><h3 className="font-semibold">{group.title}{group.season !== undefined ? ` · Season ${group.season}` : " · Film"}</h3><p className="text-xs text-muted-foreground">{group.tmdbId ? `TMDB ${group.tmdbId}` : "Canonical identity unavailable"} · {group.episodes.length} content unit{group.episodes.length === 1 ? "" : "s"} · {group.items.length} physical ProviderItem{group.items.length === 1 ? "" : "s"}</p></div></div>
-      <div className="space-y-3">
-        {group.episodes.map((episode) => {
-          const candidates = episode.versions.filter((version: any) => version.decision === "DELETE_CANDIDATE");
-          const kept = episode.versions.filter((version: any) => version.decision === "KEEP");
-          const review = episode.versions.filter((version: any) => version.decision === "REVIEW");
-          return <div key={episode.key} className="rounded border p-3"><p className="mb-2 font-medium">{episode.key === "film" ? "Film" : episode.key}</p><div className="grid gap-3 md:grid-cols-2">
-            <div className="rounded border border-amber-500/30 p-3 text-sm"><p className="mb-1 font-semibold">Candidate versions</p>{candidates.length ? candidates.map((version: any) => <VersionLine key={`${version.id}:${version.providerItem?.providerItemId || ""}`} version={version} />) : <p className="text-muted-foreground">No deletion candidate.</p>}</div>
-            <div className="rounded border border-emerald-500/30 p-3 text-sm"><p className="mb-1 font-semibold">Retained versions</p>{kept.length ? kept.map((version: any) => <VersionLine key={`${version.id}:${version.providerItem?.providerItemId || ""}`} version={version} />) : <p className="text-muted-foreground">{review.length ? "Review required before retention decision." : "No retained version."}</p>}</div>
-          </div></div>;
-        })}
-      </div>
-      <div className="space-y-2 rounded border bg-muted/10 p-3"><p className="font-medium">Physical ProviderItems</p>{group.items.map((item: any) => {
-        const selectionKey = `${item.provider}:${item.providerItemId}`;
-        const ready = item.state === "READY" && !item.onlyCopy && !item.protectedByKeep;
-        return <div key={selectionKey} className="flex flex-wrap items-center justify-between gap-3 rounded border p-2"><div className="flex min-w-0 items-center gap-3">{scope === "candidates" && <input type="checkbox" aria-label={`Select ${episodeLabel(item)}`} checked={selectedIds?.has(selectionKey) || false} disabled={Boolean(busyId)} onChange={(event) => onToggleSelected?.(item, event.target.checked)} className="h-4 w-4" />}<div className="min-w-0"><p className="font-medium">{episodeLabel(item)}</p><p className="truncate text-xs text-muted-foreground">{item.provider} · ProviderItem {item.providerItemId} · {formatBytes(item.physicalSize) || "size unknown"}</p><p className="text-xs text-muted-foreground">{item.reasons.join(" · ")}</p></div></div><div className="flex flex-wrap gap-2"><span className="rounded border px-2 py-1 text-xs">{item.protectedByKeep ? "PROTECTED" : ready ? `ELIGIBLE · ${dryRun ? "DRY RUN" : "LIVE"}` : "NOT DELETABLE"}</span><Button size="sm" variant="outline" onClick={() => onDetails(item)}>Details</Button>{scope === "candidates" && <Button size="sm" variant="destructive" disabled={Boolean(busyId)} onClick={() => onDelete(item)}>{busyId === selectionKey ? "Deleting…" : "Delete ProviderItem"}</Button>}</div></div>;
-      })}</div>
-    </CardContent></Card>)}
+    {groups.map((group) => {
+      const allVersions = group.episodes.flatMap((episode) => episode.versions);
+      const allRefs = uniqueRefs(allVersions);
+      const candidateRefs = uniqueRefs(allVersions.filter((version: any) => version.decision === "DELETE_CANDIDATE"));
+      const candidateKeys = new Set(candidateRefs.map(selectionKey));
+      const groupKeys = allRefs.map(selectionKey);
+      return <Card key={group.key} className="border-primary/30"><CardContent className="space-y-4 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">{group.title}{group.season !== undefined ? ` · Season ${group.season}` : " · Film"}</h3><p className="text-xs text-muted-foreground">{group.tmdbId ? `TMDB ${group.tmdbId}` : "Canonical identity unavailable"} · {group.episodes.length} content unit{group.episodes.length === 1 ? "" : "s"} · {allRefs.length} physical ProviderItem{allRefs.length === 1 ? "" : "s"}</p></div>{selectable && <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={Boolean(busyId) || candidateRefs.length === 0} onClick={() => onChangeSelection(candidateRefs, groupKeys.filter((key) => !candidateKeys.has(key)))}>Select all episodes</Button><Button size="sm" variant="ghost" disabled={Boolean(busyId) || !groupKeys.some((key) => selectedIds?.has(key))} onClick={() => onChangeSelection([], groupKeys)}>Clear season</Button></div>}</div>
+        <div className="grid gap-3 lg:grid-cols-2">
+          {groupVersionsByPhysicalItem(allVersions)
+            .sort((left, right) => {
+              const leftCandidate = left.versions.some((version: any) => version.decision === "DELETE_CANDIDATE");
+              const rightCandidate = right.versions.some((version: any) => version.decision === "DELETE_CANDIDATE");
+              return Number(rightCandidate) - Number(leftCandidate) || left.key.localeCompare(right.key);
+            })
+            .map((release) => {
+              const checked = selectedIds?.has(release.key) || false;
+              const toggleRelease = (nextChecked: boolean) => {
+                if (!nextChecked) return onChangeSelection([], [release.key]);
+                const affectedEpisodes = group.episodes.filter((episode) => episode.versions.some((version: any) => selectionKey(physicalRef(version)) === release.key));
+                const conflicts = uniqueRefs(affectedEpisodes.flatMap((episode) => episode.versions)).map(selectionKey).filter((key) => key !== release.key);
+                onChangeSelection([release.ref], conflicts);
+              };
+              return <PhysicalReleaseCard key={release.key} release={release} selected={checked} selectable={selectable} disabled={Boolean(busyId)} onToggle={toggleRelease} />;
+            })}
+        </div>
+      </CardContent></Card>;
+    })}
   </section>;
 }

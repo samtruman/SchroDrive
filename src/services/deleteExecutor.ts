@@ -1,5 +1,5 @@
 import type { DebridProvider } from "../providers";
-import { buildDeleteImpact, type DeleteImpact } from "./deleteImpact";
+import { buildDeleteImpact, buildSelectedDeleteImpact, type DeleteImpact, type SelectedDeleteItem } from "./deleteImpact";
 import type { VersionGroup } from "./versionManager";
 
 export interface DeleteExecutionRequest {
@@ -8,6 +8,7 @@ export interface DeleteExecutionRequest {
   providerItemId: string;
   dryRun: boolean;
   confirmation?: string;
+  selection?: SelectedDeleteItem[];
 }
 
 export interface DeleteExecutionResult {
@@ -33,9 +34,15 @@ export class BatchDeleteExecutionError extends Error {
   }
 }
 
+function revalidatedImpacts(request: Pick<DeleteExecutionRequest, "groups" | "selection">): DeleteImpact[] {
+  return request.selection?.length
+    ? buildSelectedDeleteImpact(request.groups, request.selection)
+    : buildDeleteImpact(request.groups, "", "all");
+}
+
 /** Revalidates the physical unit immediately before optionally deleting it. */
 export async function executeVersionManagerDelete(request: DeleteExecutionRequest): Promise<DeleteExecutionResult> {
-  const impact = buildDeleteImpact(request.groups, "", "all").find((item) => item.provider === request.provider.id && item.providerItemId === request.providerItemId);
+  const impact = revalidatedImpacts(request).find((item) => item.provider === request.provider.id && item.providerItemId === request.providerItemId);
   if (!impact) throw new Error("ProviderItem is no longer physically eligible for deletion");
   if (impact.state !== "READY" || impact.onlyCopy || impact.protectedByKeep) throw new Error("ProviderItem is no longer physically eligible for deletion; final safety check failed");
   const current = await request.provider.listTorrents();
@@ -51,7 +58,7 @@ export async function executeVersionManagerDeleteBatch(request: Omit<DeleteExecu
   const providerItemIds = [...new Set(request.providerItemIds.map(String).filter(Boolean))];
   if (providerItemIds.length === 0 || providerItemIds.length > 100) throw new Error("Select between 1 and 100 ProviderItems");
 
-  const impacts = buildDeleteImpact(request.groups, "", "all");
+  const impacts = revalidatedImpacts(request);
   const impactById = new Map(impacts.filter((item) => item.provider === request.provider.id).map((item) => [item.providerItemId, item]));
   for (const id of providerItemIds) {
     const impact = impactById.get(id);

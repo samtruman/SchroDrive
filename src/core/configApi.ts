@@ -42,11 +42,36 @@ export const CONFIG_SCHEMA = {
   RD_WEBDAV_USERNAME: { type: "string", default: "", category: "realdebrid", label: "Real-Debrid WebDAV Username" },
   RD_WEBDAV_PASSWORD: { type: "password", default: "", category: "realdebrid", label: "Real-Debrid WebDAV Password" },
 
+  // AllDebrid
+  ALLDEBRID_API_KEY: { type: "password", default: "", category: "alldebrid", label: "AllDebrid API Key" },
+  ALLDEBRID_WEBDAV_URL: { type: "string", default: "", category: "alldebrid", label: "AllDebrid WebDAV URL" },
+  ALLDEBRID_WEBDAV_USERNAME: { type: "string", default: "", category: "alldebrid", label: "AllDebrid WebDAV Username" },
+  ALLDEBRID_WEBDAV_PASSWORD: { type: "password", default: "", category: "alldebrid", label: "AllDebrid WebDAV Password" },
+
+  // Premiumize
+  PREMIUMIZE_API_KEY: { type: "password", default: "", category: "premiumize", label: "Premiumize API Key" },
+  PREMIUMIZE_API_BASE: { type: "string", default: "https://www.premiumize.me/api", category: "premiumize", label: "Premiumize API Base" },
+  PREMIUMIZE_WEBDAV_URL: { type: "string", default: "https://webdav.premiumize.me", category: "premiumize", label: "Premiumize WebDAV URL" },
+  PREMIUMIZE_WEBDAV_USERNAME: { type: "string", default: "", category: "premiumize", label: "Premiumize WebDAV Username" },
+  PREMIUMIZE_WEBDAV_PASSWORD: { type: "password", default: "", category: "premiumize", label: "Premiumize WebDAV Password" },
+
   // Seerr / Overseerr / Jellyseerr (all API-compatible)
   SEERR_URL: { type: "string", default: "", category: "seerr", label: "Seerr URL (or Overseerr/Jellyseerr)" },
   SEERR_API_KEY: { type: "password", default: "", category: "seerr", label: "Seerr API Key (or Overseerr/Jellyseerr)" },
   SEERR_AUTH: { type: "password", default: "", category: "seerr", label: "Webhook Auth Header" },
   POLL_INTERVAL_S: { type: "number", default: "30", category: "seerr", label: "Poll Interval (seconds)" },
+
+  // ARR integrations
+  PROVIDER_RECONCILIATION_ENABLED: { type: "boolean", default: "false", category: "arr", label: "Enable Provider Reconciliation" },
+  PROVIDER_RECONCILIATION_RECENT_INTERVAL_MS: { type: "number", default: "900000", category: "arr", label: "Recent Scan Interval (ms)" },
+  PROVIDER_RECONCILIATION_FULL_INTERVAL_MS: { type: "number", default: "21600000", category: "arr", label: "Full Scan Interval (ms)" },
+  PROVIDER_RECONCILIATION_RECENT_LIMIT: { type: "number", default: "30", category: "arr", label: "Recent Items Limit" },
+  PROVIDER_RECONCILIATION_RUN_FULL_ON_START: { type: "boolean", default: "true", category: "arr", label: "Run Full Scan on Startup" },
+  PROVIDER_RECONCILIATION_RADARR_URL: { type: "string", default: "", category: "arr", label: "Radarr URL" },
+  PROVIDER_RECONCILIATION_RADARR_API_KEY: { type: "password", default: "", category: "arr", label: "Radarr API Key" },
+  PROVIDER_RECONCILIATION_SONARR_URL: { type: "string", default: "", category: "arr", label: "Sonarr URL" },
+  PROVIDER_RECONCILIATION_SONARR_API_KEY: { type: "password", default: "", category: "arr", label: "Sonarr API Key" },
+  ARR_DOWNLOADS_PATH: { type: "string", default: "", category: "arr", label: "ARR Downloads Path" },
 
   // Runtime Services
   RUN_WEBHOOK: { type: "boolean", default: "true", category: "services", label: "Run Webhook Server" },
@@ -104,6 +129,21 @@ export const CONFIG_SCHEMA = {
 } as const;
 
 export type ConfigKey = keyof typeof CONFIG_SCHEMA;
+
+const CONFIG_KEY_ALIASES: Record<string, readonly string[]> = {
+  ALLDEBRID_API_KEY: ["AD_API_KEY"],
+  ALLDEBRID_WEBDAV_URL: ["AD_WEBDAV_URL"],
+  ALLDEBRID_WEBDAV_USERNAME: ["AD_WEBDAV_USERNAME"],
+  ALLDEBRID_WEBDAV_PASSWORD: ["AD_WEBDAV_PASSWORD"],
+  PREMIUMIZE_API_KEY: ["PM_API_KEY"],
+  PREMIUMIZE_WEBDAV_URL: ["PM_WEBDAV_URL"],
+  PREMIUMIZE_WEBDAV_USERNAME: ["PM_WEBDAV_USERNAME"],
+  PREMIUMIZE_WEBDAV_PASSWORD: ["PM_WEBDAV_PASSWORD"],
+};
+
+const LEGACY_TO_CANONICAL_KEY = new Map(
+  Object.entries(CONFIG_KEY_ALIASES).flatMap(([canonical, aliases]) => aliases.map((alias) => [alias, canonical] as const)),
+);
 
 interface ConfigValue {
   value: string;
@@ -227,28 +267,31 @@ export function getConfigWithSources(options: ConfigSourceOptions = {}): { confi
 
   for (const [key, schema] of Object.entries(CONFIG_SCHEMA)) {
     const k = key as ConfigKey;
-    const envValue = process.env[key];
-    const fileValue = fileValues.get(key);
+    const aliases = CONFIG_KEY_ALIASES[key] || [];
+    const lookupKeys = [key, ...aliases];
+    const runtimeKey = lookupKeys.find((candidate) => containerEnvKeys.has(candidate) && process.env[candidate] !== undefined && process.env[candidate] !== "");
+    const canonicalFileValue = fileValues.get(key);
+    const legacyFileValue = aliases.map((alias) => fileValues.get(alias)).find((candidate) => candidate !== undefined && candidate !== "");
+    const fileValue = canonicalFileValue !== undefined && canonicalFileValue !== "" ? canonicalFileValue : legacyFileValue ?? canonicalFileValue;
 
     let value: string;
     let source: "env" | "file" | "default";
     let provenance: ConfigProvenance;
     let locked: boolean;
 
-    if (containerEnvKeys.has(key) && envValue !== undefined && envValue !== "") {
-      // Runtime environment variable takes priority
-      value = envValue;
+    if (runtimeKey) {
+      // Canonical runtime value wins; legacy runtime names remain readable.
+      value = process.env[runtimeKey] || "";
       source = "env";
       provenance = "CONTAINER_ENV";
       locked = true;
     } else if (fileValue !== undefined) {
-      // .env file value
+      // Canonical persisted value wins; legacy .env names remain readable.
       value = fileValue;
       source = "file";
       provenance = "PERSISTED_DOTENV";
       locked = false;
     } else {
-      // Default value
       value = schema.default;
       source = "default";
       provenance = "DEFAULT";
@@ -283,7 +326,26 @@ export function saveConfigToFile(updates: Record<string, string>): { success: bo
       existingContent = fs.readFileSync(examplePath, "utf-8");
     }
 
-    // Parse existing content to preserve comments and structure
+    const existingValues = parseEnvFile(envPath);
+    const normalizedUpdates: Record<string, string> = { ...updates };
+
+    // Canonicalize legacy client updates and migrate persisted legacy provider
+    // keys without losing their values during an unrelated partial save.
+    for (const [canonical, aliases] of Object.entries(CONFIG_KEY_ALIASES)) {
+      const legacyUpdate = aliases.find((alias) => normalizedUpdates[alias] !== undefined);
+      if (normalizedUpdates[canonical] === undefined && legacyUpdate) {
+        normalizedUpdates[canonical] = normalizedUpdates[legacyUpdate];
+      }
+      for (const alias of aliases) delete normalizedUpdates[alias];
+
+      const persistedCanonical = existingValues.get(canonical);
+      const persistedLegacy = aliases.map((alias) => existingValues.get(alias)).find((value) => value !== undefined && value !== "");
+      if (normalizedUpdates[canonical] === undefined && (persistedCanonical === undefined || persistedCanonical === "") && persistedLegacy !== undefined) {
+        normalizedUpdates[canonical] = persistedLegacy;
+      }
+    }
+
+    // Parse existing content to preserve comments and structure.
     const lines = existingContent.split("\n");
     const updatedKeys = new Set<string>();
     const newLines: string[] = [];
@@ -295,9 +357,10 @@ export function saveConfigToFile(updates: Record<string, string>): { success: bo
       if (!trimmed || trimmed.startsWith("#")) {
         // Check if this is a commented-out config line that we're updating
         const commentedMatch = trimmed.match(/^#\s*([A-Z_]+)=/);
-        if (commentedMatch && updates[commentedMatch[1]] !== undefined) {
-          const key = commentedMatch[1];
-          const newValue = updates[key];
+        const commentedKey = commentedMatch ? LEGACY_TO_CANONICAL_KEY.get(commentedMatch[1]) || commentedMatch[1] : undefined;
+        if (commentedKey && normalizedUpdates[commentedKey] !== undefined) {
+          const key = commentedKey;
+          const newValue = normalizedUpdates[key];
           // Uncomment and update the value
           if (newValue !== "") {
             newLines.push(`${key}=${newValue}`);
@@ -318,11 +381,14 @@ export function saveConfigToFile(updates: Record<string, string>): { success: bo
         continue;
       }
 
-      const key = trimmed.substring(0, eqIndex).trim();
+      const rawKey = trimmed.substring(0, eqIndex).trim();
+      const key = LEGACY_TO_CANONICAL_KEY.get(rawKey) || rawKey;
 
-      if (updates[key] !== undefined) {
-        // Update this key
-        const newValue = updates[key];
+      if (normalizedUpdates[key] !== undefined) {
+        // Update the canonical key. A legacy line is replaced in place so
+        // saving does not leave duplicate provider credentials.
+        if (updatedKeys.has(key)) continue;
+        const newValue = normalizedUpdates[key];
         if (newValue !== "") {
           newLines.push(`${key}=${newValue}`);
         } else {
@@ -330,6 +396,10 @@ export function saveConfigToFile(updates: Record<string, string>): { success: bo
           newLines.push(`# ${key}=`);
         }
         updatedKeys.add(key);
+      } else if (rawKey !== key && existingValues.get(key) !== undefined && existingValues.get(key) !== "") {
+        // A canonical value already exists, so remove a stale legacy alias
+        // instead of leaving duplicate provider credentials in the file.
+        continue;
       } else {
         // Keep existing value
         newLines.push(line);
@@ -337,7 +407,7 @@ export function saveConfigToFile(updates: Record<string, string>): { success: bo
     }
 
     // Add any new keys that weren't in the file
-    for (const [key, value] of Object.entries(updates)) {
+    for (const [key, value] of Object.entries(normalizedUpdates)) {
       if (!updatedKeys.has(key) && value !== "") {
         newLines.push(`${key}=${value}`);
       }

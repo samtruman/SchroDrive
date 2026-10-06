@@ -368,6 +368,9 @@ export function startServer() {
     const providerId = String(req.body?.provider || "");
     const providerItemId = String(req.body?.providerItemId || "");
     const requestedSnapshotId = String(req.body?.snapshotId || "");
+    const selection = Array.isArray(req.body?.selection)
+      ? req.body.selection.map((item: any) => ({ provider: String(item?.provider || ""), providerItemId: String(item?.providerItemId || "") })).filter((item: any) => item.provider && item.providerItemId)
+      : undefined;
     const snapshot = readVersionManagerGroups();
     const policyDryRun = getVersionManagerPolicy().safety?.deleteDryRun !== false;
     const dryRun = policyDryRun || req.body?.dryRun === true;
@@ -378,7 +381,7 @@ export function startServer() {
       if (snapshot.snapshotId !== requestedSnapshotId) return res.status(409).json({ ok: false, error: "Inventory changed; reload Delete before continuing" });
       const provider = registry.get(providerId);
       if (!provider) return res.status(400).json({ ok: false, error: `Provider ${providerId} is not configured` });
-      const result = await executeVersionManagerDelete({ groups: snapshot.groups, provider, providerItemId, dryRun, confirmation: req.body?.confirmation });
+      const result = await executeVersionManagerDelete({ groups: snapshot.groups, provider, providerItemId, dryRun, confirmation: req.body?.confirmation, selection });
       recordVersionManagerDeleteAudit({ provider: providerId, providerItemId, snapshotId: snapshot.snapshotId, mode, status: result.status, detail: dryRun ? "ProviderItem revalidated; provider delete was not called" : "ProviderItem deleted after final revalidation" });
       return res.json({ ok: true, policyDryRun, mode, ...result });
     } catch (error: any) {
@@ -391,6 +394,9 @@ export function startServer() {
     const providerId = String(req.body?.provider || "");
     const providerItemIds = Array.isArray(req.body?.providerItemIds) ? req.body.providerItemIds.map(String) : [];
     const requestedSnapshotId = String(req.body?.snapshotId || "");
+    const selection = Array.isArray(req.body?.selection)
+      ? req.body.selection.map((item: any) => ({ provider: String(item?.provider || ""), providerItemId: String(item?.providerItemId || "") })).filter((item: any) => item.provider && item.providerItemId)
+      : undefined;
     const snapshot = readVersionManagerGroups();
     const policyDryRun = getVersionManagerPolicy().safety?.deleteDryRun !== false;
     const dryRun = policyDryRun || req.body?.dryRun === true;
@@ -401,7 +407,7 @@ export function startServer() {
       if (snapshot.snapshotId !== requestedSnapshotId) return res.status(409).json({ ok: false, error: "Inventory changed; reload Delete before continuing" });
       const provider = registry.get(providerId);
       if (!provider) return res.status(400).json({ ok: false, error: `Provider ${providerId} is not configured` });
-      const result = await executeVersionManagerDeleteBatch({ groups: snapshot.groups, provider, providerItemIds, dryRun, confirmation: req.body?.confirmation });
+      const result = await executeVersionManagerDeleteBatch({ groups: snapshot.groups, provider, providerItemIds, dryRun, confirmation: req.body?.confirmation, selection });
       result.results.forEach((item) => recordVersionManagerDeleteAudit({ provider: providerId, providerItemId: item.providerItemId, snapshotId: snapshot.snapshotId, mode, status: item.status, detail: dryRun ? "Batch ProviderItem revalidated; provider delete was not called" : "ProviderItem deleted by confirmed batch after final revalidation" }));
       return res.json({ ok: true, policyDryRun, mode, ...result });
     } catch (error: any) {

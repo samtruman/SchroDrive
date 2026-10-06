@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { buildDeleteImpact } from "../../../src/services/deleteImpact";
+import { buildDeleteImpact, buildSelectedDeleteImpact } from "../../../src/services/deleteImpact";
 
 type Decision = "KEEP" | "DELETE_CANDIDATE" | "REVIEW";
 
@@ -135,5 +135,49 @@ describe("physical delete impact projection", () => {
 
     expect(items).toHaveLength(1);
     expect(items[0].versions.map((candidate) => candidate.id)).toEqual(["e01-keep", "e02-candidate"]);
+  });
+
+  test("allows an explicit operator selection to delete the policy KEEP version", () => {
+    const items = buildSelectedDeleteImpact([
+      group("movie", { title: "Synthetic title", normalizedTitle: "synthetic title", kind: "movie" }, [
+        version("candidate", "candidate-item", "DELETE_CANDIDATE"),
+        version("keep", "keep-item", "KEEP"),
+      ]),
+    ], [{ provider: "fixture", providerItemId: "keep-item" }]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ providerItemId: "keep-item", state: "READY", onlyCopy: false });
+    expect(items[0].alternativeVersions.map((candidate) => candidate.id)).toEqual(["candidate"]);
+    expect(items[0].reasons.join(" ")).toContain("overrides the policy KEEP");
+  });
+
+  test("blocks an operator selection that removes every version of the same content", () => {
+    const items = buildSelectedDeleteImpact([
+      group("movie", { title: "Synthetic title", normalizedTitle: "synthetic title", kind: "movie" }, [
+        version("candidate", "candidate-item", "DELETE_CANDIDATE"),
+        version("keep", "keep-item", "KEEP"),
+      ]),
+    ], [
+      { provider: "fixture", providerItemId: "candidate-item" },
+      { provider: "fixture", providerItemId: "keep-item" },
+    ]);
+
+    expect(items).toHaveLength(2);
+    expect(items.every((item) => item.state === "BLOCKED" && item.onlyCopy)).toBe(true);
+  });
+
+  test("blocks a selected season pack when one episode has no surviving alternative", () => {
+    const items = buildSelectedDeleteImpact([
+      group("show-s01e01", { title: "Pack show", normalizedTitle: "pack show", kind: "episode", season: 1, episode: 1 }, [
+        version("e01-pack", "season-pack", "KEEP", "Pack show", { kind: "episode", normalizedTitle: "pack show", season: 1, episode: 1 }),
+        version("e01-single", "single-e01", "DELETE_CANDIDATE", "Pack show", { kind: "episode", normalizedTitle: "pack show", season: 1, episode: 1 }),
+      ]),
+      group("show-s01e02", { title: "Pack show", normalizedTitle: "pack show", kind: "episode", season: 1, episode: 2 }, [
+        version("e02-pack", "season-pack", "KEEP", "Pack show", { kind: "episode", normalizedTitle: "pack show", season: 1, episode: 2 }),
+      ]),
+    ], [{ provider: "fixture", providerItemId: "season-pack" }]);
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ providerItemId: "season-pack", state: "BLOCKED", onlyCopy: true });
   });
 });

@@ -25,6 +25,7 @@ function normalizePolicy(policy) {
         acquisitionMode: policy.acquisitionMode === "NATIVE" ? "NATIVE" : "ARR",
         preferCompletePack: policy.preferCompletePack === true,
         safety: {
+            deleteDryRun: policy.safety?.deleteDryRun !== false,
             requireRecoverableBeforeDelete: policy.safety?.requireRecoverableBeforeDelete ?? versionManager_1.defaultVersionManagerPolicy.safety.requireRecoverableBeforeDelete,
             allowDeleteWhenIdentityUncertain: policy.safety?.allowDeleteWhenIdentityUncertain ?? versionManager_1.defaultVersionManagerPolicy.safety.allowDeleteWhenIdentityUncertain,
             allowDeleteWhenMetadataIncomplete: policy.safety?.allowDeleteWhenMetadataIncomplete ?? versionManager_1.defaultVersionManagerPolicy.safety.allowDeleteWhenMetadataIncomplete,

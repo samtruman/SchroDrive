@@ -91,9 +91,10 @@ interface ConfigFieldProps {
   onChange: (value: string) => void
   type?: string
   options?: string[]
+  optionLabels?: Record<string, string>
 }
 
-function ConfigField({ label, description, envVar, value, source, onChange, type = "string", options }: ConfigFieldProps) {
+function ConfigField({ label, description, envVar, value, source, onChange, type = "string", options, optionLabels }: ConfigFieldProps) {
   const isLocked = source === "env"
   
   return (
@@ -115,7 +116,7 @@ function ConfigField({ label, description, envVar, value, source, onChange, type
           title={isLocked ? "This value is set by container environment variable and cannot be changed here" : undefined}
         >
           {options.map((opt) => (
-            <option key={opt} value={opt}>{opt}</option>
+            <option key={opt} value={opt}>{optionLabels?.[opt] || opt}</option>
           ))}
         </select>
       ) : (
@@ -328,7 +329,7 @@ export default function SettingsPage() {
       </Card>
 
       <Tabs defaultValue="general" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-4 lg:grid-cols-12">
+        <TabsList className="grid w-full grid-cols-4 lg:grid-cols-7">
           <TabsTrigger value="general" className="gap-2"><Settings className="h-4 w-4 hidden sm:block" />General</TabsTrigger>
           <TabsTrigger value="indexers" className="gap-2"><Search className="h-4 w-4 hidden sm:block" />Indexers</TabsTrigger>
           <TabsTrigger value="torbox" className="gap-2"><Database className="h-4 w-4 hidden sm:block" />TorBox</TabsTrigger>
@@ -336,6 +337,7 @@ export default function SettingsPage() {
           <TabsTrigger value="alldebrid" className="gap-2"><Database className="h-4 w-4 hidden sm:block" />AllDebrid</TabsTrigger>
           <TabsTrigger value="premiumize" className="gap-2"><Database className="h-4 w-4 hidden sm:block" />Premiumize</TabsTrigger>
           <TabsTrigger value="overseerr" className="gap-2"><Tv className="h-4 w-4 hidden sm:block" />Seerr</TabsTrigger>
+          <TabsTrigger value="arr" className="gap-2"><Server className="h-4 w-4 hidden sm:block" />ARR</TabsTrigger>
           <TabsTrigger value="media_servers" className="gap-2"><Tv className="h-4 w-4 hidden sm:block" />Media Servers</TabsTrigger>
           <TabsTrigger value="mounts" className="gap-2"><HardDrive className="h-4 w-4 hidden sm:block" />Mounts</TabsTrigger>
           <TabsTrigger value="services" className="gap-2"><Server className="h-4 w-4 hidden sm:block" />Services</TabsTrigger>
@@ -478,7 +480,7 @@ export default function SettingsPage() {
                 <CardDescription>AllDebrid debrid service configuration</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <ConfigField label="API Key" envVar="AD_API_KEY" description="Your AllDebrid API key" type="password" value={getValue("AD_API_KEY")} source={getSource("AD_API_KEY")} onChange={(v) => updateValue("AD_API_KEY", v)} />
+                <ConfigField label="API Key" envVar="ALLDEBRID_API_KEY" description="Your AllDebrid API key" type="password" value={getValue("ALLDEBRID_API_KEY")} source={getSource("ALLDEBRID_API_KEY")} onChange={(v) => updateValue("ALLDEBRID_API_KEY", v)} />
               </CardContent>
             </Card>
 
@@ -488,9 +490,9 @@ export default function SettingsPage() {
                 <CardDescription>WebDAV mount credentials for AllDebrid</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <ConfigField label="WebDAV URL" envVar="AD_WEBDAV_URL" value={getValue("AD_WEBDAV_URL")} source={getSource("AD_WEBDAV_URL")} onChange={(v) => updateValue("AD_WEBDAV_URL", v)} />
-                <ConfigField label="Username" envVar="AD_WEBDAV_USERNAME" value={getValue("AD_WEBDAV_USERNAME")} source={getSource("AD_WEBDAV_USERNAME")} onChange={(v) => updateValue("AD_WEBDAV_USERNAME", v)} />
-                <ConfigField label="Password" envVar="AD_WEBDAV_PASSWORD" type="password" value={getValue("AD_WEBDAV_PASSWORD")} source={getSource("AD_WEBDAV_PASSWORD")} onChange={(v) => updateValue("AD_WEBDAV_PASSWORD", v)} />
+                <ConfigField label="WebDAV URL" envVar="ALLDEBRID_WEBDAV_URL" value={getValue("ALLDEBRID_WEBDAV_URL")} source={getSource("ALLDEBRID_WEBDAV_URL")} onChange={(v) => updateValue("ALLDEBRID_WEBDAV_URL", v)} />
+                <ConfigField label="Username" envVar="ALLDEBRID_WEBDAV_USERNAME" value={getValue("ALLDEBRID_WEBDAV_USERNAME")} source={getSource("ALLDEBRID_WEBDAV_USERNAME")} onChange={(v) => updateValue("ALLDEBRID_WEBDAV_USERNAME", v)} />
+                <ConfigField label="Password" envVar="ALLDEBRID_WEBDAV_PASSWORD" type="password" value={getValue("ALLDEBRID_WEBDAV_PASSWORD")} source={getSource("ALLDEBRID_WEBDAV_PASSWORD")} onChange={(v) => updateValue("ALLDEBRID_WEBDAV_PASSWORD", v)} />
               </CardContent>
             </Card>
           </div>
@@ -505,7 +507,7 @@ export default function SettingsPage() {
                 <CardDescription>Premiumize debrid service configuration</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <ConfigField label="API Key" envVar="PM_API_KEY" description="Your Premiumize API key" type="password" value={getValue("PM_API_KEY")} source={getSource("PM_API_KEY")} onChange={(v) => updateValue("PM_API_KEY", v)} />
+                <ConfigField label="API Key" envVar="PREMIUMIZE_API_KEY" description="Your Premiumize API key" type="password" value={getValue("PREMIUMIZE_API_KEY")} source={getSource("PREMIUMIZE_API_KEY")} onChange={(v) => updateValue("PREMIUMIZE_API_KEY", v)} />
               </CardContent>
             </Card>
 
@@ -515,9 +517,9 @@ export default function SettingsPage() {
                 <CardDescription>WebDAV mount credentials for Premiumize</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <ConfigField label="WebDAV URL" envVar="PM_WEBDAV_URL" value={getValue("PM_WEBDAV_URL")} source={getSource("PM_WEBDAV_URL")} onChange={(v) => updateValue("PM_WEBDAV_URL", v)} />
-                <ConfigField label="Username" envVar="PM_WEBDAV_USERNAME" value={getValue("PM_WEBDAV_USERNAME")} source={getSource("PM_WEBDAV_USERNAME")} onChange={(v) => updateValue("PM_WEBDAV_USERNAME", v)} />
-                <ConfigField label="Password" envVar="PM_WEBDAV_PASSWORD" type="password" value={getValue("PM_WEBDAV_PASSWORD")} source={getSource("PM_WEBDAV_PASSWORD")} onChange={(v) => updateValue("PM_WEBDAV_PASSWORD", v)} />
+                <ConfigField label="WebDAV URL" envVar="PREMIUMIZE_WEBDAV_URL" value={getValue("PREMIUMIZE_WEBDAV_URL")} source={getSource("PREMIUMIZE_WEBDAV_URL")} onChange={(v) => updateValue("PREMIUMIZE_WEBDAV_URL", v)} />
+                <ConfigField label="Username" envVar="PREMIUMIZE_WEBDAV_USERNAME" value={getValue("PREMIUMIZE_WEBDAV_USERNAME")} source={getSource("PREMIUMIZE_WEBDAV_USERNAME")} onChange={(v) => updateValue("PREMIUMIZE_WEBDAV_USERNAME", v)} />
+                <ConfigField label="Password" envVar="PREMIUMIZE_WEBDAV_PASSWORD" type="password" value={getValue("PREMIUMIZE_WEBDAV_PASSWORD")} source={getSource("PREMIUMIZE_WEBDAV_PASSWORD")} onChange={(v) => updateValue("PREMIUMIZE_WEBDAV_PASSWORD", v)} />
               </CardContent>
             </Card>
           </div>
@@ -543,6 +545,44 @@ export default function SettingsPage() {
               <ConfigSection title="Poller Settings" description="Poll Seerr for approved requests">
                 <ConfigField label="Poll Interval (seconds)" envVar="POLL_INTERVAL_S" type="number" value={getValue("POLL_INTERVAL_S")} source={getSource("POLL_INTERVAL_S")} onChange={(v) => updateValue("POLL_INTERVAL_S", v)} />
               </ConfigSection>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ARR Integrations Tab */}
+        <TabsContent value="arr" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>ARR Integrations</CardTitle>
+              <CardDescription>Connect Radarr and Sonarr to reconcile media added directly to a configured provider.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <SwitchField label="Enable Provider Reconciliation" envVar="PROVIDER_RECONCILIATION_ENABLED" description="Detect new provider media and request an import in Radarr or Sonarr" value={getBoolValue("PROVIDER_RECONCILIATION_ENABLED")} source={getSource("PROVIDER_RECONCILIATION_ENABLED")} onChange={(v) => updateBoolValue("PROVIDER_RECONCILIATION_ENABLED", v)} />
+              <Separator />
+              <ConfigSection title="Radarr" description="Radarr endpoint used for movie reconciliation">
+                <div className="grid gap-6 md:grid-cols-2">
+                  <ConfigField label="URL" envVar="PROVIDER_RECONCILIATION_RADARR_URL" value={getValue("PROVIDER_RECONCILIATION_RADARR_URL")} source={getSource("PROVIDER_RECONCILIATION_RADARR_URL")} onChange={(v) => updateValue("PROVIDER_RECONCILIATION_RADARR_URL", v)} />
+                  <ConfigField label="API Key" envVar="PROVIDER_RECONCILIATION_RADARR_API_KEY" type="password" value={getValue("PROVIDER_RECONCILIATION_RADARR_API_KEY")} source={getSource("PROVIDER_RECONCILIATION_RADARR_API_KEY")} onChange={(v) => updateValue("PROVIDER_RECONCILIATION_RADARR_API_KEY", v)} />
+                </div>
+              </ConfigSection>
+              <Separator />
+              <ConfigSection title="Sonarr" description="Sonarr endpoint used for series reconciliation">
+                <div className="grid gap-6 md:grid-cols-2">
+                  <ConfigField label="URL" envVar="PROVIDER_RECONCILIATION_SONARR_URL" value={getValue("PROVIDER_RECONCILIATION_SONARR_URL")} source={getSource("PROVIDER_RECONCILIATION_SONARR_URL")} onChange={(v) => updateValue("PROVIDER_RECONCILIATION_SONARR_URL", v)} />
+                  <ConfigField label="API Key" envVar="PROVIDER_RECONCILIATION_SONARR_API_KEY" type="password" value={getValue("PROVIDER_RECONCILIATION_SONARR_API_KEY")} source={getSource("PROVIDER_RECONCILIATION_SONARR_API_KEY")} onChange={(v) => updateValue("PROVIDER_RECONCILIATION_SONARR_API_KEY", v)} />
+                </div>
+              </ConfigSection>
+              <Separator />
+              <ConfigSection title="Reconciliation Schedule" description="Control how often new provider media is checked">
+                <div className="grid gap-6 md:grid-cols-2">
+                  <ConfigField label="Recent Scan Interval (ms)" envVar="PROVIDER_RECONCILIATION_RECENT_INTERVAL_MS" type="number" value={getValue("PROVIDER_RECONCILIATION_RECENT_INTERVAL_MS")} source={getSource("PROVIDER_RECONCILIATION_RECENT_INTERVAL_MS")} onChange={(v) => updateValue("PROVIDER_RECONCILIATION_RECENT_INTERVAL_MS", v)} />
+                  <ConfigField label="Full Scan Interval (ms)" envVar="PROVIDER_RECONCILIATION_FULL_INTERVAL_MS" type="number" value={getValue("PROVIDER_RECONCILIATION_FULL_INTERVAL_MS")} source={getSource("PROVIDER_RECONCILIATION_FULL_INTERVAL_MS")} onChange={(v) => updateValue("PROVIDER_RECONCILIATION_FULL_INTERVAL_MS", v)} />
+                  <ConfigField label="Recent Items Limit" envVar="PROVIDER_RECONCILIATION_RECENT_LIMIT" type="number" value={getValue("PROVIDER_RECONCILIATION_RECENT_LIMIT")} source={getSource("PROVIDER_RECONCILIATION_RECENT_LIMIT")} onChange={(v) => updateValue("PROVIDER_RECONCILIATION_RECENT_LIMIT", v)} />
+                  <ConfigField label="ARR Downloads Path" envVar="ARR_DOWNLOADS_PATH" description="Optional staging path shared with Radarr/Sonarr; defaults to MOUNT_BASE/downloads" value={getValue("ARR_DOWNLOADS_PATH")} source={getSource("ARR_DOWNLOADS_PATH")} onChange={(v) => updateValue("ARR_DOWNLOADS_PATH", v)} />
+                </div>
+                <SwitchField label="Run Full Scan on Startup" envVar="PROVIDER_RECONCILIATION_RUN_FULL_ON_START" description="Perform a complete provider snapshot when SchroDrive starts" value={getBoolValue("PROVIDER_RECONCILIATION_RUN_FULL_ON_START")} source={getSource("PROVIDER_RECONCILIATION_RUN_FULL_ON_START")} onChange={(v) => updateBoolValue("PROVIDER_RECONCILIATION_RUN_FULL_ON_START", v)} />
+              </ConfigSection>
+              <p className="text-xs text-muted-foreground">Mount base and organized library paths are configured in the Mounts and Organiser tabs.</p>
             </CardContent>
           </Card>
         </TabsContent>
@@ -661,6 +701,17 @@ export default function SettingsPage() {
               </div>
               <div className="grid gap-6 md:grid-cols-2">
                 <ConfigField label="Organizer Mode" envVar="ORGANIZER_MODE" type="select" options={["symlink", "copy", "move"]} value={getValue("ORGANIZER_MODE")} source={getSource("ORGANIZER_MODE")} onChange={(v) => updateValue("ORGANIZER_MODE", v)} />
+                <ConfigField
+                  label="Media version naming"
+                  envVar="ORGANIZER_FILENAME_MODE"
+                  description="Jellyfin canonical gives every movie or episode one shared canonical stem; additional releases get a stable suffix so Jellyfin groups them in one media view."
+                  type="select"
+                  options={["canonical", "original"]}
+                  optionLabels={{ canonical: "Jellyfin canonical (group versions)", original: "Original release names" }}
+                  value={getValue("ORGANIZER_FILENAME_MODE")}
+                  source={getSource("ORGANIZER_FILENAME_MODE")}
+                  onChange={(v) => updateValue("ORGANIZER_FILENAME_MODE", v)}
+                />
                 <ConfigField label="Scan Interval (seconds)" envVar="ORG_SCAN_INTERVAL_S" description="How often to scan for new media" type="number" value={getValue("ORG_SCAN_INTERVAL_S")} source={getSource("ORG_SCAN_INTERVAL_S")} onChange={(v) => updateValue("ORG_SCAN_INTERVAL_S", v)} />
               </div>
             </CardContent>

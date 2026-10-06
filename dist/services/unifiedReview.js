@@ -1,8 +1,25 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.listDismissedVersionManagerReviews = listDismissedVersionManagerReviews;
+exports.setVersionManagerReviewDismissed = setVersionManagerReviewDismissed;
 exports.buildUnifiedReviewQueue = buildUnifiedReviewQueue;
 const node_crypto_1 = require("node:crypto");
 const mediaParser_1 = require("./mediaParser");
+const db_1 = require("../core/db");
+function listDismissedVersionManagerReviews() {
+    const rows = (0, db_1.getDb)().prepare("SELECT review_key FROM version_manager_review_dismissals").all();
+    return new Set(rows.map((row) => row.review_key));
+}
+function setVersionManagerReviewDismissed(reviewKey, dismissed) {
+    const database = (0, db_1.getDb)();
+    if (dismissed) {
+        database.prepare("INSERT OR REPLACE INTO version_manager_review_dismissals (review_key, updated_at) VALUES (?, ?)")
+            .run(reviewKey, new Date().toISOString());
+    }
+    else {
+        database.prepare("DELETE FROM version_manager_review_dismissals WHERE review_key = ?").run(reviewKey);
+    }
+}
 function digest(value) {
     return (0, node_crypto_1.createHash)("sha256").update(value, "utf8").digest("hex");
 }
@@ -109,6 +126,7 @@ function makeOrganizerEntry(entry) {
 }
 function buildUnifiedReviewQueue(groups, organizerReviews = [], status = "pending") {
     const entries = new Map();
+    const dismissedPolicyReviews = listDismissedVersionManagerReviews();
     const aliases = new Map();
     const canonicalByKey = new Map();
     const add = (value) => {
@@ -163,11 +181,18 @@ function buildUnifiedReviewQueue(groups, organizerReviews = [], status = "pendin
         const state = states.includes("NOT_RECOVERABLE") ? "NOT_RECOVERABLE" : states.includes("UNKNOWN") ? "UNKNOWN" : "RECOVERABLE";
         const sources = [...new Set(reviewVersions.map((version) => version.fingerprint.storage.recoverability?.source || (version.fingerprint.storage.infoHash ? "INFOHASH" : "UNKNOWN")))];
         const fallback = reviewVersions.map((version) => `${version.fingerprint.storage.provider}:${version.fingerprint.storage.torrentId}:${version.fingerprint.storage.fileId || ""}`).sort().join("|");
+        const key = keyForIdentity(group.identity, fallback);
+        const dismissed = dismissedPolicyReviews.has(key);
+        if (status === "pending" && dismissed)
+            continue;
+        if (status === "dismissed" && !dismissed)
+            continue;
         add({
-            key: keyForIdentity(group.identity, fallback), identity: group.identity, title: group.identity.title, year: group.identity.year, kind: group.identity.kind,
+            key, identity: group.identity, title: group.identity.title, year: group.identity.year, kind: group.identity.kind,
             season: group.identity.season, episode: group.identity.episode, issueTypes, reasonCodes, blockers: [...new Set(reviewVersions.flatMap((version) => version.reasons.map((reason) => reason.message)))],
             policyDecision: "REVIEW", recoverability: { status: state, sources }, identityResolutionStatus: identityStatus, versionGroupId: group.id,
-            versionIds: reviewVersions.map((version) => version.id), allowedActions: ["DETAILS"], allowIdentityActions: false,
+            decision: dismissed ? "dismissed" : "pending", versionIds: reviewVersions.map((version) => version.id),
+            allowedActions: dismissed ? ["RESTORE_TO_REVIEW", "DETAILS"] : ["DISMISS", "DETAILS"], allowIdentityActions: false,
         });
     }
     const result = [...entries.values()];

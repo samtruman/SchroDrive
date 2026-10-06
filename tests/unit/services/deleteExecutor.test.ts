@@ -66,6 +66,26 @@ describe("version manager delete executor", () => {
     expect(source.deleteTorrent).toHaveBeenCalledTimes(0);
   });
 
+  test("allows deleting the policy KEEP item when the complete operator selection preserves its alternative", async () => {
+    const source = provider();
+    source.listTorrents = mock(async () => [{ id: "keep-me" }]);
+    const selection = [{ provider: "fixture", providerItemId: "keep-me" }];
+    const result = await executeVersionManagerDelete({ groups: groups(), provider: source, providerItemId: "keep-me", dryRun: true, selection });
+    expect(result).toMatchObject({ status: "VALIDATED", impact: { state: "READY", providerItemId: "keep-me" } });
+    expect(source.deleteTorrent).toHaveBeenCalledTimes(0);
+  });
+
+  test("refuses an operator selection that would delete both alternatives", async () => {
+    const source = provider();
+    source.listTorrents = mock(async () => [{ id: "remove-me" }, { id: "keep-me" }]);
+    const selection = [
+      { provider: "fixture", providerItemId: "remove-me" },
+      { provider: "fixture", providerItemId: "keep-me" },
+    ];
+    await expect(executeVersionManagerDeleteBatch({ groups: groups(), provider: source, providerItemIds: ["remove-me", "keep-me"], dryRun: true, selection })).rejects.toThrow("final safety check");
+    expect(source.deleteTorrent).toHaveBeenCalledTimes(0);
+  });
+
   test("batch dry run preflights every selected item without deleting", async () => {
     const source = provider();
     source.listTorrents = mock(async () => [{ id: "remove-a" }, { id: "remove-b" }]);

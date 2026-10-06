@@ -908,6 +908,7 @@ All configuration is done via environment variables. Below is the complete refer
 |----------|---------|-------------|
 | `ARR_BRIDGE_ENABLED` | `false` | Enable the fake qBittorrent API server |
 | `ARR_BRIDGE_PORT` | `8282` | Port for the *arr bridge (add as qBittorrent in Radarr/Sonarr) |
+| `ARR_DOWNLOADS_PATH` | `<MOUNT_BASE>/downloads` | Optional staging path shared with Radarr/Sonarr; it must be visible at the same path to the bridge and *arr |
 
 ### 🔄 Provider Reconciliation (opt-in)
 
@@ -938,6 +939,7 @@ provider capability and live-validation status.
 | `TMDB_API_KEY` | — | TMDB API key for metadata lookup |
 | `ORGANIZED_BASE` | `<MOUNT_BASE>/organized` | Output directory for organised symlinks |
 | `ORGANIZER_MODE` | `symlink` | `symlink`, `copy`, or `move` |
+| `ORGANIZER_FILENAME_MODE` | `canonical` | `canonical` groups versions in one Jellyfin item; `original` preserves release basenames |
 | `ORG_SCAN_INTERVAL_S` | `300` | Organiser scan interval (seconds) |
 
 ### 🔍 Dead Scanner

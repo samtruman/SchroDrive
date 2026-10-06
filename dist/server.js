@@ -54,6 +54,7 @@ const unifiedReview_1 = require("./services/unifiedReview");
 const versionManagerScanJob_1 = require("./services/versionManagerScanJob");
 const magnetBackup_1 = require("./services/magnetBackup");
 const deleteImpact_1 = require("./services/deleteImpact");
+const deleteExecutor_1 = require("./services/deleteExecutor");
 const migrationJob_1 = require("./services/migrationJob");
 const seerrArrProfiles_1 = require("./services/seerrArrProfiles");
 // ===========================================================================
@@ -227,9 +228,9 @@ function startServer() {
         const evaluated = readVersionManagerGroups();
         res.json({
             ok: true,
-            enabled: false,
-            mode: "dry-run",
-            deleteExecutor: "not_implemented",
+            enabled: true,
+            mode: policy.safety?.deleteDryRun !== false ? "DRY_RUN" : "LIVE",
+            deleteExecutor: "enabled",
             policy,
             policyHash: (0, versionManager_1.versionManagerPolicyHash)(policy, profiles),
             profiles,
@@ -339,13 +340,14 @@ function startServer() {
             const evaluatedAt = new Date().toISOString();
             const policyHash = (0, versionManager_1.versionManagerPolicyHash)(policy, profiles);
             (0, versionManagerStore_1.saveVersionManagerPreviewAudit)({ policyHash, evaluatedAt, contentCount: counts.contents, versionGroupCount: counts.versionGroups, versionCount: counts.versions, keepCount: counts.KEEP, deleteCandidateCount: counts.DELETE_CANDIDATE, reviewCount: counts.REVIEW, primaryMissing: counts.primaryMissing, remoteMissing: counts.remoteMissing });
-            return res.json({ ok: true, readOnly: true, mode: "dry-run", deleteExecutor: "not_implemented", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, evaluatedAt, policyVersion: policy.policyVersion || "1", policyHash, counts, groups, performance: { totalMs: Date.now() - startedAt, source: "persisted-snapshot" } });
+            const dryRun = policy.safety?.deleteDryRun !== false;
+            return res.json({ ok: true, readOnly: dryRun, mode: dryRun ? "DRY_RUN" : "LIVE", deleteExecutor: "enabled", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, evaluatedAt, policyVersion: policy.policyVersion || "1", policyHash, counts, groups, performance: { totalMs: Date.now() - startedAt, source: "persisted-snapshot" } });
         }
         catch (err) {
             res.status(500).json({ ok: false, error: err?.message || "Delete preview failed" });
         }
     });
-    /** Read-only physical delete-unit impact. The provider executor remains disabled. */
+    /** Physical delete-unit impact. Execution mode is controlled by the persisted safety flag. */
     app.get("/api/version-manager/delete", (_req, res) => {
         try {
             const snapshot = readVersionManagerGroups();
@@ -353,10 +355,84 @@ function startServer() {
                 return res.status(503).json({ ok: false, snapshotAvailable: false, error: "No valid inventory snapshot is available; start a scan" });
             const query = typeof _req.query.q === "string" ? _req.query.q : "";
             const scope = typeof _req.query.scope === "string" ? _req.query.scope : "all";
-            return res.json({ ok: true, readOnly: true, executorEnabled: false, scope, snapshotId: snapshot.snapshotId, items: (0, deleteImpact_1.buildDeleteImpact)(snapshot.groups, query, scope) });
+            const dryRun = (0, versionManagerStore_1.getVersionManagerPolicy)().safety?.deleteDryRun !== false;
+            return res.json({ ok: true, readOnly: dryRun, executorEnabled: true, dryRun, mode: dryRun ? "DRY_RUN" : "LIVE", scope, snapshotId: snapshot.snapshotId, items: (0, deleteImpact_1.buildDeleteImpact)(snapshot.groups, query, scope) });
         }
         catch (error) {
             return res.status(500).json({ ok: false, error: error?.message || "Delete impact unavailable" });
+        }
+    });
+    app.get("/api/version-manager/delete/history", (_req, res) => {
+        try {
+            return res.json({ ok: true, items: (0, db_1.listVersionManagerDeleteAudit)(200) });
+        }
+        catch (error) {
+            return res.status(500).json({ ok: false, error: error?.message || "Delete history unavailable" });
+        }
+    });
+    app.post("/api/version-manager/delete/execute", async (req, res) => {
+        const providerId = String(req.body?.provider || "");
+        const providerItemId = String(req.body?.providerItemId || "");
+        const requestedSnapshotId = String(req.body?.snapshotId || "");
+        const selection = Array.isArray(req.body?.selection)
+            ? req.body.selection.map((item) => ({ provider: String(item?.provider || ""), providerItemId: String(item?.providerItemId || "") })).filter((item) => item.provider && item.providerItemId)
+            : undefined;
+        const snapshot = readVersionManagerGroups();
+        const policyDryRun = (0, versionManagerStore_1.getVersionManagerPolicy)().safety?.deleteDryRun !== false;
+        const dryRun = policyDryRun || req.body?.dryRun === true;
+        const mode = dryRun ? "DRY_RUN" : "LIVE";
+        try {
+            if (!providerId || !providerItemId || !requestedSnapshotId)
+                return res.status(400).json({ ok: false, error: "provider, providerItemId and snapshotId are required" });
+            if (!snapshot)
+                return res.status(503).json({ ok: false, error: "No valid inventory snapshot is available; start a scan" });
+            if (snapshot.snapshotId !== requestedSnapshotId)
+                return res.status(409).json({ ok: false, error: "Inventory changed; reload Delete before continuing" });
+            const provider = providers_1.registry.get(providerId);
+            if (!provider)
+                return res.status(400).json({ ok: false, error: `Provider ${providerId} is not configured` });
+            const result = await (0, deleteExecutor_1.executeVersionManagerDelete)({ groups: snapshot.groups, provider, providerItemId, dryRun, confirmation: req.body?.confirmation, selection });
+            (0, db_1.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId, snapshotId: snapshot.snapshotId, mode, status: result.status, detail: dryRun ? "ProviderItem revalidated; provider delete was not called" : "ProviderItem deleted after final revalidation" });
+            return res.json({ ok: true, policyDryRun, mode, ...result });
+        }
+        catch (error) {
+            if (providerId && providerItemId)
+                (0, db_1.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "FAILED", detail: error?.message || "Delete execution failed" });
+            return res.status(409).json({ ok: false, policyDryRun, mode, error: error?.message || "Delete execution failed" });
+        }
+    });
+    app.post("/api/version-manager/delete/execute-batch", async (req, res) => {
+        const providerId = String(req.body?.provider || "");
+        const providerItemIds = Array.isArray(req.body?.providerItemIds) ? req.body.providerItemIds.map(String) : [];
+        const requestedSnapshotId = String(req.body?.snapshotId || "");
+        const selection = Array.isArray(req.body?.selection)
+            ? req.body.selection.map((item) => ({ provider: String(item?.provider || ""), providerItemId: String(item?.providerItemId || "") })).filter((item) => item.provider && item.providerItemId)
+            : undefined;
+        const snapshot = readVersionManagerGroups();
+        const policyDryRun = (0, versionManagerStore_1.getVersionManagerPolicy)().safety?.deleteDryRun !== false;
+        const dryRun = policyDryRun || req.body?.dryRun === true;
+        const mode = dryRun ? "DRY_RUN" : "LIVE";
+        try {
+            if (!providerId || providerItemIds.length === 0 || !requestedSnapshotId)
+                return res.status(400).json({ ok: false, error: "provider, providerItemIds and snapshotId are required" });
+            if (!snapshot)
+                return res.status(503).json({ ok: false, error: "No valid inventory snapshot is available; start a scan" });
+            if (snapshot.snapshotId !== requestedSnapshotId)
+                return res.status(409).json({ ok: false, error: "Inventory changed; reload Delete before continuing" });
+            const provider = providers_1.registry.get(providerId);
+            if (!provider)
+                return res.status(400).json({ ok: false, error: `Provider ${providerId} is not configured` });
+            const result = await (0, deleteExecutor_1.executeVersionManagerDeleteBatch)({ groups: snapshot.groups, provider, providerItemIds, dryRun, confirmation: req.body?.confirmation, selection });
+            result.results.forEach((item) => (0, db_1.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId: item.providerItemId, snapshotId: snapshot.snapshotId, mode, status: item.status, detail: dryRun ? "Batch ProviderItem revalidated; provider delete was not called" : "ProviderItem deleted by confirmed batch after final revalidation" }));
+            return res.json({ ok: true, policyDryRun, mode, ...result });
+        }
+        catch (error) {
+            const batchError = error instanceof deleteExecutor_1.BatchDeleteExecutionError ? error : undefined;
+            for (const id of batchError?.completedIds || [])
+                (0, db_1.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId: id, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "DELETED", detail: "ProviderItem deleted before the batch stopped" });
+            if (batchError?.failedProviderItemId)
+                (0, db_1.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId: batchError.failedProviderItemId, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "FAILED", detail: error?.message || "Batch delete failed" });
+            return res.status(409).json({ ok: false, policyDryRun, mode, completedIds: batchError?.completedIds || [], failedProviderItemId: batchError?.failedProviderItemId, error: error?.message || "Batch delete failed" });
         }
     });
     /** Read-only operator queue combining Organizer and policy/recoverability review. */
@@ -375,6 +451,20 @@ function startServer() {
         catch (err) {
             res.status(500).json({ ok: false, error: err?.message || "Unified review queue failed" });
         }
+    });
+    app.post("/api/version-manager/review/:key", (req, res) => {
+        const key = String(req.params.key || "");
+        if (!/^review_[a-f0-9]{64}$/.test(key))
+            return res.status(400).json({ ok: false, error: "Invalid review key" });
+        if (req.body?.action === "dismiss") {
+            (0, unifiedReview_1.setVersionManagerReviewDismissed)(key, true);
+            return res.json({ ok: true, decision: "dismissed" });
+        }
+        if (req.body?.action === "restore") {
+            (0, unifiedReview_1.setVersionManagerReviewDismissed)(key, false);
+            return res.json({ ok: true, decision: "pending" });
+        }
+        return res.status(400).json({ ok: false, error: "action must be dismiss or restore" });
     });
     /**
      * GET /api/version-manager/missing — read-only missing-profile and Seerr
@@ -684,6 +774,7 @@ function startServer() {
                 preferCompletePack: req.body.policy?.preferCompletePack === true,
                 policyVersion: typeof req.body.policy?.policyVersion === "string" ? req.body.policy.policyVersion : "1",
                 safety: {
+                    deleteDryRun: req.body.policy?.safety?.deleteDryRun !== false,
                     requireRecoverableBeforeDelete: req.body.policy?.safety?.requireRecoverableBeforeDelete !== false,
                     allowDeleteWhenIdentityUncertain: req.body.policy?.safety?.allowDeleteWhenIdentityUncertain === true,
                     allowDeleteWhenMetadataIncomplete: req.body.policy?.safety?.allowDeleteWhenMetadataIncomplete === true,

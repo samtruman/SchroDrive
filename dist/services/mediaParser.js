@@ -142,6 +142,21 @@ function parseMediaFilename(filename, relativePath = filename) {
             });
         }
     }
+    // Numeric movie titles commonly appear as `1917.2019.2160p...`. The first
+    // numeric token is the title and the following four-digit token is the year;
+    // treating the first token as the year incorrectly falls back to the release
+    // folder/name as the content identity.
+    const numericTitleYear = normalized.match(/^(\d{1,4})\s+((?:19|20|21)\d{2})(?:\s|$)/);
+    if (numericTitleYear) {
+        return result(sourceBasename, extension, {
+            status: "matched",
+            kind: "movie",
+            title: numericTitleYear[1],
+            year: Number(numericTitleYear[2]),
+            confidence: 0.94,
+            reason: "numeric movie title followed by year",
+        });
+    }
     const yearMatch = normalized.match(/(?:^|\s)((?:19|20|21)\d{2})(?:\s|$)/);
     const year = parseYear(yearMatch?.[1]);
     const titlePart = yearMatch ? normalized.slice(0, yearMatch.index).trim() : normalized;
