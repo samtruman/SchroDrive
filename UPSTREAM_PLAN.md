@@ -227,3 +227,21 @@ revisione.
 
 È il candidato migliore perché è generico, indipendente dal Media Manager,
 testato, privo di credenziali/provider runtime e assente dall'upstream corrente.
+
+## NEW_STANDALONE_PR_CANDIDATE
+
+### Provider Settings canonical keys
+
+- Titolo: `fix(settings): align provider credential keys with backend schema`
+- Scope: AllDebrid (`AD_*` → `ALLDEBRID_*`) and Premiumize (`PM_*` →
+  `PREMIUMIZE_*`) API/WebDAV settings.
+- Problema: la GUI salva chiavi che il backend/provider runtime non legge; le
+  chiavi canoniche mancano inoltre dal `CONFIG_SCHEMA`.
+- Include: allineamento GUI/schema/runtime e test di persistenza/loading.
+- Esclude: credenziali reali, `.env` operativo, deployment e riconciliazione
+  AllDebrid specifica del fork.
+- Classificazione: `GENERIC_UPSTREAM_FIX`.
+- Stato: candidato nuovo, da implementare e isolare prima della pubblicazione.
+
+Questo candidato va mantenuto separato dai fix già pubblicati per Real-Debrid,
+Seerr e TMDB: quelli correggono rispettivamente caricamento persistito,

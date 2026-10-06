@@ -862,3 +862,45 @@ Status: OPEN against `develop`.
 ## FUSE assessment result
 
 `FUSE_PR: OPEN` — PR #106.
+
+## 12. Provider Settings — canonical AllDebrid and Premiumize keys
+
+### Classification
+
+`GENERIC_UPSTREAM_FIX`
+
+### Component
+
+Settings UI, configuration schema and provider credential loading.
+
+### Problem
+
+The Settings UI uses legacy provider prefixes (`AD_*` and `PM_*`), while the
+backend reads canonical names (`ALLDEBRID_*` and `PREMIUMIZE_*`). The
+AllDebrid and Premiumize API/WebDAV values therefore may be saved under keys
+that the provider runtime never reads. The AllDebrid and Premiumize keys are
+also missing from the current configuration schema.
+
+### Expected behavior
+
+The GUI, configuration schema, persisted `.env` keys and provider runtime use
+one canonical name for each credential. Partial saves must preserve existing
+secrets, and tests must verify that the provider reads the persisted values.
+
+### Proposed fix
+
+Align the AllDebrid and Premiumize GUI fields with the backend names, expose
+the canonical fields in `CONFIG_SCHEMA`, and add focused persistence/loading
+tests. Do not include deployment credentials, runtime `.env` files or
+provider-specific CineCircle reconciliation logic.
+
+### Upstream applicability
+
+Generic and independent of Media Manager. This is a new candidate found by
+comparing the current GUI envVar names with the backend schema and provider
+config readers.
+
+### Status
+
+Candidate not yet implemented or published. Suggested title:
+`fix(settings): align provider credential keys with backend schema`.
