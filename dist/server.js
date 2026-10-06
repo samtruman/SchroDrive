@@ -535,7 +535,15 @@ function startServer() {
     });
     /** Read-only magnet backup snapshots. These contain provider references, never media bytes. */
     app.get("/api/version-manager/magnet-backup", (req, res) => {
-        res.json({ ok: true, readOnly: true, backups: (0, magnetBackup_1.listMagnetBackups)(typeof req.query.provider === "string" ? req.query.provider : undefined) });
+        res.json({ ok: true, readOnly: true, storageDirectory: (0, magnetBackup_1.magnetBackupDirectory)(), schedule: (0, magnetBackup_1.getMagnetBackupSchedule)(), backups: (0, magnetBackup_1.listMagnetBackups)(typeof req.query.provider === "string" ? req.query.provider : undefined) });
+    });
+    app.put("/api/version-manager/magnet-backup", (req, res) => {
+        try {
+            return res.json({ ok: true, schedule: (0, magnetBackup_1.saveMagnetBackupSchedule)(req.body || {}) });
+        }
+        catch (error) {
+            return res.status(400).json({ ok: false, error: error?.message || "Invalid backup schedule" });
+        }
     });
     app.post("/api/version-manager/magnet-backup", async (req, res) => {
         try {
@@ -555,6 +563,14 @@ function startServer() {
         if (!document)
             return res.status(404).json({ ok: false, error: "Magnet backup not found" });
         return res.json({ ok: true, readOnly: true, integrity: (0, magnetBackup_1.verifyMagnetBackup)(String(req.params.id)), document });
+    });
+    app.delete("/api/version-manager/magnet-backup/:id", (req, res) => {
+        try {
+            return res.json({ ok: true, deleted: (0, magnetBackup_1.deleteMagnetBackup)(String(req.params.id)) });
+        }
+        catch (error) {
+            return res.status(error?.message === "Backup not found" ? 404 : 409).json({ ok: false, error: error?.message || "Backup could not be deleted" });
+        }
     });
     /**
      * Read-only effective migration state. Provider inventory alone cannot

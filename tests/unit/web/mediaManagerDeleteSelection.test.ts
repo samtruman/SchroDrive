@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { groupVersionsByPhysicalItem } from "../../../web/src/components/media-manager/operator-guidance";
+import { groupVersionsByPhysicalItem, partitionPhysicalReleases } from "../../../web/src/components/media-manager/operator-guidance";
 
-function version(id: string, providerItemId: string, episode: number) {
+function version(id: string, providerItemId: string, episode: number, decision = "DELETE_CANDIDATE") {
   return {
     id,
-    decision: "DELETE_CANDIDATE",
+    decision,
     fingerprint: {
       identity: { kind: "episode", season: 1, episode },
       storage: { provider: "alldebrid", torrentId: providerItemId, path: `Show.S01E${String(episode).padStart(2, "0")}.mkv` },
@@ -35,6 +35,21 @@ describe("Media Manager physical release selection", () => {
     expect(releases.map((release) => release.key).sort()).toEqual([
       "alldebrid:episode-1",
       "alldebrid:episode-2",
+    ]);
+  });
+
+  test("keeps candidate packs and retained single episodes in separate semantic columns", () => {
+    const { candidateReleases, retainedReleases } = partitionPhysicalReleases([
+      version("candidate-e1", "season-pack", 1),
+      version("candidate-e2", "season-pack", 2),
+      version("keep-e1", "single-e1", 1, "KEEP"),
+      version("keep-e2", "single-e2", 2, "KEEP"),
+    ]);
+
+    expect(candidateReleases.map((release) => release.key)).toEqual(["alldebrid:season-pack"]);
+    expect(retainedReleases.map((release) => release.key).sort()).toEqual([
+      "alldebrid:single-e1",
+      "alldebrid:single-e2",
     ]);
   });
 });

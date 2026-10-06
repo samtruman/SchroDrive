@@ -53,6 +53,16 @@ export function groupVersionsByPhysicalItem(versions: any[]): PhysicalRelease[] 
   return [...releases.values()];
 }
 
+export function partitionPhysicalReleases(versions: any[]): { candidateReleases: PhysicalRelease[]; retainedReleases: PhysicalRelease[] } {
+  const candidateReleases: PhysicalRelease[] = [];
+  const retainedReleases: PhysicalRelease[] = [];
+  for (const release of groupVersionsByPhysicalItem(versions)) {
+    if (release.versions.some((version: any) => version.decision === "DELETE_CANDIDATE")) candidateReleases.push(release);
+    else retainedReleases.push(release);
+  }
+  return { candidateReleases, retainedReleases };
+}
+
 function VersionRow({ version }: { version: any }) {
   const fp = version.fingerprint || {}, video = fp.video || {}, storage = fp.storage || {}, identity = version.identity || fp.identity || {};
   const languages = [...new Set((fp.audio || []).map((audio: any) => audio.language).filter(Boolean))].join("/");
@@ -146,25 +156,28 @@ export function DeleteImpactCards({ items, scope, busyId, selectedIds, onChangeS
       const candidateRefs = uniqueRefs(allVersions.filter((version: any) => version.decision === "DELETE_CANDIDATE"));
       const candidateKeys = new Set(candidateRefs.map(selectionKey));
       const groupKeys = allRefs.map(selectionKey);
+      const { candidateReleases, retainedReleases } = partitionPhysicalReleases(allVersions);
+      const renderRelease = (release: PhysicalRelease) => {
+        const checked = selectedIds?.has(release.key) || false;
+        const toggleRelease = (nextChecked: boolean) => {
+          if (!nextChecked) return onChangeSelection([], [release.key]);
+          const affectedEpisodes = group.episodes.filter((episode) => episode.versions.some((version: any) => selectionKey(physicalRef(version)) === release.key));
+          const conflicts = uniqueRefs(affectedEpisodes.flatMap((episode) => episode.versions)).map(selectionKey).filter((key) => key !== release.key);
+          onChangeSelection([release.ref], conflicts);
+        };
+        return <PhysicalReleaseCard key={release.key} release={release} selected={checked} selectable={selectable} disabled={Boolean(busyId)} onToggle={toggleRelease} />;
+      };
       return <Card key={group.key} className="border-primary/30"><CardContent className="space-y-4 p-4">
-        <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">{group.title}{group.season !== undefined ? ` · Season ${group.season}` : " · Film"}</h3><p className="text-xs text-muted-foreground">{group.tmdbId ? `TMDB ${group.tmdbId}` : "Canonical identity unavailable"} · {group.episodes.length} content unit{group.episodes.length === 1 ? "" : "s"} · {allRefs.length} physical ProviderItem{allRefs.length === 1 ? "" : "s"}</p></div>{selectable && <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={Boolean(busyId) || candidateRefs.length === 0} onClick={() => onChangeSelection(candidateRefs, groupKeys.filter((key) => !candidateKeys.has(key)))}>Select all episodes</Button><Button size="sm" variant="ghost" disabled={Boolean(busyId) || !groupKeys.some((key) => selectedIds?.has(key))} onClick={() => onChangeSelection([], groupKeys)}>Clear season</Button></div>}</div>
-        <div className="grid gap-3 lg:grid-cols-2">
-          {groupVersionsByPhysicalItem(allVersions)
-            .sort((left, right) => {
-              const leftCandidate = left.versions.some((version: any) => version.decision === "DELETE_CANDIDATE");
-              const rightCandidate = right.versions.some((version: any) => version.decision === "DELETE_CANDIDATE");
-              return Number(rightCandidate) - Number(leftCandidate) || left.key.localeCompare(right.key);
-            })
-            .map((release) => {
-              const checked = selectedIds?.has(release.key) || false;
-              const toggleRelease = (nextChecked: boolean) => {
-                if (!nextChecked) return onChangeSelection([], [release.key]);
-                const affectedEpisodes = group.episodes.filter((episode) => episode.versions.some((version: any) => selectionKey(physicalRef(version)) === release.key));
-                const conflicts = uniqueRefs(affectedEpisodes.flatMap((episode) => episode.versions)).map(selectionKey).filter((key) => key !== release.key);
-                onChangeSelection([release.ref], conflicts);
-              };
-              return <PhysicalReleaseCard key={release.key} release={release} selected={checked} selectable={selectable} disabled={Boolean(busyId)} onToggle={toggleRelease} />;
-            })}
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="font-semibold">{group.title}{group.season !== undefined ? ` · Season ${group.season}` : " · Film"}</h3><p className="text-xs text-muted-foreground">{group.tmdbId ? `TMDB ${group.tmdbId}` : "Canonical identity unavailable"} · {group.episodes.length} content unit{group.episodes.length === 1 ? "" : "s"} · {allRefs.length} physical ProviderItem{allRefs.length === 1 ? "" : "s"}</p></div>{selectable && <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={Boolean(busyId) || candidateRefs.length === 0} onClick={() => onChangeSelection(candidateRefs, groupKeys.filter((key) => !candidateKeys.has(key)))}>Select recommended removals</Button><Button size="sm" variant="ghost" disabled={Boolean(busyId) || !groupKeys.some((key) => selectedIds?.has(key))} onClick={() => onChangeSelection([], groupKeys)}>Clear season</Button></div>}</div>
+        <div className="grid items-start gap-4 lg:grid-cols-2">
+          <section className="space-y-3" aria-label="Recommended physical releases to delete">
+            <div><h4 className="text-sm font-semibold">Recommended for deletion</h4><p className="text-xs text-muted-foreground">Complete physical releases selected by policy. One season pack remains one physical selection.</p></div>
+            {candidateReleases.length ? candidateReleases.map(renderRelease) : <p className="rounded border p-3 text-sm text-muted-foreground">No policy deletion candidate in this title or season.</p>}
+          </section>
+          <section className="space-y-3" aria-label="Retained alternative physical releases">
+            <div><h4 className="text-sm font-semibold">Retained alternatives</h4><p className="text-xs text-muted-foreground">Versions kept by policy. Select one only when you intentionally want to keep the alternative shown on the left instead.</p></div>
+            {retainedReleases.length ? retainedReleases.map(renderRelease) : <p className="rounded border p-3 text-sm text-muted-foreground">No retained alternative is available.</p>}
+          </section>
         </div>
       </CardContent></Card>;
     })}

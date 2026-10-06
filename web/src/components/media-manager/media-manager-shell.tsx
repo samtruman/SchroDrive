@@ -23,7 +23,7 @@ import { Input } from "@/components/ui/input";
 import { normalizeIdentitySearchPrefill } from "./identity-search-prefill";
 import { DeleteImpactCards, ReviewActionGuide } from "./operator-guidance";
 import { ConfirmationDialog } from "./confirmation-dialog";
-import { libraryGroupProfileIds, matchesLibraryFilter } from "./library-filters";
+import { libraryGroupProfileIds, matchesLibraryFilter, missingProfileNeeds } from "./library-filters";
 
 type View = "overview" | "library" | "migration" | "settings";
 type Profile = { id: string; name: string; enabled: boolean; priority?: number; description?: string; preferredResolution?: string; languagePolicy?: any; hardRequirements?: any; scoring?: Record<string, number>; scoringRules?: ScoringRule[]; sizePreference?: "LARGER" | "SMALLER" | "IGNORE"; minimumSizeDifferencePercent?: number; acquisitionBehavior?: string; target?: string; arrProfiles?: { movie?: { provider?: "radarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string }; tv?: { provider?: "sonarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string } } };
@@ -826,7 +826,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     }
     return [...rows.values()].sort((left, right) => sort === "versions" ? right.groups.reduce((n, group) => n + group.versions.length, 0) - left.groups.reduce((n, group) => n + group.versions.length, 0) : left.title.localeCompare(right.title));
   }, [groups, sort]);
-  const needs = (missing.data?.previews || []).filter((item: any) =>
+  const needs = missingProfileNeeds(missing.data).filter((item: any) =>
     JSON.stringify(item).toLowerCase().includes(query.toLowerCase()),
   );
   const enrichReviewEntry = (entry: any) => {
@@ -1123,6 +1123,11 @@ function Migration({ section = "export" }: { section?: string }) {
   const [migrationStartError, setMigrationStartError] = useState("");
   const magnetBackups = useJson<any>(`/api/version-manager/magnet-backup?provider=${encodeURIComponent(sourceProvider)}`);
   const [backupBusy, setBackupBusy] = useState(false);
+  const [backupSchedule, setBackupSchedule] = useState<any>(null);
+  const [backupToDelete, setBackupToDelete] = useState<any>(null);
+  const [backupNotice, setBackupNotice] = useState("");
+  const [backupError, setBackupError] = useState("");
+  useEffect(() => { if (magnetBackups.data?.schedule) setBackupSchedule(magnetBackups.data.schedule); }, [magnetBackups.data?.schedule?.updatedAt]);
   async function previewFile(file: File) {
     setLoadingFile(true);
     setFileError("");
@@ -1150,13 +1155,26 @@ function Migration({ section = "export" }: { section?: string }) {
     (item: any) => item.effectiveStatus === "READY_TO_IMPORT",
   );
   async function createMagnetBackup(mode: "FULL" | "INCREMENTAL") {
-    setBackupBusy(true);
+    setBackupBusy(true); setBackupError(""); setBackupNotice("");
     try {
       const response = await fetch("/api/version-manager/magnet-backup", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: sourceProvider, mode }) });
       const body = await readJsonResponse<any>(response, "Magnet backup");
       await magnetBackups.reload();
+      setBackupNotice(`${mode === "FULL" ? "Full" : "Incremental"} backup created.`);
       return body;
-    } finally { setBackupBusy(false); }
+    } catch (error: any) { setBackupError(error.message || "Backup failed"); throw error; } finally { setBackupBusy(false); }
+  }
+  async function saveBackupSchedule() {
+    setBackupBusy(true); setBackupError(""); setBackupNotice("");
+    try { const response = await fetch("/api/version-manager/magnet-backup", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(backupSchedule) }); const body = await readJsonResponse<any>(response, "Saving backup schedule"); setBackupSchedule(body.schedule); setBackupNotice(body.schedule.enabled ? "Automatic backup schedule saved." : "Automatic backups disabled."); await magnetBackups.reload(); }
+    catch (error: any) { setBackupError(error.message || "Unable to save backup schedule"); }
+    finally { setBackupBusy(false); }
+  }
+  async function deleteBackup(backup: any) {
+    setBackupBusy(true); setBackupError(""); setBackupNotice("");
+    try { const response = await fetch(`/api/version-manager/magnet-backup/${encodeURIComponent(backup.id)}`, { method: "DELETE" }); await readJsonResponse<any>(response, "Deleting backup"); if (backupToImport === backup.id) setBackupToImport(""); setBackupNotice(`Backup from ${new Date(backup.createdAt).toLocaleString()} deleted.`); await magnetBackups.reload(); }
+    catch (error: any) { setBackupError(error.message || "Unable to delete backup"); throw error; }
+    finally { setBackupBusy(false); }
   }
   async function startMigration() {
     if (!importPlan || !selectedImport.size || !window.confirm("Start the selected migration? The source provider is not modified; the target provider will receive the selected magnets.")) return;
@@ -1387,12 +1405,24 @@ function Migration({ section = "export" }: { section?: string }) {
         <CardHeader><CardTitle className="text-base">Magnet Backup</CardTitle></CardHeader>
         <CardContent className="space-y-3">
           <p className="text-sm text-muted-foreground">Stores provider magnet references and file metadata only; it never downloads media bytes.</p>
+          <div className="rounded border p-3 text-sm"><p className="font-medium">Server backup folder</p><p className="mt-1 break-all font-mono text-xs text-muted-foreground">{magnetBackups.loading ? "Loading…" : magnetBackups.data?.storageDirectory || "Unavailable"}</p><p className="mt-1 text-xs text-muted-foreground">Backup Now and Incremental Backup write JSON files in this persistent server folder. The manifest.json and magnets.txt buttons above download files to your browser instead.</p></div>
+          {backupSchedule && <div className="space-y-3 rounded border p-3"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-medium">Automatic backup schedule</p><p className="text-xs text-muted-foreground">The scheduler runs inside SchröDrive and uses the selected timezone.</p></div><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={backupSchedule.enabled === true} onChange={(event) => setBackupSchedule((current: any) => ({ ...current, enabled: event.target.checked, provider: current.provider || sourceProvider }))} /> Enabled</label></div><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <label className="grid gap-1 text-xs"><span>Provider</span><select className="rounded border bg-background p-2 text-sm" value={backupSchedule.provider || sourceProvider} onChange={(event) => setBackupSchedule((current: any) => ({ ...current, provider: event.target.value }))}>{providerList.filter((provider: any) => provider.configured).map((provider: any) => <option key={provider.providerId} value={provider.providerId}>{provider.displayName || provider.providerId}</option>)}</select></label>
+            <label className="grid gap-1 text-xs"><span>Backup type</span><select className="rounded border bg-background p-2 text-sm" value={backupSchedule.mode || "FULL"} onChange={(event) => setBackupSchedule((current: any) => ({ ...current, mode: event.target.value }))}><option value="FULL">Full</option><option value="INCREMENTAL">Incremental</option></select></label>
+            <label className="grid gap-1 text-xs"><span>Frequency</span><select className="rounded border bg-background p-2 text-sm" value={backupSchedule.frequency || "DAILY"} onChange={(event) => setBackupSchedule((current: any) => ({ ...current, frequency: event.target.value }))}><option value="DAILY">Every day</option><option value="WEEKLY">Every week</option></select></label>
+            <label className="grid gap-1 text-xs"><span>Time</span><input className="rounded border bg-background p-2 text-sm" type="time" value={backupSchedule.time || "03:00"} onChange={(event) => setBackupSchedule((current: any) => ({ ...current, time: event.target.value }))} /></label>
+            {backupSchedule.frequency === "WEEKLY" && <label className="grid gap-1 text-xs"><span>Weekday</span><select className="rounded border bg-background p-2 text-sm" value={backupSchedule.weekday ?? 0} onChange={(event) => setBackupSchedule((current: any) => ({ ...current, weekday: Number(event.target.value) }))}>{["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"].map((day, index) => <option key={day} value={index}>{day}</option>)}</select></label>}
+            <label className="grid gap-1 text-xs"><span>Timezone</span><input className="rounded border bg-background p-2 text-sm" value={backupSchedule.timezone || "Europe/Rome"} onChange={(event) => setBackupSchedule((current: any) => ({ ...current, timezone: event.target.value }))} /></label>
+            <label className="grid gap-1 text-xs"><span>Keep latest</span><input className="rounded border bg-background p-2 text-sm" type="number" min="1" max="1000" value={backupSchedule.keepLatest ?? 90} onChange={(event) => setBackupSchedule((current: any) => ({ ...current, keepLatest: Number(event.target.value) }))} /></label>
+            <label className="grid gap-1 text-xs"><span>Keep monthly</span><input className="rounded border bg-background p-2 text-sm" type="number" min="0" max="120" value={backupSchedule.keepMonthly ?? 24} onChange={(event) => setBackupSchedule((current: any) => ({ ...current, keepMonthly: Number(event.target.value) }))} /></label>
+          </div><div className="flex flex-wrap items-center gap-3"><Button size="sm" disabled={backupBusy} onClick={() => void saveBackupSchedule()}>Save schedule</Button><span className="text-xs text-muted-foreground">{backupSchedule.lastRunAt ? `Last run: ${new Date(backupSchedule.lastRunAt).toLocaleString()} · ${backupSchedule.lastStatus || "UNKNOWN"}` : "No scheduled run yet."}</span></div>{backupSchedule.lastError && <p className="text-xs text-destructive">{backupSchedule.lastError}</p>}</div>}
           <div className="flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" disabled={backupBusy || !sourceInfo?.configured} onClick={() => void createMagnetBackup("FULL")}>Backup Now</Button>
-            <Button size="sm" variant="outline" disabled={backupBusy || !sourceInfo?.configured} onClick={() => void createMagnetBackup("INCREMENTAL")}>Incremental Backup</Button>
+            <Button size="sm" variant="outline" disabled={backupBusy || !sourceInfo?.configured} onClick={() => void createMagnetBackup("FULL").catch(() => undefined)}>Backup Now</Button>
+            <Button size="sm" variant="outline" disabled={backupBusy || !sourceInfo?.configured} onClick={() => void createMagnetBackup("INCREMENTAL").catch(() => undefined)}>Incremental Backup</Button>
           </div>
+          <ErrorBox error={backupError} />{backupNotice && <p className="rounded border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm">{backupNotice}</p>}
           <p className="text-xs text-muted-foreground">{magnetBackups.loading ? "Loading backup history…" : `${magnetBackups.data?.backups?.length || 0} backup records`}</p>
-          {(magnetBackups.data?.backups || []).slice(0, 5).map((backup: any) => <div className="flex flex-wrap justify-between gap-2 rounded border p-2 text-xs" key={backup.id}><span>{backup.mode} · {backup.itemCount} items</span><span>{backup.valid ? "VALID" : "INVALID"} · {backup.createdAt}</span></div>)}
+          <div className="max-h-80 space-y-2 overflow-auto">{(magnetBackups.data?.backups || []).map((backup: any) => <div className="flex flex-wrap items-center justify-between gap-3 rounded border p-3 text-xs" key={backup.id}><div><p className="font-medium">{backup.mode} · {backup.itemCount} items · {backup.provider}</p><p className="text-muted-foreground">{backup.valid ? "VALID" : "INVALID"} · {new Date(backup.createdAt).toLocaleString()}{backup.baseBackupId ? " · depends on full baseline" : ""}</p></div><Button size="sm" variant="destructive" disabled={backupBusy} onClick={() => setBackupToDelete(backup)}>Delete backup</Button></div>)}{!magnetBackups.loading && !(magnetBackups.data?.backups || []).length && <p className="rounded border p-3 text-sm text-muted-foreground">No backups recorded for this provider.</p>}</div>
         </CardContent>
       </Card>
       <Card id="import">
@@ -1587,6 +1617,7 @@ function Migration({ section = "export" }: { section?: string }) {
           </div>
         </CardContent>
       </Card>
+      {backupToDelete && <ConfirmationDialog open onOpenChange={(open) => !open && setBackupToDelete(null)} title="Delete this backup?" description="This permanently removes the local backup JSON from the server. Provider media and magnets are not changed." context={<div className="space-y-1"><p><b>{backupToDelete.mode}</b> · {backupToDelete.itemCount} items</p><p>{new Date(backupToDelete.createdAt).toLocaleString()} · {backupToDelete.provider}</p></div>} confirmLabel="Delete backup" variant="destructive" onConfirm={async () => { await deleteBackup(backupToDelete); setBackupToDelete(null); }} />}
     </div>
   );
 }

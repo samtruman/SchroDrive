@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import {
   libraryGroupProfileIds,
   matchesLibraryFilter,
+  missingProfileNeeds,
   sortLibraryGroups,
 } from "../../../web/src/components/media-manager/library-filters";
 
@@ -48,5 +49,13 @@ describe("Library filter semantics", () => {
   test("sorts by title or actual version count", () => {
     expect(sortLibraryGroups([movie, episode], "title").map((group) => group.id)).toEqual(["movie-1", "show-s01e01"]);
     expect(sortLibraryGroups([episode, movie], "versions").map((group) => group.id)).toEqual(["movie-1", "show-s01e01"]);
+  });
+
+  test("reads missing profile needs from the current API shape and keeps legacy compatibility", () => {
+    const current = [{ needId: "current" }];
+    const legacy = [{ needId: "legacy" }];
+    expect(missingProfileNeeds({ needs: current, previews: legacy })).toBe(current);
+    expect(missingProfileNeeds({ previews: legacy })).toBe(legacy);
+    expect(missingProfileNeeds({})).toEqual([]);
   });
 });

@@ -2,6 +2,12 @@ export type LibraryDecision = "KEEP" | "REVIEW" | "DELETE_CANDIDATE";
 export type LibraryMediaType = "all" | "movie" | "tv";
 export type LibrarySort = "title" | "versions";
 
+export function missingProfileNeeds(payload: any): any[] {
+  if (Array.isArray(payload?.needs)) return payload.needs;
+  if (Array.isArray(payload?.previews)) return payload.previews;
+  return [];
+}
+
 export interface LibraryFilter {
   query: string;
   profile: string;

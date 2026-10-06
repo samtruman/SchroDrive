@@ -3,11 +3,16 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.magnetBackupDirectory = magnetBackupDirectory;
 exports.createMagnetBackup = createMagnetBackup;
 exports.listMagnetBackups = listMagnetBackups;
 exports.readMagnetBackup = readMagnetBackup;
 exports.verifyMagnetBackup = verifyMagnetBackup;
+exports.getMagnetBackupSchedule = getMagnetBackupSchedule;
+exports.saveMagnetBackupSchedule = saveMagnetBackupSchedule;
+exports.deleteMagnetBackup = deleteMagnetBackup;
 exports.applyMagnetBackupRetention = applyMagnetBackupRetention;
+exports.runMagnetBackupSchedulerTick = runMagnetBackupSchedulerTick;
 exports.startMagnetBackupScheduler = startMagnetBackupScheduler;
 const node_crypto_1 = __importDefault(require("node:crypto"));
 const node_fs_1 = __importDefault(require("node:fs"));
@@ -16,7 +21,9 @@ const config_1 = require("../core/config");
 const providers_1 = require("../providers");
 const migrationExporter_1 = require("./migrationExporter");
 function root() { return node_path_1.default.join(config_1.config.dataDir, "magnet-backups"); }
+function magnetBackupDirectory() { return root(); }
 function indexPath() { return node_path_1.default.join(root(), "index.json"); }
+function schedulePath() { return node_path_1.default.join(root(), "schedule.json"); }
 function readIndex() { try {
     return JSON.parse(node_fs_1.default.readFileSync(indexPath(), "utf8"));
 }
@@ -85,7 +92,7 @@ function verifyMagnetBackup(id) { const record = readIndex().find((item) => item
 catch {
     return { valid: false, reason: "Manifest unavailable" };
 } }
-function cronTime() {
+function configuredCronTime() {
     const fields = config_1.config.magnetBackupSchedule.trim().split(/\s+/);
     if (fields.length < 2 || !/^\d+$/.test(fields[0]) || !/^\d+$/.test(fields[1]))
         return "03:00";
@@ -93,9 +100,48 @@ function cronTime() {
     const hour = Math.max(0, Math.min(23, Number(fields[1])));
     return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
+function defaultSchedule() { return { enabled: config_1.config.magnetBackupEnabled, provider: "", mode: "FULL", frequency: "DAILY", time: configuredCronTime(), weekday: 0, timezone: config_1.config.magnetBackupTimezone, keepLatest: config_1.config.magnetBackupDailyRetention, keepMonthly: config_1.config.magnetBackupMonthlyRetention, updatedAt: new Date().toISOString() }; }
+function normalizeSchedule(value, previous = defaultSchedule()) {
+    const time = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value.time || "")) ? String(value.time) : previous.time;
+    const timezone = String(value.timezone || previous.timezone || "Europe/Rome");
+    try {
+        new Intl.DateTimeFormat("en", { timeZone: timezone }).format();
+    }
+    catch {
+        throw new Error("Invalid backup timezone");
+    }
+    return { ...previous, enabled: value.enabled === true, provider: String(value.provider ?? previous.provider).trim().toLowerCase(), mode: value.mode === "INCREMENTAL" ? "INCREMENTAL" : "FULL", frequency: value.frequency === "WEEKLY" ? "WEEKLY" : "DAILY", time, weekday: Math.max(0, Math.min(6, Number(value.weekday ?? previous.weekday) || 0)), timezone, keepLatest: Math.max(1, Math.min(1000, Number(value.keepLatest ?? previous.keepLatest) || 1)), keepMonthly: Math.max(0, Math.min(120, Number(value.keepMonthly ?? previous.keepMonthly) || 0)), updatedAt: value.updatedAt || previous.updatedAt || new Date().toISOString(), lastRunAt: Object.prototype.hasOwnProperty.call(value, "lastRunAt") ? value.lastRunAt : previous.lastRunAt, lastStatus: Object.prototype.hasOwnProperty.call(value, "lastStatus") ? value.lastStatus : previous.lastStatus, lastError: Object.prototype.hasOwnProperty.call(value, "lastError") ? value.lastError : previous.lastError };
+}
+function getMagnetBackupSchedule() { try {
+    return normalizeSchedule(JSON.parse(node_fs_1.default.readFileSync(schedulePath(), "utf8")));
+}
+catch {
+    return defaultSchedule();
+} }
+function saveMagnetBackupSchedule(value) { const previous = getMagnetBackupSchedule(); const next = normalizeSchedule({ ...previous, ...value, updatedAt: new Date().toISOString() }, previous); if (next.enabled && !next.provider)
+    throw new Error("Select a provider for scheduled backups"); atomicWrite(schedulePath(), next); return next; }
+/** Delete one local backup document. A full baseline referenced by an incremental is protected. */
+function deleteMagnetBackup(id) {
+    const records = readIndex();
+    const record = records.find((item) => item.id === id);
+    if (!record)
+        throw new Error("Backup not found");
+    if (records.some((item) => item.baseBackupId === id))
+        throw new Error("This full backup is still required by an incremental backup; delete the dependent incremental backup first");
+    try {
+        node_fs_1.default.unlinkSync(record.file);
+    }
+    catch (error) {
+        if (error?.code !== "ENOENT")
+            throw error;
+    }
+    atomicWrite(indexPath(), records.filter((item) => item.id !== id));
+    return { ...record, file: node_path_1.default.basename(record.file) };
+}
 /** Remove only unreferenced local manifests; provider data is never touched. */
 function applyMagnetBackupRetention(providerId) {
     const records = readIndex();
+    const schedule = getMagnetBackupSchedule();
     const byProvider = new Map();
     for (const record of records)
         if (!providerId || record.provider === providerId)
@@ -103,14 +149,14 @@ function applyMagnetBackupRetention(providerId) {
     const keep = new Set();
     for (const providerRecords of byProvider.values()) {
         const sorted = providerRecords.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-        sorted.slice(0, Math.max(0, config_1.config.magnetBackupDailyRetention)).forEach((record) => keep.add(record.id));
+        sorted.slice(0, schedule.keepLatest).forEach((record) => keep.add(record.id));
         const monthly = new Map();
         for (const record of sorted) {
             const month = record.createdAt.slice(0, 7);
             if (!monthly.has(month))
                 monthly.set(month, record);
         }
-        [...monthly.values()].slice(0, Math.max(0, config_1.config.magnetBackupMonthlyRetention)).forEach((record) => keep.add(record.id));
+        [...monthly.values()].slice(0, schedule.keepMonthly).forEach((record) => keep.add(record.id));
         for (const record of sorted)
             if (record.baseBackupId)
                 keep.add(record.baseBackupId);
@@ -128,9 +174,24 @@ function applyMagnetBackupRetention(providerId) {
     return { removed: removable.length };
 }
 let scheduler;
-let lastScheduledKey = "";
 let scheduledRun;
-function startMagnetBackupScheduler() { if (!config_1.config.magnetBackupEnabled || scheduler)
-    return; scheduler = setInterval(async () => { const now = new Date(); const parts = new Intl.DateTimeFormat("en-CA", { timeZone: config_1.config.magnetBackupTimezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now); const time = `${parts.find((part) => part.type === "hour")?.value}:${parts.find((part) => part.type === "minute")?.value}`; const key = now.toISOString().slice(0, 10); if (time !== cronTime() || key === lastScheduledKey || scheduledRun)
-    return; lastScheduledKey = key; const provider = providers_1.registry.configured()[0]; if (!provider)
-    return; scheduledRun = createMagnetBackup(provider.id, "FULL").then(() => { applyMagnetBackupRetention(provider.id); }).catch(() => { }).finally(() => { scheduledRun = undefined; }); await scheduledRun; }, 60000); }
+function localScheduleParts(now, timezone) { const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(now); const value = (type) => parts.find((part) => part.type === type)?.value || ""; const weekdays = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 }; return { date: `${value("year")}-${value("month")}-${value("day")}`, time: `${value("hour")}:${value("minute")}`, weekday: weekdays[value("weekday")] ?? 0 }; }
+async function runMagnetBackupSchedulerTick(now = new Date()) {
+    const schedule = getMagnetBackupSchedule();
+    if (!schedule.enabled || scheduledRun)
+        return false;
+    const current = localScheduleParts(now, schedule.timezone);
+    const previous = schedule.lastRunAt ? localScheduleParts(new Date(schedule.lastRunAt), schedule.timezone) : undefined;
+    if (current.time !== schedule.time || (schedule.frequency === "WEEKLY" && current.weekday !== schedule.weekday) || previous?.date === current.date)
+        return false;
+    const provider = providers_1.registry.get(schedule.provider);
+    if (!provider || !provider.isConfigured()) {
+        saveMagnetBackupSchedule({ lastRunAt: now.toISOString(), lastStatus: "FAILED", lastError: "Scheduled provider is not configured" });
+        return false;
+    }
+    scheduledRun = createMagnetBackup(provider.id, schedule.mode).then(() => { applyMagnetBackupRetention(provider.id); saveMagnetBackupSchedule({ lastRunAt: now.toISOString(), lastStatus: "SUCCESS", lastError: undefined }); }).catch((error) => { saveMagnetBackupSchedule({ lastRunAt: now.toISOString(), lastStatus: "FAILED", lastError: error?.message || "Scheduled backup failed" }); }).finally(() => { scheduledRun = undefined; });
+    await scheduledRun;
+    return true;
+}
+function startMagnetBackupScheduler() { if (scheduler)
+    return; scheduler = setInterval(() => { void runMagnetBackupSchedulerTick(); }, 60000); scheduler.unref?.(); }
