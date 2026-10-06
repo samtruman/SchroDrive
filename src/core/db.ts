@@ -265,11 +265,11 @@ function runMigrations(database: Database): void {
     )`,
     `CREATE INDEX IF NOT EXISTS idx_version_manager_items_scan
       ON version_manager_items (scan_id, decision)`,
-    \`CREATE TABLE IF NOT EXISTS version_manager_review_dismissals (
+    `CREATE TABLE IF NOT EXISTS version_manager_review_dismissals (
       review_key TEXT PRIMARY KEY,
       updated_at TEXT NOT NULL
-    )\`,
-    \`CREATE TABLE IF NOT EXISTS version_manager_delete_audit (
+    )`,
+    `CREATE TABLE IF NOT EXISTS version_manager_delete_audit (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       provider TEXT NOT NULL,
       provider_item_id TEXT NOT NULL,
@@ -278,9 +278,9 @@ function runMigrations(database: Database): void {
       status TEXT NOT NULL,
       detail TEXT,
       created_at TEXT NOT NULL
-    )\`,
-    \`CREATE INDEX IF NOT EXISTS idx_version_manager_delete_audit_item
-      ON version_manager_delete_audit (provider, provider_item_id, created_at)\`,
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_version_manager_delete_audit_item
+      ON version_manager_delete_audit (provider, provider_item_id, created_at)`,
     `CREATE TABLE IF NOT EXISTS version_manager_probe_cache (
       cache_key TEXT PRIMARY KEY,
       path TEXT NOT NULL,

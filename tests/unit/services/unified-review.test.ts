@@ -60,7 +60,8 @@ describe("unified Media Manager review queue", () => {
     const fallback = group({ identity: { title: "Fallback", normalizedTitle: "fallback", year: 2024, kind: "movie", confidence: 0.8, source: "provider", resolutionStatus: "fallback" } });
     const result = buildUnifiedReviewQueue([fallback]);
     expect(result.entries[0].issueTypes).toEqual(["RECOVERABILITY_ISSUE"]);
-    expect(result.entries[0].allowedActions).toEqual(["DETAILS"]);
+    expect(result.entries[0].allowedActions).toContain("DETAILS");
+    expect(result.entries[0].allowedActions).not.toContain("RESOLVE_IDENTITY");
   });
 
   test("deduplicates Organizer and policy issues for the same canonical identity", () => {

@@ -39,6 +39,7 @@ export function buildDeleteImpact(groups: VersionGroup[], query = "", scope = "a
       .filter((version) => version.fingerprint.storage.torrentId !== item.providerItemId && version.decision === "KEEP")
       .map((version) => ({ id: version.id, title: version.fingerprint.identity.title, season: version.fingerprint.identity.season, episode: version.fingerprint.identity.episode, providerItemId: version.fingerprint.storage.torrentId, decision: version.decision, profileIds: version.satisfiesProfiles || [], reasons: (version.reasons || []).map((reason) => reason.message) }));
     item.alternativeVersions = alternatives;
+    if (item.alternativeVersions.length) item.onlyCopy = false;
     if (item.onlyCopy) item.reasons.push("ONLY COPY — No alternative version identified");
     if (item.protectedByKeep) { item.state = "PARTIALLY_REDUNDANT"; item.reasons.push("PROTECTED — ProviderItem contains a KEEP version"); }
     else if (item.alternativeVersions.length) item.reasons.push(`Alternative KEEP versions on ${new Set(item.alternativeVersions.map((version) => version.providerItemId)).size} other ProviderItem(s)`);
