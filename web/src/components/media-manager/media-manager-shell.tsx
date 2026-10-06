@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { normalizeIdentitySearchPrefill } from "./identity-search-prefill";
 import { DeleteImpactCards, ReviewActionGuide } from "./operator-guidance";
 import { ConfirmationDialog } from "./confirmation-dialog";
+import { libraryGroupProfileIds, matchesLibraryFilter } from "./library-filters";
 
 type View = "overview" | "library" | "migration" | "settings";
 type Profile = { id: string; name: string; enabled: boolean; priority?: number; description?: string; preferredResolution?: string; languagePolicy?: any; hardRequirements?: any; scoring?: Record<string, number>; scoringRules?: ScoringRule[]; acquisitionBehavior?: string; target?: string; arrProfiles?: { movie?: { provider?: "radarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string }; tv?: { provider?: "sonarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string } } };
@@ -323,16 +324,22 @@ function Header({
 
 function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; onClose: () => void; onReviewAction?: (id: string, body: Record<string, unknown>, item?: any) => void; onSaved?: () => void }) {
   const review = item.review || (item.parsed ? item : undefined);
-  const identity = item.identity || item.contentIdentity || (review ? { title: review.parsed?.title, year: review.parsed?.year, kind: review.parsed?.kind, confidence: review.parsed?.confidence, source: review.override ? "manual" : "unknown" } : {});
+  const identity = item.identity || item.contentIdentity || (review ? { title: review.parsed?.title, year: review.parsed?.year, kind: review.parsed?.kind, confidence: review.parsed?.confidence, source: review.override ? "manual" : "unknown" } : item.versions?.[0]?.fingerprint?.identity || {});
   const shownIdentity = displayIdentity(item);
   const versions = item.versions || item.existingVersions || [];
+  const reasonText = (value: any) => [...new Set((Array.isArray(value) ? value : []).map((reason: any) => typeof reason === "string" ? reason : reason?.message).filter(Boolean))].join(" · ");
   const reviewStatus = review?.parsed?.status;
   const identityAction = review?.override ? "Change Match" : reviewStatus === "ambiguous" || reviewStatus === "unmatched" || reviewStatus === "fallback" || reviewStatus === "conflict" ? "Resolve Identity" : "Change Match";
   const leafName = (value: unknown) => String(value || "").split(/[\\/]/).pop() || "—";
   const versionDetails = (version: any) => {
     const fingerprint = version.fingerprint || {};
     const video = fingerprint.video || {};
-    const storage = fingerprint.storage || {};
+    const storage = fingerprint.storage || {
+      provider: version.provider,
+      torrentId: version.providerItemId,
+      path: version.files?.[0]?.path,
+      size: version.files?.[0]?.size,
+    };
     const release = fingerprint.release || {};
     const audio = [...new Set((fingerprint.audio || []).map((item: any) => item.language).filter(Boolean))].join(", ");
     return { fingerprint, video, storage, release, audio, name: leafName(storage.path || version.releaseName || version.filename) };
@@ -340,6 +347,13 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
   const decisionVersions = versions.filter((version: any) => ["KEEP", "REVIEW", "DELETE_CANDIDATE"].includes(version.decision));
   const candidates = decisionVersions.filter((version: any) => version.decision === "DELETE_CANDIDATE");
   const keeps = decisionVersions.filter((version: any) => version.decision === "KEEP");
+  const sameLogicalContent = (left: any, right: any) => {
+    if (!left || !right) return false;
+    if (left.groupId && right.groupId) return left.groupId === right.groupId;
+    if (left.logicalKey && right.logicalKey) return left.logicalKey === right.logicalKey;
+    return (left.title || "") === (right.title || "") && (left.season ?? "") === (right.season ?? "") && (left.episode ?? "") === (right.episode ?? "");
+  };
+  const keptForCandidate = (candidate: any) => [...keeps, ...(item.alternativeVersions || [])].filter((version: any) => sameLogicalContent(candidate, version));
   const isDeleteImpact = Array.isArray(item.alternativeVersions) || item.providerItemId !== undefined;
   return (
     <Card className="border-primary/40">
@@ -362,7 +376,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
             </p>
             <p>
               <b className="text-foreground">Type:</b>{" "}
-              {identity.mediaType || item.mediaType || "—"}
+              {identity.mediaType || identity.kind || item.mediaType || shownIdentity.kind || "—"}
             </p>
             <p>
               <b className="text-foreground">TMDb:</b>{" "}
@@ -432,13 +446,13 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
           <h3 className="mb-2 font-semibold">Policy / Decision</h3>
           <p><b>Decision:</b> <StatusBadge value={item.decision || versions[0]?.decision || "REVIEW"} /></p>
           <p className="mt-2"><b>Matched slot:</b> {versions.flatMap((version: any) => version.satisfiesProfiles || []).join(", ") || "none"}</p>
-          {candidates.length > 0 && <div className="mt-3 rounded border border-amber-500/50 bg-amber-500/5 p-3"><p className="font-semibold">Decision comparison</p>{candidates.map((version: any, index: number) => <div key={version.id || index} className="mt-2"><p><b>Delete candidate:</b> {versionDetails(version).name}</p><p className="text-xs text-muted-foreground">{(version.reasons || []).join(" · ") || "Policy marked this version as redundant or lower priority."}</p></div>)}{(keeps.length > 0 || item.alternativeVersions?.length > 0) && <div className="mt-2">{keeps.map((version: any, index: number) => <div key={version.id || index}><p><b>Kept instead:</b> {versionDetails(version).name}</p><p className="text-xs text-muted-foreground">{(version.reasons || []).join(" · ") || "Winning version for the matched retention slot."}</p></div>)}{item.alternativeVersions?.map((version: any, index: number) => <div key={version.id || index}><p><b>Alternative KEEP:</b> {version.title || "Content"} · ProviderItem {version.providerItemId}</p><p className="text-xs text-muted-foreground">{(version.reasons || []).join(" · ") || "Alternative KEEP version identified."}</p></div>)}</div>}</div>}
+          {candidates.length > 0 && <div className="mt-3 rounded border border-amber-500/50 bg-amber-500/5 p-3"><p className="font-semibold">Decision comparison</p>{candidates.map((version: any, index: number) => { const retained = keptForCandidate(version); return <div key={version.id || index} className="mt-3 rounded border border-border/70 p-2"><p><b>Delete candidate:</b> {versionDetails(version).name}</p><p className="text-xs text-muted-foreground">{reasonText(version.reasons) || "Policy marked this version as redundant or lower priority."}</p><div className="mt-2">{retained.length ? retained.map((keptVersion: any, keptIndex: number) => <div key={keptVersion.id || keptIndex}><p><b>Kept instead for the same content / episode:</b> {keptVersion.providerItemId ? `${keptVersion.title || "Content"} · ProviderItem ${keptVersion.providerItemId}` : versionDetails(keptVersion).name}</p><p className="text-xs text-muted-foreground">{reasonText(keptVersion.reasons) || "Winning version for the matched retention slot."}</p></div>) : <p className="text-xs text-amber-700">No retained replacement for this same content / episode. Physical deletion must stay blocked.</p>}</div></div>; })}</div>}
           <p className="mt-2 text-muted-foreground">Winning profiles: {versions.flatMap((version: any) => version.satisfiesProfiles || []).join(", ") || "none"}</p>
-          <div className="mt-2 space-y-1 text-xs text-muted-foreground">{versions.flatMap((version: any) => (version.reasons || []).map((reason: any) => <p key={`${version.id}-${reason.code}`}>• {reason.message}</p>))}</div>
+          <div className="mt-2 space-y-1 text-xs text-muted-foreground">{versions.flatMap((version: any) => (Array.isArray(version.reasons) ? version.reasons : []).map((reason: any, index: number) => <p key={`${version.id}-${reason.code || index}`}>• {typeof reason === "string" ? reason : reason.message}</p>))}</div>
         </section>
         <section>
           <h3 className="mb-2 font-semibold">Safety</h3>
-          {isDeleteImpact && <><p><b>Physical resource:</b> ProviderItem {item.providerItemId || "unknown"}</p><p><b>Physical deletion:</b> {item.protectedByKeep ? "PROTECTED" : item.state === "READY" ? "ELIGIBLE after final revalidation" : "BLOCKED"}</p>{item.protectedByKeep && <p className="text-amber-700">Protection reason: this ProviderItem is also referenced by a KEEP version or shared content.</p>}</>}
+          {isDeleteImpact && <><p><b>Physical resource:</b> {item.provider} · ProviderItem {item.providerItemId || "unknown"}</p><p><b>Physical size:</b> {item.physicalSize ? `${Math.round(Number(item.physicalSize) / 1_000_000)} MB` : "unknown"} · <b>Physical deletion:</b> {item.protectedByKeep ? "PROTECTED" : item.state === "READY" ? "ELIGIBLE after final revalidation" : "BLOCKED"}</p><p><b>Copy status:</b> {item.onlyCopy ? "Only copy / no same-content alternative" : "Alternative retained or shared physical resource"}</p>{item.reasons?.length > 0 && <p className="text-amber-700">Reasons: {item.reasons.join(" · ")}</p>}</>}
           {versions.length ? versions.map((version: any, index: number) => <p key={version.id || index} className="text-sm text-muted-foreground">{version.fingerprint?.storage?.provider || "provider"} · recoverability: {version.fingerprint?.storage?.infoHash ? "YES · infohash available" : "UNKNOWN · review required"}</p>) : <p className="text-muted-foreground">No safety details available.</p>}
         </section>
         <details className="rounded border p-3 lg:col-span-2">
@@ -654,19 +668,18 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const pathname = usePathname();
   const [preset, setPreset] = useState("all");
   const [query, setQuery] = useState("");
-  const [status, setStatus] = useState("all");
   const [profile, setProfile] = useState("all");
   const [mediaType, setMediaType] = useState("all");
   const [decision, setDecision] = useState("all");
   const [multipleVersions, setMultipleVersions] = useState(false);
-  const [needsAttention, setNeedsAttention] = useState(false);
   const [sort, setSort] = useState("title");
-  const [deleteScope, setDeleteScope] = useState("all");
+  const [deleteScope, setDeleteScope] = useState("candidates");
   const [selected, setSelected] = useState<any>(null);
   const [reviewStatus, setReviewStatus] = useState<"pending" | "dismissed" | "all">("pending");
   const [reviewIssueFilter, setReviewIssueFilter] = useState<"all" | "identity" | "policy" | "recoverability">("all");
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null);
   const [deleteBusy, setDeleteBusy] = useState("");
+  const [selectedDeleteIds, setSelectedDeleteIds] = useState<Set<string>>(new Set());
   const [deleteNotice, setDeleteNotice] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const reviewQueue = useJson<any>("/api/version-manager/review?status=pending");
@@ -689,6 +702,10 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     `/api/version-manager/delete?scope=${encodeURIComponent(deleteScope)}&q=${encodeURIComponent(query)}`,
     preset === "delete-preview" || preset === "delete",
   );
+  useEffect(() => {
+    setSelectedDeleteIds(new Set());
+  }, [deleteScope, query]);
+  const visibleDeleteItems = deleteImpact.data?.items || [];
   async function executeDelete(item: any, dryRun: boolean) {
     const key = `${item.provider}:${item.providerItemId}`;
     setDeleteBusy(key);
@@ -704,6 +721,33 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       setDeleteError(value.message || "Delete action failed");
       throw value;
     } finally { setDeleteBusy(""); }
+  }
+  async function executeBulkDelete(items: any[]) {
+    const dryRun = deleteImpact.data?.dryRun !== false;
+    const grouped = new Map<string, any[]>();
+    for (const item of items) grouped.set(item.provider, [...(grouped.get(item.provider) || []), item]);
+    setDeleteBusy("batch");
+    setDeleteNotice("");
+    setDeleteError("");
+    try {
+      for (const [provider, providerItems] of grouped) {
+        const providerItemIds = providerItems.map((item) => String(item.providerItemId));
+        const response = await fetch("/api/version-manager/delete/batch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, providerItemIds, snapshotId: deleteImpact.data?.snapshotId, dryRun, confirmation: dryRun ? undefined : JSON.stringify(providerItemIds) }) });
+        await readJsonResponse<any>(response, dryRun ? "Batch dry-run validation" : "Batch provider deletion");
+      }
+      setSelectedDeleteIds(new Set());
+      setDeleteNotice(dryRun ? `Validated ${items.length} selected ProviderItems. No provider data was deleted.` : `Deleted ${items.length} selected ProviderItems. Run a new scan to refresh the library.`);
+      await Promise.all([deleteImpact.reload(), deletePreview.reload()]);
+    } catch (value: any) {
+      setDeleteError(value.message || "Batch delete failed");
+      throw value;
+    } finally { setDeleteBusy(""); }
+  }
+  function requestBulkDelete() {
+    const items = visibleDeleteItems.filter((item: any) => selectedDeleteIds.has(`${item.provider}:${item.providerItemId}`));
+    if (!items.length) return;
+    const totalGiB = items.reduce((total: number, item: any) => total + Number(item.physicalSize || 0), 0) / 1024 / 1024 / 1024;
+    setConfirmation({ title: `Delete ${items.length} selected ProviderItems?`, description: "This is a real batch deletion. Every selected ProviderItem is revalidated immediately before deletion; the batch stops on the first provider error.", context: <div className="space-y-1"><p><b>Selected:</b> {items.length} ProviderItems</p><p><b>Total physical size:</b> {totalGiB ? `${totalGiB.toFixed(2)} GiB` : "unknown"}</p></div>, confirmLabel: `Delete ${items.length} selected`, variant: "destructive", onConfirm: () => executeBulkDelete(items) });
   }
   function requestLiveDelete(item: any) {
     const gib = Number(item.physicalSize || 0) / 1024 / 1024 / 1024;
@@ -767,39 +811,18 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     });
   }
   const groups = useMemo(
-    () =>
-      (preview.data?.groups || []).filter((group: any) => {
-        const text = JSON.stringify(group).toLowerCase();
-        const identity = group.identity || {};
-        const versions = group.versions || [];
-        const hasProfile =
-          profile === "all" ||
-          versions.some((version: any) =>
-            (version.evaluations || []).some(
-              (evaluation: any) =>
-                evaluation.profileId?.toLowerCase() === profile,
-            ),
-          );
-        const type = String(
-          identity.mediaType || group.mediaType || "",
-        ).toLowerCase();
-        const isTv = identity.kind === "episode" || type === "episode" || type === "tv";
-        const hasStatus =
-          status === "all" ||
-          (status === "complete" ? versions.length > 0 : text.includes(status));
-        const hasDecision =
-          decision === "all" || text.toLowerCase().includes(decision);
-        return (
-          text.includes(query.toLowerCase()) &&
-          hasProfile &&
-          (mediaType === "all" || (mediaType === "tv" ? isTv : !isTv)) &&
-          hasStatus &&
-          hasDecision &&
-          (!multipleVersions || versions.length > 1) &&
-          (!needsAttention || versions.some((version: any) => ["REVIEW", "DELETE_CANDIDATE"].includes(version.decision)))
-        );
-      }),
-    [preview.data, query, status, profile, mediaType, decision, multipleVersions, needsAttention],
+    () => (preview.data?.groups || []).filter((group: any) => matchesLibraryFilter(group, {
+      query,
+      profile,
+      mediaType: mediaType as "all" | "movie" | "tv",
+      decision: decision as "all" | "keep" | "review" | "delete_candidate",
+      multipleVersions,
+    })),
+    [preview.data, query, profile, mediaType, decision, multipleVersions],
+  );
+  const profileOptions = useMemo(
+    (): string[] => [...new Set<string>((preview.data?.groups || []).flatMap((group: any) => libraryGroupProfileIds(group)))].sort(),
+    [preview.data],
   );
   const libraryRows = useMemo(() => {
     const rows = new Map<string, { kind: "movie" | "show" | "unknown"; title: string; year?: number; groups: any[] }>();
@@ -856,6 +879,8 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
         </Button>
       </div>
       {preset !== "review" && preset !== "delete-preview" && (
+        <>
+        <p className="text-xs text-muted-foreground">Filters use inventory fields: retained profile, media type, exact policy decision and version count. Status and Needs attention are not shown because the version-manager snapshot has no authoritative content-status field and the old attention rule duplicated Decision.</p>
         <div className="grid gap-2 rounded-lg border p-3 sm:grid-cols-2 lg:grid-cols-5">
           <div className="relative">
             <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -863,29 +888,16 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
               className="pl-8"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search title…"
+              placeholder="Search title, filename or ProviderItem…"
             />
           </div>
-          <select
-            className="rounded border bg-background p-2 text-sm"
-            value={status}
-            onChange={(event) => setStatus(event.target.value)}
-          >
-            <option value="all">Status: All</option>
-            <option value="complete">Complete</option>
-            <option value="missing">Missing</option>
-            <option value="requested">Requested</option>
-            <option value="processing">Processing</option>
-            <option value="attention">Attention</option>
-          </select>
           <select
             className="rounded border bg-background p-2 text-sm"
             value={profile}
             onChange={(event) => setProfile(event.target.value)}
           >
             <option value="all">Profile: All</option>
-            <option value="primary">PRIMARY</option>
-            <option value="remote">REMOTE</option>
+            {profileOptions.map((profileId) => <option key={profileId} value={profileId}>{profileId.toUpperCase()}</option>)}
           </select>
           <select
             className="rounded border bg-background p-2 text-sm"
@@ -894,10 +906,9 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
           >
             <option value="all">Type: All</option>
             <option value="movie">Movies</option>
-            <option value="tv">TV Shows</option>
+            <option value="tv">TV episodes</option>
           </select>
           <label className="flex items-center gap-2 rounded border px-2 text-sm"><input type="checkbox" checked={multipleVersions} onChange={(event) => setMultipleVersions(event.target.checked)} /> Multiple versions</label>
-          <label className="flex items-center gap-2 rounded border px-2 text-sm"><input type="checkbox" checked={needsAttention} onChange={(event) => setNeedsAttention(event.target.checked)} /> Needs attention</label>
           <select className="rounded border bg-background p-2 text-sm" value={sort} onChange={(event) => setSort(event.target.value)}><option value="title">Sort: title</option><option value="versions">Sort: versions</option></select>
           <select
             className="rounded border bg-background p-2 text-sm"
@@ -910,18 +921,10 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
             <option value="delete_candidate">DELETE_CANDIDATE</option>
           </select>
         </div>
+        </>
       )}
       {(preset === "delete" || preset === "delete-preview") && (
         <>
-          <Card className="border-amber-500/50">
-            <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
-              <div>
-                <p className="font-semibold">Delete · impact analysis</p>
-                <p className="text-sm text-muted-foreground">{deleteImpact.data?.dryRun !== false ? "Dry run is enabled: actions revalidate the physical resource against the provider without deleting it." : "Live mode is enabled: eligible resources can be deleted only after final revalidation and explicit confirmation."}</p>
-              </div>
-              <StatusBadge value={deleteImpact.data?.dryRun !== false ? "DRY RUN" : "LIVE"} />
-            </CardContent>
-          </Card>
           <div className="flex flex-wrap items-center gap-2"><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, release, filename or provider item…" /><select value={deleteScope} onChange={(event) => setDeleteScope(event.target.value)} className="rounded border bg-background p-2 text-sm"><option value="candidates">Delete candidates · physically eligible</option><option value="protected">Protected / Not deletable</option><option value="attention">Needs attention</option></select></div>
           <ErrorBox error={deletePreview.error || deleteImpact.error || deleteError} />
           {deleteNotice && <p className="rounded border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm">{deleteNotice}</p>}
@@ -930,7 +933,8 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 {Object.entries(deletePreview.data?.counts || {}).map(([label, value]) => <Stat key={label} label={label.replaceAll("_", " ")} value={String(value)} />)}
               </div>
-              <DeleteImpactCards items={deleteImpact.data?.items || []} scope={deleteScope} dryRun={deleteImpact.data?.dryRun !== false} busyId={deleteBusy} onDetails={setSelected} onValidate={(item) => { void executeDelete(item, true).catch(() => undefined); }} onDelete={requestLiveDelete} />
+              {deleteScope === "candidates" && visibleDeleteItems.length > 0 && <div className="flex flex-wrap items-center gap-2 rounded-lg border p-3"><Button size="sm" variant="outline" disabled={Boolean(deleteBusy)} onClick={() => setSelectedDeleteIds(new Set(visibleDeleteItems.map((item: any) => `${item.provider}:${item.providerItemId}`)))}>Select all visible</Button><Button size="sm" variant="ghost" disabled={Boolean(deleteBusy) || selectedDeleteIds.size === 0} onClick={() => setSelectedDeleteIds(new Set())}>Clear</Button><span className="text-sm text-muted-foreground">{selectedDeleteIds.size} selected</span><Button size="sm" variant="destructive" disabled={Boolean(deleteBusy) || selectedDeleteIds.size === 0} onClick={requestBulkDelete}>{deleteBusy === "batch" ? "Deleting selection…" : "Delete selected"}</Button></div>}
+              <DeleteImpactCards items={visibleDeleteItems} scope={deleteScope} dryRun={deleteImpact.data?.dryRun !== false} busyId={deleteBusy} selectedIds={selectedDeleteIds} onToggleSelected={(item, isSelected) => setSelectedDeleteIds((current) => { const next = new Set(current); const key = `${item.provider}:${item.providerItemId}`; if (isSelected) next.add(key); else next.delete(key); return next; })} onDetails={setSelected} onDelete={requestLiveDelete} />
             </>
           )}
         </>
@@ -947,9 +951,9 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                   <CardContent className="space-y-2 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-3">
                       <div><p className="font-medium">{row.title}</p><p className="text-xs text-muted-foreground">{row.year || "—"} · {row.kind === "show" ? "TV show" : row.kind === "movie" ? "Movie" : "Unresolved"} · {row.groups.reduce((count, group) => count + group.versions.length, 0)} versions</p></div>
-                      <StatusBadge value={row.kind === "show" ? "SERIES" : row.kind === "movie" ? "MOVIE" : "UNRESOLVED"} />
+                      <div className="flex items-center gap-2"><StatusBadge value={row.kind === "show" ? "SERIES" : row.kind === "movie" ? "MOVIE" : "UNRESOLVED"} /><Button size="sm" variant="outline" onClick={(event) => { event.stopPropagation(); setSelected(row.groups[0]); }}>Details</Button></div>
                     </div>
-                    {row.kind === "show" ? <div className="space-y-2 border-l-2 pl-3">{[...new Map(row.groups.map((group) => [group.identity?.season || 0, row.groups.filter((candidate) => (candidate.identity?.season || 0) === (group.identity?.season || 0))])).entries()].sort(([a], [b]) => a - b).map(([season, seasonGroups]) => <details key={season} className="rounded border p-2"><summary className="cursor-pointer text-sm font-medium">Season {season || "unknown"} · {seasonGroups.length} episodes</summary><div className="mt-2 space-y-2">{seasonGroups.sort((a, b) => (a.identity?.episode || 0) - (b.identity?.episode || 0)).map((group) => <div key={group.id} className="rounded border p-2 text-sm"><button className="font-medium hover:underline" onClick={() => setSelected(group)}>Episode {group.identity?.episode || "unknown"} · {group.versions.length} versions</button><div className="mt-1 flex flex-wrap gap-1">{group.versions.map((version: any) => <StatusBadge key={version.id} value={version.decision} />)}</div></div>)}</div></details>)}</div> : <div className="grid gap-2 sm:grid-cols-2">{row.groups.flatMap((group) => group.versions).slice(0, 8).map((version: any) => { const fingerprint = version.fingerprint || {}; const storage = fingerprint.storage || {}; const video = fingerprint.video || {}; return <button className="rounded border p-2 text-left text-xs hover:border-primary/50" key={version.id} onClick={() => setSelected(row.groups.find((group) => group.versions.some((candidate: any) => candidate.id === version.id)))}><p className="font-medium">{video.resolution || "Resolution unknown"} · {video.codec || "Codec unknown"} · {video.dolbyVision || video.hdr10 ? "HDR" : "SDR"}</p><p className="text-muted-foreground">{String(storage.path || version.releaseName || version.filename || "Release unknown").split(/[\\/]/).pop()} · {version.decision || "REVIEW"}</p></button>; })}</div>}
+                    {row.kind === "show" ? <div className="space-y-2 border-l-2 pl-3">{[...new Map(row.groups.map((group) => [group.identity?.season || 0, row.groups.filter((candidate) => (candidate.identity?.season || 0) === (group.identity?.season || 0))])).entries()].sort(([a], [b]) => a - b).map(([season, seasonGroups]) => <details key={season} className="rounded border p-2"><summary className="cursor-pointer text-sm font-medium">Season {season || "unknown"} · {seasonGroups.length} episodes</summary><div className="mt-2 space-y-2">{seasonGroups.sort((a, b) => (a.identity?.episode || 0) - (b.identity?.episode || 0)).map((group) => <div key={group.id} className="rounded border p-2 text-sm"><div className="flex flex-wrap items-center justify-between gap-2"><button className="font-medium hover:underline" onClick={() => setSelected(group)}>Episode {group.identity?.episode || "unknown"} · {group.versions.length} versions</button><Button size="sm" variant="outline" onClick={(event) => { event.stopPropagation(); setSelected(group); }}>Details</Button></div><div className="mt-1 flex flex-wrap gap-1">{group.versions.map((version: any) => <StatusBadge key={version.id} value={version.decision} />)}</div></div>)}</div></details>)}</div> : <div className="grid gap-2 sm:grid-cols-2">{row.groups.flatMap((group) => group.versions).slice(0, 8).map((version: any) => { const fingerprint = version.fingerprint || {}; const storage = fingerprint.storage || {}; const video = fingerprint.video || {}; return <button className="rounded border p-2 text-left text-xs hover:border-primary/50" key={version.id} onClick={() => setSelected(row.groups.find((group) => group.versions.some((candidate: any) => candidate.id === version.id)))}><p className="font-medium">{video.resolution || "Resolution unknown"} · {video.codec || "Codec unknown"} · {video.dolbyVision || video.hdr10 ? "HDR" : "SDR"}</p><p className="text-muted-foreground">{String(storage.path || version.releaseName || version.filename || "Release unknown").split(/[\\/]/).pop()} · {version.decision || "REVIEW"}</p></button>; })}</div>}
                   </CardContent>
                 </Card>
               ))}
