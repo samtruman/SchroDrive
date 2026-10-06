@@ -20,10 +20,21 @@ const node_path_1 = __importDefault(require("node:path"));
 const config_1 = require("../core/config");
 const providers_1 = require("../providers");
 const migrationExporter_1 = require("./migrationExporter");
-function root() { return node_path_1.default.join(config_1.config.dataDir, "magnet-backups"); }
+const defaultRoot = () => node_path_1.default.join(config_1.config.dataDir, "magnet-backups");
+const settingsPath = () => node_path_1.default.join(config_1.config.dataDir, "magnet-backup-settings.json");
+function configuredStorageDirectory() {
+    try {
+        const value = JSON.parse(node_fs_1.default.readFileSync(settingsPath(), "utf8"))?.storageDirectory;
+        return typeof value === "string" && node_path_1.default.isAbsolute(value) ? node_path_1.default.normalize(value) : defaultRoot();
+    }
+    catch {
+        return defaultRoot();
+    }
+}
+function root() { return configuredStorageDirectory(); }
 function magnetBackupDirectory() { return root(); }
 function indexPath() { return node_path_1.default.join(root(), "index.json"); }
-function schedulePath() { return node_path_1.default.join(root(), "schedule.json"); }
+function legacySchedulePath() { return node_path_1.default.join(defaultRoot(), "schedule.json"); }
 function readIndex() { try {
     return JSON.parse(node_fs_1.default.readFileSync(indexPath(), "utf8"));
 }
@@ -100,7 +111,7 @@ function configuredCronTime() {
     const hour = Math.max(0, Math.min(23, Number(fields[1])));
     return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
-function defaultSchedule() { return { enabled: config_1.config.magnetBackupEnabled, provider: "", mode: "FULL", frequency: "DAILY", time: configuredCronTime(), weekday: 0, timezone: config_1.config.magnetBackupTimezone, keepLatest: config_1.config.magnetBackupDailyRetention, keepMonthly: config_1.config.magnetBackupMonthlyRetention, updatedAt: new Date().toISOString() }; }
+function defaultSchedule() { return { enabled: config_1.config.magnetBackupEnabled, provider: "", mode: "FULL", frequency: "DAILY", time: configuredCronTime(), weekday: 0, timezone: config_1.config.magnetBackupTimezone, keepLatest: config_1.config.magnetBackupDailyRetention, keepMonthly: config_1.config.magnetBackupMonthlyRetention, storageDirectory: defaultRoot(), updatedAt: new Date().toISOString() }; }
 function normalizeSchedule(value, previous = defaultSchedule()) {
     const time = /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value.time || "")) ? String(value.time) : previous.time;
     const timezone = String(value.timezone || previous.timezone || "Europe/Rome");
@@ -110,16 +121,24 @@ function normalizeSchedule(value, previous = defaultSchedule()) {
     catch {
         throw new Error("Invalid backup timezone");
     }
-    return { ...previous, enabled: value.enabled === true, provider: String(value.provider ?? previous.provider).trim().toLowerCase(), mode: value.mode === "INCREMENTAL" ? "INCREMENTAL" : "FULL", frequency: value.frequency === "WEEKLY" ? "WEEKLY" : "DAILY", time, weekday: Math.max(0, Math.min(6, Number(value.weekday ?? previous.weekday) || 0)), timezone, keepLatest: Math.max(1, Math.min(1000, Number(value.keepLatest ?? previous.keepLatest) || 1)), keepMonthly: Math.max(0, Math.min(120, Number(value.keepMonthly ?? previous.keepMonthly) || 0)), updatedAt: value.updatedAt || previous.updatedAt || new Date().toISOString(), lastRunAt: Object.prototype.hasOwnProperty.call(value, "lastRunAt") ? value.lastRunAt : previous.lastRunAt, lastStatus: Object.prototype.hasOwnProperty.call(value, "lastStatus") ? value.lastStatus : previous.lastStatus, lastError: Object.prototype.hasOwnProperty.call(value, "lastError") ? value.lastError : previous.lastError };
+    const storageDirectory = node_path_1.default.normalize(String(value.storageDirectory || previous.storageDirectory || defaultRoot()).trim());
+    if (!node_path_1.default.isAbsolute(storageDirectory))
+        throw new Error("Backup folder must be an absolute server path");
+    return { ...previous, enabled: value.enabled === true, provider: String(value.provider ?? previous.provider).trim().toLowerCase(), mode: value.mode === "INCREMENTAL" ? "INCREMENTAL" : "FULL", frequency: value.frequency === "WEEKLY" ? "WEEKLY" : "DAILY", time, weekday: Math.max(0, Math.min(6, Number(value.weekday ?? previous.weekday) || 0)), timezone, keepLatest: Math.max(1, Math.min(1000, Number(value.keepLatest ?? previous.keepLatest) || 1)), keepMonthly: Math.max(0, Math.min(120, Number(value.keepMonthly ?? previous.keepMonthly) || 0)), storageDirectory, updatedAt: value.updatedAt || previous.updatedAt || new Date().toISOString(), lastRunAt: Object.prototype.hasOwnProperty.call(value, "lastRunAt") ? value.lastRunAt : previous.lastRunAt, lastStatus: Object.prototype.hasOwnProperty.call(value, "lastStatus") ? value.lastStatus : previous.lastStatus, lastError: Object.prototype.hasOwnProperty.call(value, "lastError") ? value.lastError : previous.lastError };
 }
 function getMagnetBackupSchedule() { try {
-    return normalizeSchedule(JSON.parse(node_fs_1.default.readFileSync(schedulePath(), "utf8")));
+    return normalizeSchedule(JSON.parse(node_fs_1.default.readFileSync(settingsPath(), "utf8")));
 }
 catch {
-    return defaultSchedule();
+    try {
+        return normalizeSchedule(JSON.parse(node_fs_1.default.readFileSync(legacySchedulePath(), "utf8")));
+    }
+    catch {
+        return defaultSchedule();
+    }
 } }
 function saveMagnetBackupSchedule(value) { const previous = getMagnetBackupSchedule(); const next = normalizeSchedule({ ...previous, ...value, updatedAt: new Date().toISOString() }, previous); if (next.enabled && !next.provider)
-    throw new Error("Select a provider for scheduled backups"); atomicWrite(schedulePath(), next); return next; }
+    throw new Error("Select a provider for scheduled backups"); node_fs_1.default.mkdirSync(next.storageDirectory, { recursive: true }); node_fs_1.default.accessSync(next.storageDirectory, node_fs_1.default.constants.R_OK | node_fs_1.default.constants.W_OK); atomicWrite(settingsPath(), next); return next; }
 /** Delete one local backup document. A full baseline referenced by an incremental is protected. */
 function deleteMagnetBackup(id) {
     const records = readIndex();

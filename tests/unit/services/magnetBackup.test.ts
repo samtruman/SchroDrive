@@ -18,6 +18,19 @@ describe("magnet backup management", () => {
     expect(getMagnetBackupSchedule()).toMatchObject(saved);
   });
 
+  test("changes the backup folder without moving the previous folder", () => {
+    const previous = path.join(temporaryDataDir, "magnet-backups");
+    fs.mkdirSync(previous, { recursive: true });
+    fs.writeFileSync(path.join(previous, "untouched.json"), "{}");
+    const selected = path.join(temporaryDataDir, "custom-backups");
+    const saved = saveMagnetBackupSchedule({ storageDirectory: selected });
+    expect(saved.storageDirectory).toBe(selected);
+    expect(getMagnetBackupSchedule().storageDirectory).toBe(selected);
+    expect(fs.existsSync(selected)).toBe(true);
+    expect(fs.existsSync(path.join(previous, "untouched.json"))).toBe(true);
+    saveMagnetBackupSchedule({ storageDirectory: previous });
+  });
+
   test("protects a full baseline until dependent incrementals are deleted", () => {
     const directory = path.join(temporaryDataDir, "magnet-backups"); fs.mkdirSync(directory, { recursive: true });
     const fullFile = path.join(directory, "full.json"), incrementalFile = path.join(directory, "incremental.json"); fs.writeFileSync(fullFile, "{}"); fs.writeFileSync(incrementalFile, "{}");
