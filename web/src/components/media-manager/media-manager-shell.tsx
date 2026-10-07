@@ -1400,7 +1400,9 @@ function Migration({ section = "export" }: { section?: string }) {
           detail="effective ready only"
         />
       </div>
-      <ErrorBox error={state.error ? `Migration state is not calculated: ${state.error}` : ""} />
+      {state.error && /provider is not configured/i.test(state.error)
+        ? <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm text-amber-700 dark:text-amber-300">Migration preview is unavailable because {state.error.toLowerCase()}. Configure the provider in <Link className="underline" href="/settings">Settings</Link>, or select another configured route.</div>
+        : <ErrorBox error={state.error ? `Migration state is not calculated: ${state.error}` : ""} />}
       <Card id="export">
         <CardHeader>
           <CardTitle className="text-base">Export</CardTitle>
