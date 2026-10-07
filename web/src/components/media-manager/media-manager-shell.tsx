@@ -1111,10 +1111,10 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
               })}
               {needs.length === 0 && (
                 <Card>
-                  <CardContent className="p-6 text-sm text-muted-foreground">
-                    No unsatisfied enabled profile requirements were found in
-                    the current snapshot. Provider acquisition previews remain
-                    unavailable when the corresponding gateway is disabled.
+                  <CardContent className="space-y-2 p-6 text-sm text-muted-foreground">
+                    <p>No identified movie or episode currently has an unsatisfied mandatory profile requirement. Preferred resolution affects ranking, but does not make a lower-resolution version missing.</p>
+                    {Number(missing.data?.deferredIdentityCount || 0) > 0 && <p><strong className="text-foreground">{missing.data.deferredIdentityCount} item{missing.data.deferredIdentityCount === 1 ? "" : "s"}</strong> cannot be classified until identity is resolved. Open <Link className="underline" href="/media-manager/library/review">Review</Link> to identify {missing.data.deferredIdentityCount === 1 ? "it" : "them"}.</p>}
+                    {!missing.data?.adapter?.canRequest && <p>Acquisition preview is unavailable because the corresponding request gateway is disabled.</p>}
                   </CardContent>
                 </Card>
               )}
