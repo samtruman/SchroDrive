@@ -20,6 +20,14 @@ const persistedJellyfinUrl = (0, configApi_1.getPersistedEnvValue)("JELLYFIN_URL
 const persistedJellyfinApiKey = (0, configApi_1.getPersistedEnvValue)("JELLYFIN_API_KEY");
 const persistedJellyfinUserId = (0, configApi_1.getPersistedEnvValue)("JELLYFIN_USER_ID");
 const persistedOrganizerFilenameMode = (0, configApi_1.getPersistedEnvValue)("ORGANIZER_FILENAME_MODE");
+const persistedAllDebridApiKey = (0, configApi_1.getPersistedEnvValue)("ALLDEBRID_API_KEY");
+const persistedAllDebridWebdavUrl = (0, configApi_1.getPersistedEnvValue)("ALLDEBRID_WEBDAV_URL");
+const persistedAllDebridWebdavUsername = (0, configApi_1.getPersistedEnvValue)("ALLDEBRID_WEBDAV_USERNAME");
+const persistedAllDebridWebdavPassword = (0, configApi_1.getPersistedEnvValue)("ALLDEBRID_WEBDAV_PASSWORD");
+const persistedPremiumizeApiKey = (0, configApi_1.getPersistedEnvValue)("PREMIUMIZE_API_KEY");
+const persistedPremiumizeWebdavUrl = (0, configApi_1.getPersistedEnvValue)("PREMIUMIZE_WEBDAV_URL");
+const persistedPremiumizeWebdavUsername = (0, configApi_1.getPersistedEnvValue)("PREMIUMIZE_WEBDAV_USERNAME");
+const persistedPremiumizeWebdavPassword = (0, configApi_1.getPersistedEnvValue)("PREMIUMIZE_WEBDAV_PASSWORD");
 const defaultMountBase = (process.env.MOUNT_BASE || (process.platform === 'darwin' ? "/Volumes/SchroDrive" : "/mnt/schrodrive"));
 exports.config = {
     port: (0, utils_1.asNumber)(process.env.PORT, 8978),
@@ -76,7 +84,7 @@ exports.config = {
     torboxWebdavUsername: process.env.TORBOX_WEBDAV_USERNAME || "",
     torboxWebdavPassword: process.env.TORBOX_WEBDAV_PASSWORD || "",
     // AllDebrid API
-    alldebridApiKey: process.env.ALLDEBRID_API_KEY || process.env.AD_API_KEY || "",
+    alldebridApiKey: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.ALLDEBRID_API_KEY || process.env.AD_API_KEY, persistedAllDebridApiKey),
     alldebridApiBase: process.env.ALLDEBRID_API_BASE || "https://api.alldebrid.com/v4",
     alldebridAgent: process.env.ALLDEBRID_AGENT || "schrodrive",
     // Provider reconciliation is opt-in and disabled by default.
@@ -94,16 +102,16 @@ exports.config = {
     providerReconciliationMoviesLibraryPath: process.env.PROVIDER_RECONCILIATION_MOVIES_LIBRARY_PATH || "",
     providerReconciliationShowsLibraryPath: process.env.PROVIDER_RECONCILIATION_SHOWS_LIBRARY_PATH || "",
     // AllDebrid WebDAV (if supported)
-    alldebridWebdavUrl: process.env.ALLDEBRID_WEBDAV_URL || process.env.AD_WEBDAV_URL || "",
-    alldebridWebdavUsername: process.env.ALLDEBRID_WEBDAV_USERNAME || process.env.AD_WEBDAV_USERNAME || "",
-    alldebridWebdavPassword: process.env.ALLDEBRID_WEBDAV_PASSWORD || process.env.AD_WEBDAV_PASSWORD || "",
+    alldebridWebdavUrl: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.ALLDEBRID_WEBDAV_URL || process.env.AD_WEBDAV_URL, persistedAllDebridWebdavUrl),
+    alldebridWebdavUsername: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.ALLDEBRID_WEBDAV_USERNAME || process.env.AD_WEBDAV_USERNAME, persistedAllDebridWebdavUsername),
+    alldebridWebdavPassword: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.ALLDEBRID_WEBDAV_PASSWORD || process.env.AD_WEBDAV_PASSWORD, persistedAllDebridWebdavPassword),
     // Premiumize API
-    premiumizeApiKey: process.env.PREMIUMIZE_API_KEY || process.env.PM_API_KEY || "",
+    premiumizeApiKey: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.PREMIUMIZE_API_KEY || process.env.PM_API_KEY, persistedPremiumizeApiKey),
     premiumizeApiBase: process.env.PREMIUMIZE_API_BASE || "https://www.premiumize.me/api",
     // Premiumize WebDAV
-    premiumizeWebdavUrl: process.env.PREMIUMIZE_WEBDAV_URL || process.env.PM_WEBDAV_URL || "https://webdav.premiumize.me",
-    premiumizeWebdavUsername: process.env.PREMIUMIZE_WEBDAV_USERNAME || process.env.PM_WEBDAV_USERNAME || "",
-    premiumizeWebdavPassword: process.env.PREMIUMIZE_WEBDAV_PASSWORD || process.env.PM_WEBDAV_PASSWORD || '',
+    premiumizeWebdavUrl: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.PREMIUMIZE_WEBDAV_URL || process.env.PM_WEBDAV_URL, persistedPremiumizeWebdavUrl) || "https://webdav.premiumize.me",
+    premiumizeWebdavUsername: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.PREMIUMIZE_WEBDAV_USERNAME || process.env.PM_WEBDAV_USERNAME, persistedPremiumizeWebdavUsername),
+    premiumizeWebdavPassword: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.PREMIUMIZE_WEBDAV_PASSWORD || process.env.PM_WEBDAV_PASSWORD, persistedPremiumizeWebdavPassword),
     // --- Download Token Rotation (Zurg-style 503 bypass) ---
     rdDownloadTokens: (0, utils_1.splitCsv)(process.env.RD_DOWNLOAD_TOKENS),
     torboxDownloadTokens: (0, utils_1.splitCsv)(process.env.TORBOX_DOWNLOAD_TOKENS),

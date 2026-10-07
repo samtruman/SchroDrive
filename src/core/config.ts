@@ -13,6 +13,14 @@ const persistedJellyfinUrl = getPersistedEnvValue("JELLYFIN_URL");
 const persistedJellyfinApiKey = getPersistedEnvValue("JELLYFIN_API_KEY");
 const persistedJellyfinUserId = getPersistedEnvValue("JELLYFIN_USER_ID");
 const persistedOrganizerFilenameMode = getPersistedEnvValue("ORGANIZER_FILENAME_MODE");
+const persistedAllDebridApiKey = getPersistedEnvValue("ALLDEBRID_API_KEY");
+const persistedAllDebridWebdavUrl = getPersistedEnvValue("ALLDEBRID_WEBDAV_URL");
+const persistedAllDebridWebdavUsername = getPersistedEnvValue("ALLDEBRID_WEBDAV_USERNAME");
+const persistedAllDebridWebdavPassword = getPersistedEnvValue("ALLDEBRID_WEBDAV_PASSWORD");
+const persistedPremiumizeApiKey = getPersistedEnvValue("PREMIUMIZE_API_KEY");
+const persistedPremiumizeWebdavUrl = getPersistedEnvValue("PREMIUMIZE_WEBDAV_URL");
+const persistedPremiumizeWebdavUsername = getPersistedEnvValue("PREMIUMIZE_WEBDAV_USERNAME");
+const persistedPremiumizeWebdavPassword = getPersistedEnvValue("PREMIUMIZE_WEBDAV_PASSWORD");
 
 const defaultMountBase = (process.env.MOUNT_BASE || (process.platform === 'darwin' ? "/Volumes/SchroDrive" : "/mnt/schrodrive"));
 
@@ -71,7 +79,7 @@ export const config = {
   torboxWebdavUsername: process.env.TORBOX_WEBDAV_USERNAME || "",
   torboxWebdavPassword: process.env.TORBOX_WEBDAV_PASSWORD || "",
   // AllDebrid API
-  alldebridApiKey: process.env.ALLDEBRID_API_KEY || process.env.AD_API_KEY || "",
+  alldebridApiKey: resolveRuntimeOrPersistedValue(process.env.ALLDEBRID_API_KEY || process.env.AD_API_KEY, persistedAllDebridApiKey),
   alldebridApiBase: process.env.ALLDEBRID_API_BASE || "https://api.alldebrid.com/v4",
   alldebridAgent: process.env.ALLDEBRID_AGENT || "schrodrive",
   // Provider reconciliation is opt-in and disabled by default.
@@ -89,16 +97,16 @@ export const config = {
   providerReconciliationMoviesLibraryPath: process.env.PROVIDER_RECONCILIATION_MOVIES_LIBRARY_PATH || "",
   providerReconciliationShowsLibraryPath: process.env.PROVIDER_RECONCILIATION_SHOWS_LIBRARY_PATH || "",
   // AllDebrid WebDAV (if supported)
-  alldebridWebdavUrl: process.env.ALLDEBRID_WEBDAV_URL || process.env.AD_WEBDAV_URL || "",
-  alldebridWebdavUsername: process.env.ALLDEBRID_WEBDAV_USERNAME || process.env.AD_WEBDAV_USERNAME || "",
-  alldebridWebdavPassword: process.env.ALLDEBRID_WEBDAV_PASSWORD || process.env.AD_WEBDAV_PASSWORD || "",
+  alldebridWebdavUrl: resolveRuntimeOrPersistedValue(process.env.ALLDEBRID_WEBDAV_URL || process.env.AD_WEBDAV_URL, persistedAllDebridWebdavUrl),
+  alldebridWebdavUsername: resolveRuntimeOrPersistedValue(process.env.ALLDEBRID_WEBDAV_USERNAME || process.env.AD_WEBDAV_USERNAME, persistedAllDebridWebdavUsername),
+  alldebridWebdavPassword: resolveRuntimeOrPersistedValue(process.env.ALLDEBRID_WEBDAV_PASSWORD || process.env.AD_WEBDAV_PASSWORD, persistedAllDebridWebdavPassword),
   // Premiumize API
-  premiumizeApiKey: process.env.PREMIUMIZE_API_KEY || process.env.PM_API_KEY || "",
+  premiumizeApiKey: resolveRuntimeOrPersistedValue(process.env.PREMIUMIZE_API_KEY || process.env.PM_API_KEY, persistedPremiumizeApiKey),
   premiumizeApiBase: process.env.PREMIUMIZE_API_BASE || "https://www.premiumize.me/api",
   // Premiumize WebDAV
-  premiumizeWebdavUrl: process.env.PREMIUMIZE_WEBDAV_URL || process.env.PM_WEBDAV_URL || "https://webdav.premiumize.me",
-  premiumizeWebdavUsername: process.env.PREMIUMIZE_WEBDAV_USERNAME || process.env.PM_WEBDAV_USERNAME || "",
-  premiumizeWebdavPassword: process.env.PREMIUMIZE_WEBDAV_PASSWORD || process.env.PM_WEBDAV_PASSWORD || '',
+  premiumizeWebdavUrl: resolveRuntimeOrPersistedValue(process.env.PREMIUMIZE_WEBDAV_URL || process.env.PM_WEBDAV_URL, persistedPremiumizeWebdavUrl) || "https://webdav.premiumize.me",
+  premiumizeWebdavUsername: resolveRuntimeOrPersistedValue(process.env.PREMIUMIZE_WEBDAV_USERNAME || process.env.PM_WEBDAV_USERNAME, persistedPremiumizeWebdavUsername),
+  premiumizeWebdavPassword: resolveRuntimeOrPersistedValue(process.env.PREMIUMIZE_WEBDAV_PASSWORD || process.env.PM_WEBDAV_PASSWORD, persistedPremiumizeWebdavPassword),
   // --- Download Token Rotation (Zurg-style 503 bypass) ---
   rdDownloadTokens: splitCsv(process.env.RD_DOWNLOAD_TOKENS),
   torboxDownloadTokens: splitCsv(process.env.TORBOX_DOWNLOAD_TOKENS),

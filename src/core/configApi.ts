@@ -254,8 +254,15 @@ function parseEnvFile(filePath: string): Map<string, string> {
 }
 
 /** Read one persisted setting without exposing or logging its value. */
-export function getPersistedEnvValue(key: ConfigKey): string {
-  return parseEnvFile(findEnvPath()).get(key) || "";
+export function getPersistedEnvValue(key: ConfigKey, envPath = findEnvPath()): string {
+  const fileValues = parseEnvFile(envPath);
+  const canonical = fileValues.get(key);
+  if (canonical !== undefined && canonical !== "") return canonical;
+  for (const alias of CONFIG_KEY_ALIASES[key] || []) {
+    const legacy = fileValues.get(alias);
+    if (legacy !== undefined && legacy !== "") return legacy;
+  }
+  return canonical || "";
 }
 
 // Get all config values with their sources

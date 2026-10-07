@@ -242,8 +242,17 @@ function parseEnvFile(filePath) {
     return result;
 }
 /** Read one persisted setting without exposing or logging its value. */
-function getPersistedEnvValue(key) {
-    return parseEnvFile(findEnvPath()).get(key) || "";
+function getPersistedEnvValue(key, envPath = findEnvPath()) {
+    const fileValues = parseEnvFile(envPath);
+    const canonical = fileValues.get(key);
+    if (canonical !== undefined && canonical !== "")
+        return canonical;
+    for (const alias of CONFIG_KEY_ALIASES[key] || []) {
+        const legacy = fileValues.get(alias);
+        if (legacy !== undefined && legacy !== "")
+            return legacy;
+    }
+    return canonical || "";
 }
 // Get all config values with their sources
 function getConfigWithSources(options = {}) {

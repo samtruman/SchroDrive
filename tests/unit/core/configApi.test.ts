@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { resolveRuntimeOrPersistedValue, saveConfigToFile, getConfigWithSources } from "../../../src/core/configApi";
+import { getPersistedEnvValue, resolveRuntimeOrPersistedValue, saveConfigToFile, getConfigWithSources } from "../../../src/core/configApi";
 
 const originalCwd = process.cwd();
 
@@ -139,6 +139,16 @@ describe("configuration loading", () => {
     const result = getConfigWithSources({ envPath, containerEnvKeys: new Set() });
     expect(result.config.ALLDEBRID_API_KEY.value).toBe("canonical-ad");
     expect(result.config.PREMIUMIZE_API_KEY.value).toBe("canonical-pm");
+    expect(getPersistedEnvValue("ALLDEBRID_API_KEY", envPath)).toBe("canonical-ad");
+  });
+
+  test("runtime persisted lookup falls back to legacy provider keys", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "schrodrive-config-"));
+    const envPath = path.join(tempDir, ".env");
+    fs.writeFileSync(envPath, "AD_API_KEY=legacy-ad\nPM_WEBDAV_PASSWORD=legacy-pm-secret\n");
+
+    expect(getPersistedEnvValue("ALLDEBRID_API_KEY", envPath)).toBe("legacy-ad");
+    expect(getPersistedEnvValue("PREMIUMIZE_WEBDAV_PASSWORD", envPath)).toBe("legacy-pm-secret");
   });
 
   test("migrates provider credentials to canonical names when saving", () => {
