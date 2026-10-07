@@ -20,6 +20,10 @@ const persistedJellyfinUrl = (0, configApi_1.getPersistedEnvValue)("JELLYFIN_URL
 const persistedJellyfinApiKey = (0, configApi_1.getPersistedEnvValue)("JELLYFIN_API_KEY");
 const persistedJellyfinUserId = (0, configApi_1.getPersistedEnvValue)("JELLYFIN_USER_ID");
 const persistedOrganizerFilenameMode = (0, configApi_1.getPersistedEnvValue)("ORGANIZER_FILENAME_MODE");
+const persistedRdAccessToken = (0, configApi_1.getPersistedEnvValue)("RD_ACCESS_TOKEN");
+const persistedRdWebdavUrl = (0, configApi_1.getPersistedEnvValue)("RD_WEBDAV_URL");
+const persistedRdWebdavUsername = (0, configApi_1.getPersistedEnvValue)("RD_WEBDAV_USERNAME");
+const persistedRdWebdavPassword = (0, configApi_1.getPersistedEnvValue)("RD_WEBDAV_PASSWORD");
 const persistedAllDebridApiKey = (0, configApi_1.getPersistedEnvValue)("ALLDEBRID_API_KEY");
 const persistedAllDebridWebdavUrl = (0, configApi_1.getPersistedEnvValue)("ALLDEBRID_WEBDAV_URL");
 const persistedAllDebridWebdavUsername = (0, configApi_1.getPersistedEnvValue)("ALLDEBRID_WEBDAV_USERNAME");
@@ -74,11 +78,11 @@ exports.config = {
     addStrategy: (process.env.ADD_STRATEGY || "all"),
     // Real-Debrid API
     rdApiBase: process.env.RD_API_BASE || "https://api.real-debrid.com/rest/1.0",
-    rdAccessToken: process.env.RD_ACCESS_TOKEN || "",
+    rdAccessToken: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.RD_ACCESS_TOKEN, persistedRdAccessToken),
     // Real-Debrid WebDAV
-    rdWebdavUrl: process.env.RD_WEBDAV_URL || "https://dav.real-debrid.com",
-    rdWebdavUsername: process.env.RD_WEBDAV_USERNAME || "",
-    rdWebdavPassword: process.env.RD_WEBDAV_PASSWORD || "",
+    rdWebdavUrl: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.RD_WEBDAV_URL, persistedRdWebdavUrl) || "https://dav.real-debrid.com",
+    rdWebdavUsername: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.RD_WEBDAV_USERNAME, persistedRdWebdavUsername),
+    rdWebdavPassword: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.RD_WEBDAV_PASSWORD, persistedRdWebdavPassword),
     // TorBox WebDAV
     torboxWebdavUrl: process.env.TORBOX_WEBDAV_URL || "https://webdav.torbox.app",
     torboxWebdavUsername: process.env.TORBOX_WEBDAV_USERNAME || "",

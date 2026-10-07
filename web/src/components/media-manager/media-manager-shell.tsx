@@ -988,7 +988,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
           variant={preset === "missing" ? "default" : "outline"}
           size="sm"
         >
-          <Link href="/media-manager/library/missing">Missing</Link>
+          <Link href="/media-manager/library/missing">Policy Missing</Link>
         </Button>
         <Button
           asChild
@@ -1016,7 +1016,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       )}
       {preset === "missing" && (
         <>
-          <p className="text-xs text-muted-foreground">Missing lists enabled profile requirements that the currently inventoried files do not satisfy.</p>
+          <p className="text-xs text-muted-foreground">Policy Missing lists identified films and episodes for which no current file reaches the configured profile target, including its target resolution and mandatory requirements.</p>
           <div className="grid gap-2 rounded-lg border p-3 sm:grid-cols-3">
             <div className="relative"><Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" /><Input className="pl-8" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, episode, filename or failed requirement…" /></div>
             <select className="rounded border bg-background p-2 text-sm" value={profile} onChange={(event) => setProfile(event.target.value)}><option value="all">Profile: All</option>{missingProfileOptions.map((profileId) => <option key={profileId} value={profileId}>{profileId.toUpperCase()}</option>)}</select>
@@ -1093,7 +1093,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                         <div><p className="font-medium">{identity.title || item.title || "Unknown content"}{episodeLabel(identity) ? ` · ${episodeLabel(identity)}` : ""}</p><p className="text-xs text-muted-foreground">{identity.year || "—"} · {item.mediaType || identity.kind || "unknown"} · profile {item.profileName || item.profileId || item.missingProfileId || "—"}</p></div>
                         <div className="flex items-center gap-2"><StatusBadge value="REQUIREMENT MISSING" /><Button size="sm" variant="outline" onClick={() => setSelected(selected?.id === item.id ? null : item)}>Details</Button></div>
                       </div>
-                      <div className="rounded border border-amber-500/40 bg-amber-500/5 p-3"><p className="font-medium">{item.whatIsMissing || "Enabled profile requirements are not satisfied"}</p><p className="mt-1 text-sm text-muted-foreground">{item.why || item.nextAction}</p></div>
+                      <div className="rounded border border-amber-500/40 bg-amber-500/5 p-3"><p className="font-medium">{item.whatIsMissing || item.reason || "The configured profile target is not satisfied"}</p><p className="mt-1 text-sm text-muted-foreground">{item.why || item.nextAction || (item.reasonCode === "TARGET_RESOLUTION_MISSING" ? "The current files remain available, but none reaches the target resolution." : "No current file satisfies every mandatory requirement.")}</p></div>
                       <div className="space-y-2">
                         {versions.map((version: any) => {
                           const fingerprint = version.fingerprint || {};
@@ -1112,8 +1112,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
               {needs.length === 0 && (
                 <Card>
                   <CardContent className="space-y-2 p-6 text-sm text-muted-foreground">
-                    <p>No identified movie or episode currently has an unsatisfied mandatory profile requirement. Preferred resolution affects ranking, but does not make a lower-resolution version missing.</p>
-                    {Number(missing.data?.deferredIdentityCount || 0) > 0 && <p><strong className="text-foreground">{missing.data.deferredIdentityCount} item{missing.data.deferredIdentityCount === 1 ? "" : "s"}</strong> cannot be classified until identity is resolved. Open <Link className="underline" href="/media-manager/library/review">Review</Link> to identify {missing.data.deferredIdentityCount === 1 ? "it" : "them"}.</p>}
+                    <p>Every identified movie and episode currently reaches the target of its enabled profile.</p>
                     {!missing.data?.adapter?.canRequest && <p>Acquisition preview is unavailable because the corresponding request gateway is disabled.</p>}
                   </CardContent>
                 </Card>

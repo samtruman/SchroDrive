@@ -1,4 +1,4 @@
-import type { ContentIdentity, ProfileStatus, VersionGroup, VersionProfile } from "./versionManager";
+import { versionSatisfiesProfileTarget, type ContentIdentity, type ProfileStatus, type VersionGroup, type VersionProfile } from "./versionManager";
 
 export type AcquisitionStatus =
   | "PROFILE_SATISFIED"
@@ -89,9 +89,12 @@ export function createAcquisitionNeed(group: VersionGroup, profile: VersionProfi
   const evaluatedAt = (options.now || new Date()).toISOString();
   if (!mediaType) return undefined;
   const eligible = eligibility(identity, mediaType, identity.season, identity.episode);
+  if (!eligible.eligible) return undefined;
   const acquisitionEnabled = options.acquisitionEnabled !== false;
   const status: AcquisitionStatus = !acquisitionEnabled ? "PROFILE_MISSING" : eligible.eligible ? "ACQUISITION_ELIGIBLE" : "ACQUISITION_BLOCKED";
   const id = `need:${acquisitionIdentityKey(identity, mediaType, identity.season, identity.episode)}:${profile.id}`;
+  const targetVersions = group.versions.filter((version) => versionSatisfiesProfileTarget(version, profile));
+  const resolutionTargetMissing = profile.target === "QUALITY" && !!profile.preferredResolution && targetVersions.length === 0;
   return {
     id,
     contentIdentity: identity,
@@ -100,14 +103,16 @@ export function createAcquisitionNeed(group: VersionGroup, profile: VersionProfi
     episode: identity.episode,
     missingProfileId: profile.id,
     missingProfileName: profile.name,
-    reason: `No version satisfies ${profile.name}`,
-    reasonCode: "NO_ELIGIBLE_VERSION_FOR_PROFILE",
+    reason: resolutionTargetMissing
+      ? `No valid ${profile.preferredResolution} version is present for ${profile.name}`
+      : `No version satisfies the mandatory requirements of ${profile.name}`,
+    reasonCode: resolutionTargetMissing ? "TARGET_RESOLUTION_MISSING" : "NO_ELIGIBLE_VERSION_FOR_PROFILE",
     status,
     confidence: identity.confidence,
     createdAt: evaluatedAt,
     evaluatedAt,
-    existingVersions: group.versions.filter((version) => version.evaluations.some((evaluation) => evaluation.profileId === profile.id && evaluation.eligible)),
-    rejectedVersions: group.versions.filter((version) => !version.evaluations.some((evaluation) => evaluation.profileId === profile.id && evaluation.eligible)),
+    existingVersions: group.versions,
+    rejectedVersions: group.versions.filter((version) => !versionSatisfiesProfileTarget(version, profile)),
     acquisitionEligibility: { ...eligible, eligible: acquisitionEnabled && eligible.eligible, adapterId: options.adapterId },
   };
 }

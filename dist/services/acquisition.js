@@ -6,6 +6,7 @@ exports.deriveAcquisitionNeeds = deriveAcquisitionNeeds;
 exports.deduplicateAcquisitionNeeds = deduplicateAcquisitionNeeds;
 exports.revalidateAcquisitionNeed = revalidateAcquisitionNeed;
 exports.profileStatus = profileStatus;
+const versionManager_1 = require("./versionManager");
 function canonicalId(identity) {
     return identity.tmdbId || identity.tvdbId || identity.imdbId;
 }
@@ -33,9 +34,13 @@ function createAcquisitionNeed(group, profile, options = {}) {
     if (!mediaType)
         return undefined;
     const eligible = eligibility(identity, mediaType, identity.season, identity.episode);
+    if (!eligible.eligible)
+        return undefined;
     const acquisitionEnabled = options.acquisitionEnabled !== false;
     const status = !acquisitionEnabled ? "PROFILE_MISSING" : eligible.eligible ? "ACQUISITION_ELIGIBLE" : "ACQUISITION_BLOCKED";
     const id = `need:${acquisitionIdentityKey(identity, mediaType, identity.season, identity.episode)}:${profile.id}`;
+    const targetVersions = group.versions.filter((version) => (0, versionManager_1.versionSatisfiesProfileTarget)(version, profile));
+    const resolutionTargetMissing = profile.target === "QUALITY" && !!profile.preferredResolution && targetVersions.length === 0;
     return {
         id,
         contentIdentity: identity,
@@ -44,14 +49,16 @@ function createAcquisitionNeed(group, profile, options = {}) {
         episode: identity.episode,
         missingProfileId: profile.id,
         missingProfileName: profile.name,
-        reason: `No version satisfies ${profile.name}`,
-        reasonCode: "NO_ELIGIBLE_VERSION_FOR_PROFILE",
+        reason: resolutionTargetMissing
+            ? `No valid ${profile.preferredResolution} version is present for ${profile.name}`
+            : `No version satisfies the mandatory requirements of ${profile.name}`,
+        reasonCode: resolutionTargetMissing ? "TARGET_RESOLUTION_MISSING" : "NO_ELIGIBLE_VERSION_FOR_PROFILE",
         status,
         confidence: identity.confidence,
         createdAt: evaluatedAt,
         evaluatedAt,
-        existingVersions: group.versions.filter((version) => version.evaluations.some((evaluation) => evaluation.profileId === profile.id && evaluation.eligible)),
-        rejectedVersions: group.versions.filter((version) => !version.evaluations.some((evaluation) => evaluation.profileId === profile.id && evaluation.eligible)),
+        existingVersions: group.versions,
+        rejectedVersions: group.versions.filter((version) => !(0, versionManager_1.versionSatisfiesProfileTarget)(version, profile)),
         acquisitionEligibility: { ...eligible, eligible: acquisitionEnabled && eligible.eligible, adapterId: options.adapterId },
     };
 }

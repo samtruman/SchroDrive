@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { TorrentInfo } from "../../../src/providers";
 import { evaluateRule, evaluateVersionGroups, fingerprintTorrent, validateRule, validateScoringRules, versionManagerPolicyHash, type VersionManagerPolicy, type VersionProfile } from "../../../src/services/versionManager";
 import { applyManualIdentityOverrides, clearManualIdentityOverride, saveManualIdentityOverride } from "../../../src/services/manualIdentity";
+import { deriveAcquisitionNeeds } from "../../../src/services/acquisition";
 
 const profile = (overrides: Partial<VersionProfile> = {}): VersionProfile => ({
   id: "primary", name: "PRIMARY", enabled: true, target: "QUALITY", preferredResolution: "2160p",
@@ -49,6 +50,32 @@ describe("version manager", () => {
     expect(version.fingerprint.release.source).toBe("REMUX");
     expect(version.fingerprint.audio[0].language).toBe("ita");
     expect(version.fingerprint.probe.status).toBe("not_requested");
+  });
+
+  test("reports policy missing when an identified version is below the quality target", () => {
+    const quality = profile();
+    const versions = fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.ITA.H264.mkv", 10_000_000_000), "alldebrid");
+    versions[0].fingerprint.identity = { ...versions[0].fingerprint.identity, tmdbId: "123", resolutionStatus: "resolved", confidence: 1 };
+    const groups = evaluateVersionGroups(versions, [quality]);
+
+    expect(groups[0].versions[0].decision).toBe("KEEP");
+    expect(groups[0].profileStatuses).toEqual([{ profileId: "primary", satisfied: false }]);
+    const needs = deriveAcquisitionNeeds(groups, [quality], { acquisitionEnabled: false });
+    expect(needs).toHaveLength(1);
+    expect(needs[0].reasonCode).toBe("TARGET_RESOLUTION_MISSING");
+    expect(needs[0].reason).toContain("2160p");
+    expect(needs[0].existingVersions).toHaveLength(1);
+  });
+
+  test("marks the quality target satisfied when a valid target-resolution version exists", () => {
+    const quality = profile();
+    const groups = evaluateVersionGroups(
+      fingerprintTorrent(torrent("Example.Movie.2025.2160p.WEB-DL.ITA.HEVC.mkv", 20_000_000_000), "alldebrid"),
+      [quality],
+    );
+
+    expect(groups[0].profileStatuses).toEqual([{ profileId: "primary", satisfied: true }]);
+    expect(deriveAcquisitionNeeds(groups, [quality], { acquisitionEnabled: false })).toHaveLength(0);
   });
 
   test("uses a single media file inside an extensionless provider item", () => {

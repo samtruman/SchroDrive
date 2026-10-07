@@ -13,6 +13,10 @@ const persistedJellyfinUrl = getPersistedEnvValue("JELLYFIN_URL");
 const persistedJellyfinApiKey = getPersistedEnvValue("JELLYFIN_API_KEY");
 const persistedJellyfinUserId = getPersistedEnvValue("JELLYFIN_USER_ID");
 const persistedOrganizerFilenameMode = getPersistedEnvValue("ORGANIZER_FILENAME_MODE");
+const persistedRdAccessToken = getPersistedEnvValue("RD_ACCESS_TOKEN");
+const persistedRdWebdavUrl = getPersistedEnvValue("RD_WEBDAV_URL");
+const persistedRdWebdavUsername = getPersistedEnvValue("RD_WEBDAV_USERNAME");
+const persistedRdWebdavPassword = getPersistedEnvValue("RD_WEBDAV_PASSWORD");
 const persistedAllDebridApiKey = getPersistedEnvValue("ALLDEBRID_API_KEY");
 const persistedAllDebridWebdavUrl = getPersistedEnvValue("ALLDEBRID_WEBDAV_URL");
 const persistedAllDebridWebdavUsername = getPersistedEnvValue("ALLDEBRID_WEBDAV_USERNAME");
@@ -69,11 +73,11 @@ export const config = {
   addStrategy: (process.env.ADD_STRATEGY || "all") as "all" | "failover" | "single",
   // Real-Debrid API
   rdApiBase: process.env.RD_API_BASE || "https://api.real-debrid.com/rest/1.0",
-  rdAccessToken: process.env.RD_ACCESS_TOKEN || "",
+  rdAccessToken: resolveRuntimeOrPersistedValue(process.env.RD_ACCESS_TOKEN, persistedRdAccessToken),
   // Real-Debrid WebDAV
-  rdWebdavUrl: process.env.RD_WEBDAV_URL || "https://dav.real-debrid.com",
-  rdWebdavUsername: process.env.RD_WEBDAV_USERNAME || "",
-  rdWebdavPassword: process.env.RD_WEBDAV_PASSWORD || "",
+  rdWebdavUrl: resolveRuntimeOrPersistedValue(process.env.RD_WEBDAV_URL, persistedRdWebdavUrl) || "https://dav.real-debrid.com",
+  rdWebdavUsername: resolveRuntimeOrPersistedValue(process.env.RD_WEBDAV_USERNAME, persistedRdWebdavUsername),
+  rdWebdavPassword: resolveRuntimeOrPersistedValue(process.env.RD_WEBDAV_PASSWORD, persistedRdWebdavPassword),
   // TorBox WebDAV
   torboxWebdavUrl: process.env.TORBOX_WEBDAV_URL || "https://webdav.torbox.app",
   torboxWebdavUsername: process.env.TORBOX_WEBDAV_USERNAME || "",

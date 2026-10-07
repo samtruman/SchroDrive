@@ -7,6 +7,7 @@ exports.validateScoringRules = validateScoringRules;
 exports.evaluateRule = evaluateRule;
 exports.isMediaFileName = isMediaFileName;
 exports.fingerprintTorrent = fingerprintTorrent;
+exports.versionSatisfiesProfileTarget = versionSatisfiesProfileTarget;
 exports.evaluateVersionGroups = evaluateVersionGroups;
 exports.versionManagerPolicyHash = versionManagerPolicyHash;
 const mediaParser_1 = require("./mediaParser");
@@ -317,6 +318,15 @@ function evaluateProfile(version, profile) {
         reasons.push({ code: "profile_eligible", message: `Eligible for ${profile.name}`, facts: { target: profile.target } });
     return { profileId: profile.id, eligible, score, breakdown, reasons };
 }
+function versionSatisfiesProfileTarget(version, profile) {
+    const evaluation = version.evaluations.find((item) => item.profileId === profile.id);
+    if (!evaluation?.eligible || version.fingerprint.identity.confidence < 0.65)
+        return false;
+    if (profile.target === "QUALITY" && profile.preferredResolution) {
+        return version.fingerprint.video.resolution?.toLowerCase() === profile.preferredResolution.toLowerCase();
+    }
+    return true;
+}
 function groupKey(version) {
     const identity = version.fingerprint.identity;
     if (!identity.normalizedTitle || identity.confidence < 0.65)
@@ -377,7 +387,7 @@ function evaluateVersionGroups(versions, profiles = exports.defaultVersionProfil
         }
         const profileStatuses = activeProfiles.map((profile) => ({
             profileId: profile.id,
-            satisfied: evaluations.some((version) => version.fingerprint.identity.confidence >= 0.65 && version.evaluations.some((evaluation) => evaluation.profileId === profile.id && evaluation.eligible && version.decision === "KEEP")),
+            satisfied: evaluations.some((version) => version.decision === "KEEP" && versionSatisfiesProfileTarget(version, profile)),
         }));
         return { id, identity: members[0].fingerprint.identity, versions: evaluations, remote, profileStatuses };
     });

@@ -329,20 +329,20 @@ export default function SettingsPage() {
       </Card>
 
       <Tabs defaultValue="general" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-4 lg:grid-cols-7">
-          <TabsTrigger value="general" className="gap-2"><Settings className="h-4 w-4 hidden sm:block" />General</TabsTrigger>
-          <TabsTrigger value="indexers" className="gap-2"><Search className="h-4 w-4 hidden sm:block" />Indexers</TabsTrigger>
-          <TabsTrigger value="torbox" className="gap-2"><Database className="h-4 w-4 hidden sm:block" />TorBox</TabsTrigger>
-          <TabsTrigger value="realdebrid" className="gap-2"><Database className="h-4 w-4 hidden sm:block" />Real-Debrid</TabsTrigger>
-          <TabsTrigger value="alldebrid" className="gap-2"><Database className="h-4 w-4 hidden sm:block" />AllDebrid</TabsTrigger>
-          <TabsTrigger value="premiumize" className="gap-2"><Database className="h-4 w-4 hidden sm:block" />Premiumize</TabsTrigger>
-          <TabsTrigger value="overseerr" className="gap-2"><Tv className="h-4 w-4 hidden sm:block" />Seerr</TabsTrigger>
-          <TabsTrigger value="arr" className="gap-2"><Server className="h-4 w-4 hidden sm:block" />ARR</TabsTrigger>
-          <TabsTrigger value="media_servers" className="gap-2"><Tv className="h-4 w-4 hidden sm:block" />Media Servers</TabsTrigger>
-          <TabsTrigger value="mounts" className="gap-2"><HardDrive className="h-4 w-4 hidden sm:block" />Mounts</TabsTrigger>
-          <TabsTrigger value="services" className="gap-2"><Server className="h-4 w-4 hidden sm:block" />Services</TabsTrigger>
-          <TabsTrigger value="organizer" className="gap-2"><FolderSync className="h-4 w-4 hidden sm:block" />Organiser</TabsTrigger>
-          <TabsTrigger value="updates" className="gap-2"><RefreshCw className="h-4 w-4 hidden sm:block" />Updates</TabsTrigger>
+        <TabsList className="flex h-auto w-full flex-nowrap justify-start gap-0 overflow-x-auto p-1">
+          <TabsTrigger value="general" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Settings className="hidden h-4 w-4 xl:block" />General</TabsTrigger>
+          <TabsTrigger value="indexers" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Search className="hidden h-4 w-4 xl:block" />Indexers</TabsTrigger>
+          <TabsTrigger value="torbox" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Database className="hidden h-4 w-4 xl:block" />TorBox</TabsTrigger>
+          <TabsTrigger value="realdebrid" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Database className="hidden h-4 w-4 xl:block" />Real-Debrid</TabsTrigger>
+          <TabsTrigger value="alldebrid" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Database className="hidden h-4 w-4 xl:block" />AllDebrid</TabsTrigger>
+          <TabsTrigger value="premiumize" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Database className="hidden h-4 w-4 xl:block" />Premiumize</TabsTrigger>
+          <TabsTrigger value="overseerr" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Tv className="hidden h-4 w-4 xl:block" />Seerr</TabsTrigger>
+          <TabsTrigger value="arr" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Server className="hidden h-4 w-4 xl:block" />ARR</TabsTrigger>
+          <TabsTrigger value="media_servers" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Tv className="hidden h-4 w-4 xl:block" />Media Servers</TabsTrigger>
+          <TabsTrigger value="mounts" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><HardDrive className="hidden h-4 w-4 xl:block" />Mounts</TabsTrigger>
+          <TabsTrigger value="services" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Server className="hidden h-4 w-4 xl:block" />Services</TabsTrigger>
+          <TabsTrigger value="organizer" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><FolderSync className="hidden h-4 w-4 xl:block" />Organiser</TabsTrigger>
+          <TabsTrigger value="updates" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><RefreshCw className="hidden h-4 w-4 xl:block" />Updates</TabsTrigger>
         </TabsList>
 
         {/* General Settings */}

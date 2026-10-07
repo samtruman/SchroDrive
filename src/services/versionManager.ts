@@ -484,6 +484,15 @@ function evaluateProfile(version: VersionRecord, profile: VersionProfile): Profi
   return { profileId: profile.id, eligible, score, breakdown, reasons };
 }
 
+export function versionSatisfiesProfileTarget(version: VersionEvaluation, profile: VersionProfile): boolean {
+  const evaluation = version.evaluations.find((item) => item.profileId === profile.id);
+  if (!evaluation?.eligible || version.fingerprint.identity.confidence < 0.65) return false;
+  if (profile.target === "QUALITY" && profile.preferredResolution) {
+    return version.fingerprint.video.resolution?.toLowerCase() === profile.preferredResolution.toLowerCase();
+  }
+  return true;
+}
+
 function groupKey(version: VersionRecord): string {
   const identity = version.fingerprint.identity;
   if (!identity.normalizedTitle || identity.confidence < 0.65) return `review:${version.id}`;
@@ -540,7 +549,7 @@ export function evaluateVersionGroups(versions: VersionRecord[], profiles = defa
     }
     const profileStatuses = activeProfiles.map((profile) => ({
       profileId: profile.id,
-      satisfied: evaluations.some((version) => version.fingerprint.identity.confidence >= 0.65 && version.evaluations.some((evaluation) => evaluation.profileId === profile.id && evaluation.eligible && version.decision === "KEEP")),
+      satisfied: evaluations.some((version) => version.decision === "KEEP" && versionSatisfiesProfileTarget(version, profile)),
     }));
     return { id, identity: members[0].fingerprint.identity, versions: evaluations, remote, profileStatuses };
   });

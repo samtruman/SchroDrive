@@ -24,14 +24,13 @@ describe("generic acquisition core", () => {
     expect(deriveAcquisitionNeeds([group], [{ ...profile(), enabled: false }])).toHaveLength(0);
   });
 
-  test("blocks fallback, uncertain, conflict and missing IDs", () => {
+  test("keeps fallback, uncertain, conflicting and unidentified content out of Policy Missing", () => {
     const statuses = ["fallback", "uncertain", "conflict"] as const;
     for (const resolutionStatus of statuses) {
       const versions = fingerprintTorrent(torrent(`Example.${resolutionStatus}.2025.2160p.mkv`), "test");
       versions[0].fingerprint.identity = { ...versions[0].fingerprint.identity, tmdbId: "123", resolutionStatus, confidence: 0.5, conflicts: resolutionStatus === "conflict" ? [{ code: "CROSS_PROVIDER_DISAGREEMENT", field: "tmdbId", values: [] }] : undefined };
       const [group] = evaluateVersionGroups(versions, [profile()], { enableRemote: true, acquireMissingRemote: false });
-      const [need] = deriveAcquisitionNeeds([group], [profile()]);
-      expect(need.status).toBe("ACQUISITION_BLOCKED");
+      expect(deriveAcquisitionNeeds([group], [profile()])).toHaveLength(0);
     }
   });
 

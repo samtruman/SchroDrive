@@ -456,28 +456,22 @@ export function startServer() {
     try {
       const snapshot = readVersionManagerGroups();
       if (!snapshot) return res.status(503).json({ ok: false, snapshotAvailable: false, error: "No valid inventory snapshot is available; start a scan" });
-      const groups = snapshot.groups;
-      const versions = groups.flatMap((group: any) => group.versions || []);
-      const probe = { source: "persisted-snapshot" };
+      const versions = snapshot.groups.flatMap((group: any) => group.versions || []);
+      const probe = { source: "persisted-snapshot", evaluation: "current-policy" };
       const profiles = getVersionProfiles();
       const policy = getVersionManagerPolicy();
+      const groups = evaluateVersionGroups(versions, profiles, policy);
       const needs = profiles.flatMap((profile) => deriveAcquisitionNeeds(groups, [profile], {
         adapterId: "seerr",
         acquisitionEnabled: profile.target === "DIRECT_PLAY" ? policy.acquireMissingRemote : false,
       }));
-      const deferredIdentityGroupIds = new Set(
-        groups
-          .filter((group) => group.identity.kind !== "movie" && group.identity.kind !== "episode")
-          .filter((group) => profiles.some((profile) => profile.enabled && group.profileStatuses?.some((status: any) => status.profileId === profile.id && status.satisfied === false)))
-          .map((group) => group.id),
-      );
       const adapter = new SeerrAcquisitionAdapter();
       const previews = await Promise.all(needs.map(async (need) => {
         const preview = await adapter.preview(need);
         recordAcquisitionAudit({ needId: need.id, identity: need.contentIdentity, profileId: need.missingProfileId, adapterId: preview.adapterId, phase: "PREVIEW", status: preview.status, providerRequestId: preview.providerRequestId, detail: [preview.providerStatusSource, preview.mappingWarning].filter(Boolean).join("; ") });
         return preview;
       }));
-      return res.json({ ok: true, readOnly: true, mode: "dry-run", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, inventoryCount: versions.length, groupCount: groups.length, probe, needs, deferredIdentityCount: deferredIdentityGroupIds.size, previews, adapter: await adapter.capabilities() });
+      return res.json({ ok: true, readOnly: true, mode: "dry-run", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, inventoryCount: versions.length, groupCount: groups.length, probe, needs, previews, adapter: await adapter.capabilities() });
     } catch (err: any) {
       return res.status(500).json({ ok: false, error: err?.message || "Missing profile preview failed" });
     }
