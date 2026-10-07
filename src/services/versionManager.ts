@@ -40,11 +40,19 @@ export interface RemoteStatus {
   acquisition?: AcquisitionIntent;
 }
 
-export interface LanguagePolicy {
+export interface LanguageTrackPolicy {
   required: { values: string[]; mode: LanguageMode };
   preferred: string[];
+  original?: boolean;
+  missingRequiredAction?: "REVIEW" | "DELETE_IF_REPLACED";
+}
+
+export interface LanguagePolicy extends LanguageTrackPolicy {
   original: boolean;
   scope?: "AUDIO" | "SUBTITLE" | "AUDIO_OR_SUBTITLE";
+  missingRequiredAction?: "REVIEW" | "DELETE_IF_REPLACED";
+  audio?: LanguageTrackPolicy;
+  subtitles?: LanguageTrackPolicy;
 }
 
 export interface VersionProfile {
@@ -65,6 +73,12 @@ export interface VersionProfile {
   scoring?: Record<string, number>;
   /** Structured scoring rules; `scoring` remains for backwards compatibility. */
   scoringRules?: ScoringRule[];
+  /** Final tie-breaker between otherwise equally ranked versions at the same resolution. */
+  sizePreference?: "LARGER" | "SMALLER" | "IGNORE";
+  /** Ignore insignificant size differences when applying the size tie-breaker. */
+  minimumSizeDifferencePercent?: number;
+  /** Prefer one release group consistently when comparing episodes in a season. */
+  releaseGroupConsistency?: "DISABLED" | "SEASON";
   acquisitionBehavior?: "AUTOMATIC" | "APPROVAL_REQUIRED" | "DISABLED";
   /** Read-only acquisition mapping discovered from Seerr's ARR settings. */
   arrProfiles?: {
@@ -407,6 +421,7 @@ export const defaultVersionProfiles: VersionProfile[] = [
     languagePolicy: { required: { values: [], mode: "ALL" }, preferred: [], original: true },
     hardRequirements: { op: "AND", children: [] },
     sourceOrder: ["REMUX", "BLURAY", "WEB-DL", "WEBRIP", "HDTV"], codecOrder: ["HEVC", "AV1", "H264"], audioOrder: ["TRUEHD", "DTS-HD MA", "DTS-HD", "DDP", "EAC3", "AAC"],
+    sizePreference: "LARGER", minimumSizeDifferencePercent: 10, releaseGroupConsistency: "DISABLED",
   },
   {
     id: "remote", name: "REMOTE / DIRECT PLAY", enabled: false, target: "DIRECT_PLAY", preferredResolution: "1080p",
@@ -425,20 +440,73 @@ export const defaultVersionManagerPolicy: VersionManagerPolicy = {
   policyVersion: "1",
 };
 
-function hasRequiredLanguages(version: VersionRecord, policy: LanguagePolicy): boolean {
-  const scope = policy.scope || "AUDIO";
-  const audio = new Set(version.fingerprint.audio.map((stream) => LANGUAGE_ALIASES[stream.language.toLowerCase()] || stream.language.toLowerCase()));
-  const subtitles = new Set(version.fingerprint.subtitles.map((stream) => LANGUAGE_ALIASES[stream.language.toLowerCase()] || stream.language.toLowerCase()));
-  const required = policy.required.values.map((value) => LANGUAGE_ALIASES[value.toLowerCase()] || value.toLowerCase());
-  const original = version.fingerprint.identity.originalLanguage ? LANGUAGE_ALIASES[version.fingerprint.identity.originalLanguage.toLowerCase()] || version.fingerprint.identity.originalLanguage.toLowerCase() : undefined;
+type TrackLanguagePolicy = {
+  required: { values: string[]; mode: LanguageMode };
+  preferred: string[];
+  original?: boolean;
+  missingRequiredAction?: "REVIEW" | "DELETE_IF_REPLACED";
+};
+
+function normalizeLanguage(value: string): string {
+  const normalized = value.trim().toLowerCase();
+  return LANGUAGE_ALIASES[normalized] || normalized;
+}
+
+function emptyTrackLanguagePolicy(): TrackLanguagePolicy {
+  return { required: { values: [], mode: "ALL" }, preferred: [], original: false, missingRequiredAction: "REVIEW" };
+}
+
+function resolvedTrackLanguagePolicies(policy: LanguagePolicy): { audio: TrackLanguagePolicy; subtitles: TrackLanguagePolicy; legacyCombined?: boolean } {
+  if (policy.audio || policy.subtitles) {
+    return {
+      audio: { ...emptyTrackLanguagePolicy(), ...(policy.audio || {}), required: { ...emptyTrackLanguagePolicy().required, ...(policy.audio?.required || {}) } },
+      subtitles: { ...emptyTrackLanguagePolicy(), ...(policy.subtitles || {}), required: { ...emptyTrackLanguagePolicy().required, ...(policy.subtitles?.required || {}) } },
+    };
+  }
+  const legacy = { required: policy.required, preferred: policy.preferred, original: policy.original, missingRequiredAction: policy.missingRequiredAction };
+  if (policy.scope === "SUBTITLE") return { audio: emptyTrackLanguagePolicy(), subtitles: legacy };
+  if (policy.scope === "AUDIO_OR_SUBTITLE") return { audio: legacy, subtitles: legacy, legacyCombined: true };
+  return { audio: legacy, subtitles: emptyTrackLanguagePolicy() };
+}
+
+function matchesRequiredLanguages(required: TrackLanguagePolicy["required"], available: Set<string>, original?: string): boolean {
+  const values = required.values.map(normalizeLanguage);
   const matches = (value: string) => {
     const resolved = value === "original" ? original : value;
-    if (!resolved) return false;
-    const inAudio = audio.has(resolved);
-    const inSubtitles = subtitles.has(resolved);
-    return scope === "SUBTITLE" ? inSubtitles : scope === "AUDIO_OR_SUBTITLE" ? inAudio || inSubtitles : inAudio;
+    return Boolean(resolved && available.has(resolved));
   };
-  return policy.required.mode === "ANY" ? required.length === 0 || required.some(matches) : required.every(matches);
+  return required.mode === "ANY" ? values.length === 0 || values.some(matches) : values.every(matches);
+}
+
+function languageRequirementFailures(version: VersionRecord, policy: LanguagePolicy): Array<{ kind: "audio" | "subtitles"; policy: TrackLanguagePolicy }> {
+  const resolved = resolvedTrackLanguagePolicies(policy);
+  const audio = new Set(version.fingerprint.audio.map((stream) => normalizeLanguage(stream.language)));
+  const subtitles = new Set(version.fingerprint.subtitles.map((stream) => normalizeLanguage(stream.language)));
+  const original = version.fingerprint.identity.originalLanguage ? normalizeLanguage(version.fingerprint.identity.originalLanguage) : undefined;
+  if (resolved.legacyCombined) {
+    return matchesRequiredLanguages(resolved.audio.required, new Set([...audio, ...subtitles]), original) ? [] : [{ kind: "audio", policy: resolved.audio }];
+  }
+  const failures: Array<{ kind: "audio" | "subtitles"; policy: TrackLanguagePolicy }> = [];
+  if (!matchesRequiredLanguages(resolved.audio.required, audio, original)) failures.push({ kind: "audio", policy: resolved.audio });
+  if (!matchesRequiredLanguages(resolved.subtitles.required, subtitles, original)) failures.push({ kind: "subtitles", policy: resolved.subtitles });
+  return failures;
+}
+
+function preferredTrackLanguageScore(available: Set<string>, policy: TrackLanguagePolicy, original?: string): number {
+  let score = 0;
+  policy.preferred.map(normalizeLanguage).forEach((language, index) => {
+    if (available.has(language)) score = Math.max(score, 1_000 - index * 50);
+  });
+  if (policy.original && original && available.has(original)) score += 500;
+  return score;
+}
+
+function preferredLanguageScore(version: VersionRecord, policy: LanguagePolicy): number {
+  const resolved = resolvedTrackLanguagePolicies(policy);
+  const original = version.fingerprint.identity.originalLanguage ? normalizeLanguage(version.fingerprint.identity.originalLanguage) : undefined;
+  const audio = new Set(version.fingerprint.audio.map((stream) => normalizeLanguage(stream.language)));
+  const subtitles = new Set(version.fingerprint.subtitles.map((stream) => normalizeLanguage(stream.language)));
+  return preferredTrackLanguageScore(audio, resolved.audio, original) + preferredTrackLanguageScore(subtitles, resolved.subtitles, original) / 10;
 }
 
 function rank(value: string | undefined, order: string[]): number {
@@ -450,8 +518,12 @@ function rank(value: string | undefined, order: string[]): number {
 function evaluateProfile(version: VersionRecord, profile: VersionProfile): ProfileEvaluation {
   const reasons: Reason[] = [];
   const breakdown: Record<string, number> = {};
-  if (!hasRequiredLanguages(version, profile.languagePolicy)) {
-    reasons.push({ code: "required_language_missing", message: `Required ${profile.languagePolicy.scope || "AUDIO"} language policy is not satisfied`, facts: { required: profile.languagePolicy.required, availableAudio: version.fingerprint.audio.map((stream) => stream.language), availableSubtitles: version.fingerprint.subtitles.map((stream) => stream.language) } });
+  for (const failure of languageRequirementFailures(version, profile.languagePolicy)) {
+    reasons.push({
+      code: failure.kind === "audio" ? "required_audio_language_missing" : "required_subtitle_language_missing",
+      message: `Required ${failure.kind === "audio" ? "audio" : "subtitle"} language policy is not satisfied`,
+      facts: { required: failure.policy.required, availableAudio: version.fingerprint.audio.map((stream) => stream.language), availableSubtitles: version.fingerprint.subtitles.map((stream) => stream.language) },
+    });
   }
   if (!evaluateRule(profile.hardRequirements, version)) {
     reasons.push({ code: "hard_rule_failed", message: "Configured hard requirement rule is not satisfied", facts: { rule: profile.hardRequirements } });
@@ -464,6 +536,7 @@ function evaluateProfile(version: VersionRecord, profile: VersionProfile): Profi
   breakdown.source = Math.max(0, 20 - rank(version.fingerprint.release.source, profile.sourceOrder) * 4);
   breakdown.codec = Math.max(0, 15 - rank(version.fingerprint.video.codec, profile.codecOrder) * 3);
   breakdown.audio = Math.max(0, 15 - rank(version.fingerprint.audio[0]?.codec, profile.audioOrder) * 3) + (version.fingerprint.audio[0]?.atmos ? 3 : 0);
+  breakdown.language = preferredLanguageScore(version, profile.languagePolicy);
   if (profile.target === "DIRECT_PLAY") {
     breakdown.bandwidth = version.fingerprint.storage.size > 0 ? Math.max(0, 20 - Math.log10(version.fingerprint.storage.size / 1_000_000_000 + 1) * 8) : 0;
   }
@@ -484,6 +557,20 @@ function evaluateProfile(version: VersionRecord, profile: VersionProfile): Profi
   return { profileId: profile.id, eligible, score, breakdown, reasons };
 }
 
+function compareForProfile(left: VersionEvaluation, right: VersionEvaluation, profile: VersionProfile): number {
+  const leftScore = left.evaluations.find((evaluation) => evaluation.profileId === profile.id)?.score || 0;
+  const rightScore = right.evaluations.find((evaluation) => evaluation.profileId === profile.id)?.score || 0;
+  if (leftScore !== rightScore) return rightScore - leftScore;
+  const preference = profile.sizePreference || "IGNORE";
+  if (preference === "IGNORE" || left.fingerprint.video.resolution !== right.fingerprint.video.resolution) return 0;
+  const leftSize = Number(left.fingerprint.storage.size || 0);
+  const rightSize = Number(right.fingerprint.storage.size || 0);
+  if (!leftSize || !rightSize || leftSize === rightSize) return 0;
+  const difference = Math.abs(leftSize - rightSize) / Math.max(leftSize, rightSize) * 100;
+  if (difference < Math.max(0, Number(profile.minimumSizeDifferencePercent || 0))) return 0;
+  return preference === "LARGER" ? rightSize - leftSize : leftSize - rightSize;
+}
+
 export function versionSatisfiesProfileTarget(version: VersionEvaluation, profile: VersionProfile): boolean {
   const evaluation = version.evaluations.find((item) => item.profileId === profile.id);
   if (!evaluation?.eligible || version.fingerprint.identity.confidence < 0.65) return false;
@@ -499,15 +586,54 @@ function groupKey(version: VersionRecord): string {
   return [identity.kind, identity.normalizedTitle, identity.year || "", identity.season ?? "", identity.episode ?? ""].join(":");
 }
 
+function applyReleaseGroupConsistency(groups: VersionGroup[], profiles: VersionProfile[]): VersionGroup[] {
+  const profile = profiles.find((candidate) => candidate.enabled && candidate.target === "QUALITY" && candidate.releaseGroupConsistency === "SEASON");
+  if (!profile) return groups;
+  const seasons = new Map<string, VersionGroup[]>();
+  for (const group of groups) {
+    const identity = group.identity;
+    if (identity.kind !== "episode" || identity.season === undefined || !identity.normalizedTitle) continue;
+    const key = `${identity.normalizedTitle}:${identity.year || ""}:${identity.season}`;
+    seasons.set(key, [...(seasons.get(key) || []), group]);
+  }
+  for (const seasonGroups of seasons.values()) {
+    const counts = new Map<string, number>();
+    for (const group of seasonGroups) {
+      const kept = group.versions.find((version) => version.decision === "KEEP" && version.satisfiesProfiles?.includes(profile.id));
+      const releaseGroup = kept?.fingerprint.release?.group?.trim();
+      if (releaseGroup) counts.set(releaseGroup, (counts.get(releaseGroup) || 0) + 1);
+    }
+    const ordered = [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+    if (!ordered.length || (ordered.length > 1 && ordered[0][1] === ordered[1][1])) continue;
+    const preferredGroup = ordered[0][0];
+    for (const group of seasonGroups) {
+      const eligible = group.versions.filter((version) => version.fingerprint.release?.group?.trim() === preferredGroup && version.evaluations.some((evaluation) => evaluation.profileId === profile.id && evaluation.eligible));
+      if (!eligible.length) continue;
+      const winner = [...eligible].sort((left, right) => compareForProfile(left, right, profile))[0];
+      const current = group.versions.find((version) => version.decision === "KEEP" && version.satisfiesProfiles?.includes(profile.id));
+      if (current?.id === winner.id) continue;
+      if (current) {
+        current.decision = "DELETE_CANDIDATE";
+        current.reasons.push({ code: "season_release_group_replaced", message: `Release group ${preferredGroup} is preferred for this season`, facts: { preferredReleaseGroup: preferredGroup, season: group.identity.season } });
+      }
+      winner.decision = "KEEP";
+      winner.satisfiesProfiles = [...new Set([...(winner.satisfiesProfiles || []), profile.id])];
+      winner.reasons.push({ code: "season_release_group_preference", message: `Preferred release group for season: ${preferredGroup}`, facts: { preferredReleaseGroup: preferredGroup, season: group.identity.season } });
+    }
+  }
+  return groups;
+}
+
 export function evaluateVersionGroups(versions: VersionRecord[], profiles = defaultVersionProfiles, policy: VersionManagerPolicy = defaultVersionManagerPolicy): VersionGroup[] {
   const groups = new Map<string, VersionRecord[]>();
   for (const version of versions) groups.set(groupKey(version), [...(groups.get(groupKey(version)) || []), version]);
-  return [...groups.entries()].map(([id, members]) => {
+  const evaluatedGroups = [...groups.entries()].map(([id, members]) => {
     const activeProfiles = profiles.filter((profile) => profile.enabled && (profile.target !== "DIRECT_PLAY" || policy.enableRemote));
     const evaluations = members.map((version): VersionEvaluation => ({ ...version, decision: "REVIEW", evaluations: activeProfiles.map((profile) => evaluateProfile(version, profile)), reasons: [] }));
     for (const profile of activeProfiles) {
       const eligible = evaluations.filter((version) => version.fingerprint.identity.confidence >= 0.65 && version.evaluations.find((evaluation) => evaluation.profileId === profile.id)?.eligible);
-      const winner = [...eligible].sort((a, b) => (b.evaluations.find((e) => e.profileId === profile.id)?.score || 0) - (a.evaluations.find((e) => e.profileId === profile.id)?.score || 0))[0];
+      const ordered = [...eligible].sort((a, b) => compareForProfile(a, b, profile));
+      const winner = ordered.length > 1 && compareForProfile(ordered[0], ordered[1], profile) === 0 ? undefined : ordered[0];
       if (winner) {
         winner.decision = "KEEP";
         winner.satisfiesProfiles = [...new Set([...(winner.satisfiesProfiles || []), profile.id])];
@@ -553,6 +679,7 @@ export function evaluateVersionGroups(versions: VersionRecord[], profiles = defa
     }));
     return { id, identity: members[0].fingerprint.identity, versions: evaluations, remote, profileStatuses };
   });
+  return applyReleaseGroupConsistency(evaluatedGroups, profiles);
 }
 
 const OPERATOR_ALIASES: Record<string, string> = {
@@ -603,14 +730,20 @@ function canonicalScoringRule(rule: ScoringRule): unknown {
 }
 
 function canonicalLanguagePolicy(policy: LanguagePolicy): unknown {
+  const track = (value: LanguageTrackPolicy | undefined) => value ? {
+    required: { mode: value.required.mode, values: [...value.required.values].map(normalizeLanguage).sort() },
+    preferred: [...value.preferred].map(normalizeLanguage),
+    original: value.original === true,
+    missingRequiredAction: value.missingRequiredAction || "REVIEW",
+  } : null;
   return {
-    required: {
-      mode: policy.required.mode,
-      values: [...policy.required.values].map((value) => value.trim().toLowerCase()).sort(),
-    },
-    preferred: [...policy.preferred].map((value) => value.trim().toLowerCase()),
+    required: { mode: policy.required.mode, values: [...policy.required.values].map(normalizeLanguage).sort() },
+    preferred: [...policy.preferred].map(normalizeLanguage),
     original: policy.original === true,
     scope: policy.scope || "AUDIO",
+    missingRequiredAction: policy.missingRequiredAction || "REVIEW",
+    audio: track(policy.audio),
+    subtitles: track(policy.subtitles),
   };
 }
 
@@ -630,6 +763,9 @@ function canonicalProfile(profile: VersionProfile): unknown {
     maxSizeBytes: profile.maxSizeBytes ?? null,
     scoring: Object.fromEntries(Object.entries(profile.scoring || {}).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)),
     scoringRules: (profile.scoringRules || []).map(canonicalScoringRule).sort(canonicalCompare),
+    sizePreference: profile.sizePreference || "IGNORE",
+    minimumSizeDifferencePercent: profile.minimumSizeDifferencePercent ?? 0,
+    releaseGroupConsistency: profile.releaseGroupConsistency || "DISABLED",
     arrProfiles: profile.arrProfiles ? {
       movie: profile.arrProfiles.movie ? { provider: "radarr", serverId: profile.arrProfiles.movie.serverId, qualityProfileId: profile.arrProfiles.movie.qualityProfileId } : null,
       tv: profile.arrProfiles.tv ? { provider: "sonarr", serverId: profile.arrProfiles.tv.serverId, qualityProfileId: profile.arrProfiles.tv.qualityProfileId } : null,

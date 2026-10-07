@@ -247,6 +247,50 @@ describe("version manager", () => {
     expect(kept?.satisfiesProfiles).toEqual(["primary", "remote"]);
   });
 
+  test("applies nested required audio languages independently from subtitles", () => {
+    const [version] = fingerprintTorrent(torrent("Example.Movie.2025.2160p.WEB-DL.ENG.mkv", 10_000), "alldebrid");
+    version.fingerprint.subtitles = [{ language: "ita" }];
+    const configured = profile({
+      languagePolicy: {
+        required: { values: [], mode: "ALL" },
+        preferred: [],
+        original: false,
+        audio: { required: { values: ["ita"], mode: "ALL" }, preferred: [], original: false },
+        subtitles: { required: { values: [], mode: "ALL" }, preferred: [], original: false },
+      },
+    });
+    const evaluation = evaluateVersionGroups([version], [configured])[0].versions[0].evaluations[0];
+    expect(evaluation.eligible).toBe(false);
+    expect(evaluation.reasons[0].code).toBe("required_audio_language_missing");
+  });
+
+  test("uses larger files as the configured same-resolution tie-breaker", () => {
+    const small = fingerprintTorrent(torrent("Example.Movie.2025.2160p.WEB-DL.ITA.HEVC-Alpha.mkv", 6_000_000_000), "alldebrid")[0];
+    const large = fingerprintTorrent(torrent("Example.Movie.2025.2160p.WEB-DL.ITA.HEVC-Beta.mkv", 20_000_000_000), "alldebrid")[0];
+    small.fingerprint.identity = { ...small.fingerprint.identity, tmdbId: "123", resolutionStatus: "resolved", confidence: 1 };
+    large.fingerprint.identity = { ...large.fingerprint.identity, tmdbId: "123", resolutionStatus: "resolved", confidence: 1 };
+    const configured = profile({ sizePreference: "LARGER", minimumSizeDifferencePercent: 10 });
+    const versions = evaluateVersionGroups([small, large], [configured])[0].versions;
+    expect(versions.find((version) => version.decision === "KEEP")?.id).toBe(large.id);
+  });
+
+  test("applies release-group preference consistently across a season", () => {
+    const names = [
+      ["S01E01", "Alpha", 20_000_000_000],
+      ["S01E02", "Alpha", 20_000_000_000],
+      ["S01E03", "Beta", 20_000_000_000],
+    ] as const;
+    const versions = names.flatMap(([episode, group, size]) => [
+      fingerprintTorrent(torrent(`Show.2025.${episode}.2160p.WEB-DL.ITA.HEVC-${group}.mkv`, size), "alldebrid")[0],
+      fingerprintTorrent(torrent(`Show.2025.${episode}.2160p.WEB-DL.ITA.HEVC-${group === "Alpha" ? "Beta" : "Alpha"}.mkv`, size - 1_000_000_000), "alldebrid")[0],
+    ]);
+    versions.forEach((version) => { version.fingerprint.identity = { ...version.fingerprint.identity, tmdbId: "show-123", resolutionStatus: "resolved", confidence: 1, kind: "episode" }; });
+    const configured = profile({ sizePreference: "LARGER", minimumSizeDifferencePercent: 0, releaseGroupConsistency: "SEASON" });
+    const groups = evaluateVersionGroups(versions, [configured]);
+    const episode3 = groups.find((group) => group.identity.episode === 3);
+    expect(episode3?.versions.find((version) => version.decision === "KEEP")?.fingerprint.release.group).toBe("Alpha");
+  });
+
   test("applies the exact manual TMDb identity before grouping and preserves safety blockers", () => {
     const versions = fingerprintTorrent(torrent("Ambiguous.Release.2024.1080p.WEB-DL.ITA.mkv", 10_000), "alldebrid");
     const original = versions[0].fingerprint.identity;
