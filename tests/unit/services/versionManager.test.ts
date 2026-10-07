@@ -264,6 +264,27 @@ describe("version manager", () => {
     expect(evaluation.reasons[0].code).toBe("required_audio_language_missing");
   });
 
+  test("turns a required-language failure into a delete candidate only with a retained replacement", () => {
+    const missingAudio = fingerprintTorrent(torrent("Example.Movie.2025.2160p.WEB-DL.ENG.mkv", 10_000), "alldebrid")[0];
+    const retained = fingerprintTorrent(torrent("Example.Movie.2025.2160p.WEB-DL.ITA.mkv", 12_000), "alldebrid")[0];
+    missingAudio.fingerprint.storage.infoHash = "missing-audio-hash";
+    retained.fingerprint.storage.infoHash = "retained-audio-hash";
+    missingAudio.fingerprint.storage.recoverability = { status: "RECOVERABLE", source: "INFOHASH", infoHash: "missing-audio-hash" };
+    retained.fingerprint.storage.recoverability = { status: "RECOVERABLE", source: "INFOHASH", infoHash: "retained-audio-hash" };
+    const configured = profile({
+      languagePolicy: {
+        required: { values: [], mode: "ALL" },
+        preferred: [],
+        original: false,
+        audio: { required: { values: ["ita"], mode: "ALL" }, preferred: [], original: false, missingRequiredAction: "DELETE_IF_REPLACED" },
+        subtitles: { required: { values: [], mode: "ALL" }, preferred: [], original: false },
+      },
+    });
+    const group = evaluateVersionGroups([missingAudio, retained], [configured])[0];
+    expect(group.versions.find((version) => version.id === missingAudio.id)?.decision).toBe("DELETE_CANDIDATE");
+    expect(group.versions.find((version) => version.id === retained.id)?.decision).toBe("KEEP");
+  });
+
   test("uses larger files as the configured same-resolution tie-breaker", () => {
     const small = fingerprintTorrent(torrent("Example.Movie.2025.2160p.WEB-DL.ITA.HEVC-Alpha.mkv", 6_000_000_000), "alldebrid")[0];
     const large = fingerprintTorrent(torrent("Example.Movie.2025.2160p.WEB-DL.ITA.HEVC-Beta.mkv", 20_000_000_000), "alldebrid")[0];

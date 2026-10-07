@@ -642,13 +642,22 @@ export function evaluateVersionGroups(versions: VersionRecord[], profiles = defa
     }
     for (const version of evaluations) {
       const hasHardRequirementFailure = version.evaluations.some((evaluation) => !evaluation.eligible);
+      const replacementEligible = version.evaluations.some((evaluation) => {
+        const languageFailures = evaluation.reasons.filter((reason) => reason.code === "required_audio_language_missing" || reason.code === "required_subtitle_language_missing");
+        if (!languageFailures.length || languageFailures.length !== evaluation.reasons.length) return false;
+        const profile = activeProfiles.find((candidate) => candidate.id === evaluation.profileId);
+        if (!profile) return false;
+        return languageFailures.every((reason) => reason.code === "required_audio_language_missing"
+          ? (profile.languagePolicy.audio || profile.languagePolicy).missingRequiredAction === "DELETE_IF_REPLACED"
+          : (profile.languagePolicy.subtitles || profile.languagePolicy).missingRequiredAction === "DELETE_IF_REPLACED");
+      });
       const recoverability = version.fingerprint.storage.recoverability?.status || (version.fingerprint.storage.infoHash ? "RECOVERABLE" : "UNKNOWN");
       const recoverable = recoverability === "RECOVERABLE";
       const safeForDelete = (policy.safety?.requireRecoverableBeforeDelete ?? true) ? recoverable : true;
       const hasSurvivingKeep = evaluations.some((candidate) => candidate.decision === "KEEP");
-      if (version.decision === "REVIEW" && !hasHardRequirementFailure && version.fingerprint.identity.confidence >= 0.65 && evaluations.length > 1 && hasSurvivingKeep && safeForDelete) {
+      if (version.decision === "REVIEW" && (!hasHardRequirementFailure || replacementEligible) && version.fingerprint.identity.confidence >= 0.65 && evaluations.length > 1 && hasSurvivingKeep && safeForDelete) {
         version.decision = "DELETE_CANDIDATE";
-        version.reasons.push({ code: "no_profile_slot", message: "Does not win an enabled profile in this version group", facts: { groupId: id } });
+        version.reasons.push({ code: replacementEligible ? "required_replacement_available" : "no_profile_slot", message: replacementEligible ? "Required language is missing, but an admissible replacement is retained" : "Does not win an enabled profile in this version group", facts: { groupId: id } });
       } else if (version.decision === "REVIEW") {
         if (!safeForDelete && version.fingerprint.identity.confidence >= 0.65 && !hasHardRequirementFailure) version.reasons.push({ code: recoverability === "NOT_RECOVERABLE" ? "recoverability_required" : "recoverability_unknown", message: recoverability === "NOT_RECOVERABLE" ? "Delete preview requires a recoverable provider item" : "Recoverability could not be established for this provider item", facts: { recoverabilityStatus: recoverability, infoHashAvailable: recoverable } });
         version.reasons.push({
