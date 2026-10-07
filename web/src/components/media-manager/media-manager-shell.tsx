@@ -154,6 +154,7 @@ async function refreshVersionManagerInventory(providerId: string): Promise<void>
 function IdentityResolver({
   reviewId,
   versionGroupId,
+  versionIds,
   providerId,
   identity,
   initialQuery,
@@ -165,6 +166,7 @@ function IdentityResolver({
 }: {
   reviewId?: string;
   versionGroupId?: string;
+  versionIds?: string[];
   providerId?: string;
   identity?: Record<string, unknown>;
   initialQuery?: string;
@@ -210,7 +212,7 @@ function IdentityResolver({
       };
       const response = await fetch(reviewId ? `/api/organizer/review/${encodeURIComponent(reviewId)}` : "/api/version-manager/identity/override", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify(reviewId ? { decision: "accepted", override } : { provider: providerId, identity, versionGroupId, override }),
+        body: JSON.stringify(reviewId ? { decision: "accepted", override } : { provider: providerId, identity, versionGroupId, versionIds, override }),
       });
       const body = await readJsonResponse<any>(response, "Saving identity match");
       let evaluation = body;
@@ -228,7 +230,7 @@ function IdentityResolver({
     if (!reviewId && !identity) return;
     setBusy(true); setMessage("");
     try {
-      const response = await fetch(reviewId ? `/api/organizer/review/${encodeURIComponent(reviewId)}` : "/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(reviewId ? { action: "clear-match" } : { provider: providerId, action: "clear", identity, versionGroupId }) });
+      const response = await fetch(reviewId ? `/api/organizer/review/${encodeURIComponent(reviewId)}` : "/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(reviewId ? { action: "clear-match" } : { provider: providerId, action: "clear", identity, versionGroupId, versionIds }) });
       const body = await readJsonResponse<any>(response, "Clearing manual identity");
       let evaluation = body;
       if (reviewId && identity) {
@@ -898,6 +900,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     const selection = items.map(({ provider, providerItemId }) => ({ provider, providerItemId }));
     const grouped = new Map<string, SelectedDeleteItem[]>();
     for (const item of items) grouped.set(item.provider, [...(grouped.get(item.provider) || []), item]);
+    const deletedProviderItemIds: string[] = [];
     setDeleteBusy("batch");
     setDeleteNotice("");
     setDeleteError("");
@@ -905,7 +908,8 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       for (const [provider, providerItems] of grouped) {
         const providerItemIds = providerItems.map((item) => String(item.providerItemId));
         const response = await fetch("/api/version-manager/delete/batch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, providerItemIds, selection, snapshotId: deleteContext?.snapshotId, dryRun, confirmation: dryRun ? undefined : JSON.stringify(providerItemIds) }) });
-        await readJsonResponse<any>(response, dryRun ? "Selection validation" : "Selected provider deletion");
+        const result = await readJsonResponse<any>(response, dryRun ? "Selection validation" : "Selected provider deletion");
+        if (!dryRun) deletedProviderItemIds.push(...(result.providerItemIds || result.results?.filter((item: any) => item.status === "DELETED").map((item: any) => item.providerItemId) || []));
       }
       setSelectedDeleteItems(new Map());
       if (dryRun) {
@@ -914,13 +918,23 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
         return;
       }
       setDeleteBusy("refresh");
-      setDeleteNotice(`Deleted ${items.length} selected ProviderItems. Refreshing the library inventory…`);
+      setDeleteNotice(`Deleted ${deletedProviderItemIds.length || items.length} selected ProviderItems. Updating the library inventory…`);
       try {
-        await refreshVersionManagerInventory(provider.providerId);
+        const delta = await readJsonResponse<any>(
+          await fetch("/api/version-manager/snapshot/apply-deletion", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: provider.providerId, snapshotId: deleteContext?.snapshotId, providerItemIds: deletedProviderItemIds }) }),
+          "Updating the library inventory",
+        );
         await Promise.all([preview.reload(), deleteImpact.reload(), deletePreview.reload()]);
-        setDeleteNotice(`Deleted ${items.length} selected ProviderItems. The library inventory is now up to date.`);
-      } catch (refreshError: any) {
-        setDeleteError(`Deletion completed, but the library refresh did not finish: ${refreshError?.message || "reload the Library before deleting again"}`);
+        setDeleteNotice(`Deleted ${deletedProviderItemIds.length || items.length} selected ProviderItems. Library inventory updated incrementally (${delta.removedVersionCount || deletedProviderItemIds.length} versions removed).`);
+      } catch (deltaError: any) {
+        setDeleteNotice("Deletion completed. The incremental inventory update was not available; starting a full reconciliation…");
+        try {
+          await refreshVersionManagerInventory(provider.providerId);
+          await Promise.all([preview.reload(), deleteImpact.reload(), deletePreview.reload()]);
+          setDeleteNotice(`Deleted ${deletedProviderItemIds.length || items.length} selected ProviderItems. The library inventory is now up to date.`);
+        } catch (refreshError: any) {
+          setDeleteError(`Deletion completed, but the library refresh did not finish: ${refreshError?.message || deltaError?.message || "reload the Library before deleting again"}`);
+        }
       }
     } catch (value: any) {
       if (value?.payload?.refreshRequired) {
@@ -1023,7 +1037,12 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     for (const group of groups) {
       const identity = displayIdentity(group);
       const isEpisode = identity.kind === "episode";
-      const key = isEpisode && (identity.tmdbId || identity.tvdbId) ? `show:${identity.tmdbId || identity.tvdbId}` : `group:${group.id}`;
+      const canonicalId = identity.tmdbId || identity.tvdbId;
+      const fallbackTitle = String(identity.normalizedTitle || identity.title || group.title || "unidentified").trim().toLowerCase();
+      const fallbackYear = identity.year ? String(identity.year) : "";
+      const key = isEpisode
+        ? `show:${canonicalId || `${fallbackTitle}:${fallbackYear}`}`
+        : `movie:${canonicalId || `${fallbackTitle}:${fallbackYear}`}`;
       const current: { kind: "movie" | "show" | "unknown"; title: string; year?: number; groups: any[] } = rows.get(key) || { kind: isEpisode ? "show" : identity.kind === "movie" ? "movie" : "unknown", title: identity.title || group.title || "Unidentified content", year: identity.year, groups: [] };
       current.groups.push(group);
       rows.set(key, current);
@@ -1271,7 +1290,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                         const requirements = failedRequirementText(version);
                         return <div key={version.id} className="rounded border p-3 text-xs"><p className="break-all font-medium">{String(storage.path || version.releaseName || version.filename || version.id).split(/[\\/]/).pop()}</p><p className="mt-1 text-muted-foreground">{video.resolution || "resolution unknown"} · {video.codec || "codec unknown"} · audio {uniqueLanguages(fingerprint.audio || []) || "unknown"} · {formatSize(storage.size)} · {storage.provider || "provider unknown"} · ProviderItem {storage.torrentId || "unknown"}</p>{requirements.map((reason, index) => <p key={index} className="mt-1 text-amber-700">{reason}</p>)}</div>;
                       })}
-                      {entry.issueTypes?.includes("IDENTITY_ISSUE") && entry.decision !== "dismissed" && <IdentityResolver reviewId={entry.organizerReview?.id} versionGroupId={entry.versionGroupId} providerId={provider.providerId} identity={entry.identity} initialQuery={entry.title || entry.sourceBasename} initialType={entry.kind === "episode" ? "tv" : "movie"} initialYear={entry.year} existingOverride={entry.organizerReview?.override} actionLabel={entry.organizerReview?.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />}
+                      {entry.issueTypes?.includes("IDENTITY_ISSUE") && entry.decision !== "dismissed" && <IdentityResolver reviewId={entry.organizerReview?.id} versionGroupId={entry.versionGroupId} versionIds={entry.versionIds} providerId={provider.providerId} identity={entry.identity} initialQuery={entry.title || entry.sourceBasename} initialType={entry.kind === "episode" ? "tv" : "movie"} initialYear={entry.year} existingOverride={entry.organizerReview?.override} actionLabel={entry.organizerReview?.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />}
                       <div className="flex flex-wrap gap-2">
                         {entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "accepted" }, entry.organizerReview)}><Check className="mr-2 h-4 w-4" />Accept as detected</Button><Button size="sm" variant="destructive" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "dismissed" }, entry.organizerReview)}><X className="mr-2 h-4 w-4" />Dismiss</Button><Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry.organizerReview)}><RefreshCw className="mr-2 h-4 w-4" />Retry / Resume</Button></>)}
                         {!entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.key, { action: "restore" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.key, { action: "dismiss" }, entry)}><X className="mr-2 h-4 w-4" />Dismiss</Button>)}
@@ -2027,6 +2046,16 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
       />
       <ProviderSelector providers={provider.providers} value={provider.providerId} onChange={(value) => { provider.selectProvider(value); setImpact(null); }} />
       <ErrorBox error={provider.error} />
+      <Card id="media-manager-identity" className="scroll-mt-20">
+        <CardHeader><CardTitle className="text-base">Identity resolution</CardTitle></CardHeader>
+        <CardContent className="space-y-3 text-sm">
+          <label className="flex items-start gap-3 rounded border p-3">
+            <input className="mt-1" type="checkbox" checked={policy.useArrIdentityResolution === true} onChange={(event) => setPolicy((current: any) => ({ ...current, useArrIdentityResolution: event.target.checked }))} />
+            <span><span className="font-medium">Use ARR parser for unresolved identities</span><span className="mt-1 block text-muted-foreground">When enabled, Media Manager may ask Radarr or Sonarr to parse an unresolved movie or episode path. This is an identity-resolution helper, not an import scan or acquisition request.</span></span>
+          </label>
+          <p className="text-xs text-muted-foreground">Radarr/Sonarr URL and API key remain in <Link className="underline" href="/settings">General Settings → ARR</Link>. If ARR is disabled or unavailable, the normal Media Manager resolution and Review fallback remains in effect.</p>
+        </CardContent>
+      </Card>
       <Card id="media-manager-profiles" className="scroll-mt-20">
         <CardHeader><CardTitle className="text-base">How retention decides</CardTitle></CardHeader>
         <CardContent className="space-y-4">

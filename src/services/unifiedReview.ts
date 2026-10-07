@@ -91,6 +91,10 @@ function keyForIdentity(identity: VersionGroup["identity"] | undefined, fallback
   return `review_${digest(identityKey(identity) || fallback)}`;
 }
 
+function identityReviewKey(identity: VersionGroup["identity"]): string {
+  return `identity_review:${identity.kind || "episode"}:${identity.normalizedTitle || identity.title || "unknown"}:season:${identity.season ?? "unknown"}`;
+}
+
 function recoverabilityFor(version: VersionEvaluation): "RECOVERABLE" | "NOT_RECOVERABLE" | "UNKNOWN" {
   return version.fingerprint.storage.recoverability?.status || (version.fingerprint.storage.infoHash ? "RECOVERABLE" : "UNKNOWN");
 }
@@ -198,10 +202,10 @@ export function buildUnifiedReviewQueue(groups: VersionGroup[], organizerReviews
     const identityReasons = new Set(["identity_uncertain", "identity_conflict"]);
     const hasRecoverability = reasonCodes.some((code) => recoverabilityReasons.has(code));
     const identityStatus = group.identity.resolutionStatus;
-    // `identity_uncertain` is emitted by the frozen Policy Engine for some
-    // non-identity REVIEW paths (notably recoverability). Only expose an
-    // identity issue when the identity evidence itself is weak/conflicting.
-    const hasIdentity = identityStatus === "uncertain" || identityStatus === "conflict" || group.identity.confidence < 0.65 || reasonCodes.some((code) => identityReasons.has(code) && group.identity.confidence < 0.65);
+    // A policy decision is never automatic without a TMDb identity. Keep
+    // unresolved groups in the Identity Review queue even when filename
+    // parsing produced a high-confidence fallback title.
+    const hasIdentity = !group.identity.tmdbId || identityStatus === "uncertain" || identityStatus === "conflict" || group.identity.confidence < 0.65 || reasonCodes.some((code) => identityReasons.has(code) && group.identity.confidence < 0.65);
     const policyReasons = reasonCodes.filter((code) => !recoverabilityReasons.has(code) && !(identityReasons.has(code) && hasIdentity));
     const issueTypes: UnifiedReviewIssueType[] = [];
     if (hasIdentity) issueTypes.push("IDENTITY_ISSUE");
@@ -212,7 +216,9 @@ export function buildUnifiedReviewQueue(groups: VersionGroup[], organizerReviews
     const state = states.includes("NOT_RECOVERABLE") ? "NOT_RECOVERABLE" : states.includes("UNKNOWN") ? "UNKNOWN" : "RECOVERABLE";
     const sources = [...new Set(reviewVersions.map((version) => version.fingerprint.storage.recoverability?.source || (version.fingerprint.storage.infoHash ? "INFOHASH" : "UNKNOWN")))];
     const fallback = reviewVersions.map((version) => `${version.fingerprint.storage.provider}:${version.fingerprint.storage.torrentId}:${version.fingerprint.storage.fileId || ""}`).sort().join("|");
-    const key = keyForIdentity(group.identity, fallback);
+    const key = hasIdentity && !group.identity.tmdbId && group.identity.kind === "episode" && group.identity.season !== undefined
+      ? `review_${digest(identityReviewKey(group.identity))}`
+      : keyForIdentity(group.identity, fallback);
     const dismissed = dismissedPolicyReviews.has(key);
     if (status === "pending" && dismissed) continue;
     if (status === "dismissed" && !dismissed) continue;
@@ -221,7 +227,7 @@ export function buildUnifiedReviewQueue(groups: VersionGroup[], organizerReviews
       season: group.identity.season, episode: group.identity.episode, issueTypes, reasonCodes, blockers: [...new Set(reviewVersions.flatMap((version) => version.reasons.map((reason) => reason.message)))],
       policyDecision: "REVIEW", recoverability: { status: state, sources }, identityResolutionStatus: identityStatus, versionGroupId: group.id,
       decision: dismissed ? "dismissed" : "pending", versionIds: reviewVersions.map((version) => version.id),
-      allowedActions: dismissed ? ["RESTORE_TO_REVIEW", "DETAILS"] : ["DISMISS", "DETAILS"], allowIdentityActions: false,
+      allowedActions: dismissed ? ["RESTORE_TO_REVIEW", "DETAILS"] : hasIdentity ? ["RESOLVE_IDENTITY", "DISMISS", "DETAILS"] : ["DISMISS", "DETAILS"], allowIdentityActions: hasIdentity,
     });
   }
   const result = [...entries.values()];

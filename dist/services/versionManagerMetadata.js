@@ -10,6 +10,7 @@ const db_1 = require("../core/db");
 const mediaParser_1 = require("./mediaParser");
 const tmdbService_1 = require("./tmdbService");
 const mediaServerProvider_1 = require("./mediaServerProvider");
+const arrIdentityResolver_1 = require("./arrIdentityResolver");
 function key(title, year, kind, season, episode) {
     return [(0, mediaParser_1.normalizeMediaTitle)(title || ""), year || "", kind || "", season || "", episode || ""].join(":");
 }
@@ -265,17 +266,24 @@ async function enrichVersionMetadata(versions, options = {}) {
             stats.matched++;
         }
         else {
-            result = await tmdbLookup(version, stats, options, memo);
+            if (options.useArrIdentityResolution)
+                result = await (0, arrIdentityResolver_1.resolveWithArrParser)(version) || catalogResult;
+            if (result.status !== "matched")
+                result = await tmdbLookup(version, stats, options, memo);
             if (result.status === "matched") {
-                stats.tmdb++;
-                stats.tmdbStatus = "matched";
-                applyItem(version, result);
+                if (result.reason.includes("parser matched"))
+                    applyItem(version, result);
+                else {
+                    stats.tmdb++;
+                    stats.tmdbStatus = "matched";
+                    applyItem(version, result);
+                }
                 stats.matched++;
             }
             else {
                 stats.unresolved++;
                 stats.filenameFallback++;
-                version.fingerprint.identity.resolutionStatus = result.status === "ambiguous" ? "uncertain" : "fallback";
+                version.fingerprint.identity.resolutionStatus = result.status === "ambiguous" || result.status === "unavailable" || result.status === "authentication_failed" ? "uncertain" : "fallback";
             }
         }
         if (version.fingerprint.identity.conflicts?.length)

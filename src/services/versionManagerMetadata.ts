@@ -3,6 +3,7 @@ import { getDb } from "../core/db";
 import { normalizeMediaTitle } from "./mediaParser";
 import { searchTmdb, type TmdbRequestOptions } from "./tmdbService";
 import { mediaServerProviders, type MediaServerCatalog, type MediaServerItem, type MediaServerProvider, type MediaStreamEvidence } from "./mediaServerProvider";
+import { resolveWithArrParser } from "./arrIdentityResolver";
 import type { IdentityConflict, IdentityResolutionStatus, Provenance, VersionRecord } from "./versionManager";
 
 export type MetadataSourceStatus = "matched" | "not_matched" | "ambiguous" | "unavailable" | "configuration_unavailable" | "authentication_failed";
@@ -46,6 +47,7 @@ export interface MetadataProgress {
 export interface MetadataEnrichmentOptions {
   providers?: MediaServerProvider[];
   tmdb?: TmdbRequestOptions;
+  useArrIdentityResolution?: boolean;
   onProgress?: (progress: MetadataProgress) => void | Promise<void>;
 }
 
@@ -279,9 +281,17 @@ export async function enrichVersionMetadata(versions: VersionRecord[], options: 
     let result = catalogResult;
     if (catalogResult.status === "matched") { applyItem(version, catalogResult); stats.matched++; }
     else {
-      result = await tmdbLookup(version, stats, options, memo);
-      if (result.status === "matched") { stats.tmdb++; stats.tmdbStatus = "matched"; applyItem(version, result); stats.matched++; }
-      else { stats.unresolved++; stats.filenameFallback++; version.fingerprint.identity.resolutionStatus = result.status === "ambiguous" ? "uncertain" : "fallback"; }
+      if (options.useArrIdentityResolution) result = await resolveWithArrParser(version) || catalogResult;
+      if (result.status !== "matched") result = await tmdbLookup(version, stats, options, memo);
+      if (result.status === "matched") {
+        if (result.reason.includes("parser matched")) applyItem(version, result);
+        else { stats.tmdb++; stats.tmdbStatus = "matched"; applyItem(version, result); }
+        stats.matched++;
+      } else {
+        stats.unresolved++;
+        stats.filenameFallback++;
+        version.fingerprint.identity.resolutionStatus = result.status === "ambiguous" || result.status === "unavailable" || result.status === "authentication_failed" ? "uncertain" : "fallback";
+      }
     }
     if (version.fingerprint.identity.conflicts?.length) stats.conflicts++;
     if (version.fingerprint.identity.originalLanguage) stats.originalLanguageResolved++;

@@ -90,6 +90,33 @@ describe('provider reconciliation direct intake', () => {
     expect(arr.submitted[0].kind).toBe('radarr');
   });
 
+  test('includes known older provider items in the recent diff scan', async () => {
+    const requested: string[][] = [];
+    const provider = {
+      async listTorrents() {
+        return [
+          { id: 'old', name: 'Old Movie', filename: 'Old Movie', status: 'finished', progress: 100, bytes: 1, files: [], addedAt: new Date('2020-01-01T00:00:00Z') },
+          { id: 'new', name: 'New Movie', filename: 'New Movie', status: 'finished', progress: 100, bytes: 1, files: [], addedAt: new Date('2026-09-17T00:00:00Z') },
+        ];
+      },
+      async fetchDirectories() {
+        return ['old', 'new'].map((id) => ({ id, name: id, originalName: id, files: [{ id: `${id}.mkv`, name: `${id}.mkv`, size: 1 }] }));
+      },
+      async fetchDirectoriesForIds(items: Array<{ id: string }>) {
+        requested.push(items.map((item) => item.id));
+        return items.map((item) => ({ id: item.id, name: item.id, originalName: item.id, files: [{ id: `${item.id}.mkv`, name: `${item.id}.mkv`, size: 1 }] }));
+      },
+    };
+    const store = new InMemoryIntakeStateStore();
+    const arr = new FakeArr();
+    const intake = new ProviderReconciliationIntake(new ProviderSnapshotSource(provider as any), arr, store, { routeFor });
+    await intake.reconcile('full');
+    requested.length = 0;
+    await intake.reconcile('recent', 1);
+    expect(requested).toEqual([['new', 'old']]);
+    expect(arr.submitted.some((item) => item.event.providerItemId === 'alldebrid:old' && item.event.action === 'changed')).toBe(false);
+  });
+
   test('emits add and routes Movies to Radarr and Shows to Sonarr', async () => {
     const arr = new FakeArr();
     const intake = new ProviderReconciliationIntake(

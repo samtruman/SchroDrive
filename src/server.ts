@@ -38,7 +38,7 @@ import { evaluateVersionGroups, validateRule, validateScoringRules, versionManag
 import { loadMediaManagerInventory, type MediaManagerInventoryStats } from "./services/mediaManagerInventory";
 import { deriveAcquisitionNeeds } from "./services/acquisition";
 import { SeerrAcquisitionAdapter } from "./services/seerrAcquisitionAdapter";
-import { getLatestVersionManagerRecords, getLatestVersionManagerScan, getLatestVersionManagerSnapshot, getVersionManagerPolicy, getVersionProfiles, saveVersionManagerPolicy, saveVersionManagerPreviewAudit, saveVersionManagerScan, saveVersionProfiles } from "./services/versionManagerStore";
+import { getLatestVersionManagerRecords, getLatestVersionManagerScan, getLatestVersionManagerSnapshot, getVersionManagerPolicy, getVersionProfiles, saveVersionManagerPolicy, saveVersionManagerPreviewAudit, saveVersionManagerScan, saveVersionManagerSnapshot, saveVersionProfiles } from "./services/versionManagerStore";
 import { probeVersionRecords } from "./services/versionManagerProbe";
 import { enrichVersionMetadata } from "./services/versionManagerMetadata";
 import { searchTmdbCandidates } from "./services/tmdbService";
@@ -100,6 +100,35 @@ function summarizeVersionManagerGroups(groups: any[], policy: ReturnType<typeof 
     primaryMissing,
     remoteMissing,
   };
+}
+
+function applyVersionManagerDeletionDelta(providerId: string, snapshotId: string, deletedProviderItemIds: string[]) {
+  const snapshot = getLatestVersionManagerSnapshot(providerId);
+  if (!snapshot || snapshot.id !== snapshotId) throw new Error("Inventory changed; reload Delete before continuing");
+  const deleted = new Set(deletedProviderItemIds.map(String));
+  const originalVersionCount = snapshot.groups.reduce((count, group) => count + group.versions.length, 0);
+  const records = snapshot.groups
+    .flatMap((group) => group.versions)
+    .filter((version) => {
+      const storage = (version.fingerprint as any)?.storage;
+      return !(String(storage?.provider || "") === providerId && deleted.has(String(storage?.torrentId || "")));
+    })
+    .map((version) => ({ id: version.id, fingerprint: version.fingerprint }));
+  const evaluated = evaluateVersionGroups(applyManualIdentityOverrides(records), getVersionProfiles(), getVersionManagerPolicy());
+  const profiles = getVersionProfiles();
+  const policy = getVersionManagerPolicy();
+  const newSnapshotId = saveVersionManagerSnapshot(evaluated, profiles, {
+    providerId,
+    policyHash: versionManagerPolicyHash(policy, profiles),
+    status: "VALID",
+  });
+  const summary = summarizeVersionManagerGroups(evaluated, policy, profiles);
+  saveVersionManagerPreviewAudit({
+    policyHash: versionManagerPolicyHash(policy, profiles),
+    evaluatedAt: new Date().toISOString(),
+    ...summary,
+  });
+  return { snapshotId: newSnapshotId, removedVersionCount: originalVersionCount - evaluated.reduce((count, group) => count + group.versions.length, 0), ...summary };
 }
 
 /**
@@ -320,6 +349,20 @@ export function startServer() {
     const job = getVersionManagerScanStatus(String(req.params.id));
     if (!job) return res.status(404).json({ ok: false, error: "Scan job not found" });
     return res.json({ ok: true, job, resultUrl: `/api/version-manager/preview?provider=${encodeURIComponent(job.providerId)}` });
+  });
+
+  /** Applies a successful provider deletion to the cached inventory without a provider rescan. */
+  app.post("/api/version-manager/snapshot/apply-deletion", (req, res) => {
+    try {
+      const provider = configuredMediaManagerProvider(req.body?.provider);
+      const snapshotId = String(req.body?.snapshotId || "");
+      const providerItemIds = Array.isArray(req.body?.providerItemIds) ? req.body.providerItemIds.map(String).filter(Boolean) : [];
+      if (!provider || !snapshotId || providerItemIds.length === 0) return res.status(400).json({ ok: false, error: "provider, snapshotId and providerItemIds are required" });
+      const result = applyVersionManagerDeletionDelta(provider.id, snapshotId, providerItemIds);
+      return res.json({ ok: true, mode: "INCREMENTAL", provider: provider.id, ...result });
+    } catch (error: any) {
+      return res.status(409).json({ ok: false, error: error?.message || "Unable to update inventory snapshot incrementally", refreshRequired: true });
+    }
   });
 
   /**
@@ -775,6 +818,7 @@ export function startServer() {
         enableRemote: req.body.policy?.enableRemote === true,
         acquireMissingRemote: req.body.policy?.acquireMissingRemote === true,
         preferCompletePack: req.body.policy?.preferCompletePack === true,
+        useArrIdentityResolution: req.body.policy?.useArrIdentityResolution === true,
         policyVersion: typeof req.body.policy?.policyVersion === "string" ? req.body.policy.policyVersion : "1",
         safety: {
           deleteDryRun: req.body.policy?.safety?.deleteDryRun !== false,
@@ -868,9 +912,14 @@ export function startServer() {
     const provider = configuredMediaManagerProvider(req.body?.provider);
     if (!provider) return res.status(400).json({ ok: false, error: 'Selected debrid provider is not configured' });
     const requestedGroupId = typeof req.body?.versionGroupId === 'string' ? req.body.versionGroupId : undefined;
-    const snapshot = requestedGroupId ? readVersionManagerGroups(provider.id) : null;
+    const requestedVersionIds = Array.isArray(req.body?.versionIds)
+      ? req.body.versionIds.filter((value: unknown): value is string => typeof value === 'string')
+      : [];
+    const snapshot = requestedGroupId || requestedVersionIds.length ? readVersionManagerGroups(provider.id) : null;
     const requestedGroup = requestedGroupId ? snapshot?.groups.find((group) => group.id === requestedGroupId) : undefined;
     if (requestedGroupId && !requestedGroup) return res.status(404).json({ ok: false, error: 'Version group is no longer available; refresh Review' });
+    const snapshotVersionIds = new Set((snapshot?.groups || []).flatMap((group) => group.versions.map((version: VersionRecord) => version.id)));
+    if (requestedVersionIds.some((versionId: string) => !snapshotVersionIds.has(versionId))) return res.status(409).json({ ok: false, error: 'One or more review versions are no longer available; refresh Review' });
     const identity = requestedGroup?.identity || req.body?.identity;
     if (!identity || typeof identity !== 'object') return res.status(400).json({ ok: false, error: 'identity or versionGroupId is required' });
     const identityValue = {
@@ -884,7 +933,9 @@ export function startServer() {
     let override: ManualIdentityOverride | undefined;
     try { override = validateReviewOverride(req.body?.override) as ManualIdentityOverride | undefined; }
     catch (err: any) { return res.status(400).json({ ok: false, error: err?.message || 'Invalid manual identity' }); }
-    const targetVersionIds = requestedGroup?.versions.map((version: VersionRecord) => version.id) || [];
+    const targetVersionIds = requestedVersionIds.length
+      ? requestedVersionIds
+      : requestedGroup?.versions.map((version: VersionRecord) => version.id) || [];
     if (req.body?.action === 'clear') {
       if (targetVersionIds.length) targetVersionIds.forEach(clearManualIdentityOverrideForVersion);
       else clearManualIdentityOverride(identityValue);

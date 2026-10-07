@@ -58,7 +58,9 @@ async function execute(job: VersionManagerScanJob): Promise<void> {
 
     updateVersionManagerScanJob(job.id, { status: "ENRICHING", phase: "identity", completed: 0, total: evaluatedVersions.length });
     await probeVersionRecords(evaluatedVersions);
+    const policy = getVersionManagerPolicy();
     await enrichVersionMetadata(evaluatedVersions, {
+      useArrIdentityResolution: policy.useArrIdentityResolution === true,
       onProgress: (progress) => updateVersionManagerScanJob(job.id, {
         status: "ENRICHING",
         phase: "identity",
@@ -69,7 +71,6 @@ async function execute(job: VersionManagerScanJob): Promise<void> {
 
     updateVersionManagerScanJob(job.id, { status: "EVALUATING", phase: "policy", completed: 0, total: evaluatedVersions.length });
     const profiles = getVersionProfiles();
-    const policy = getVersionManagerPolicy();
     const groups = evaluateVersionGroups(evaluatedVersions, profiles, policy);
 
     const finalReadiness = readinessError(await getConfiguredMountReadiness([job.providerId]));

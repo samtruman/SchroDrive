@@ -7,6 +7,7 @@ function normalizePolicy(policy: Partial<VersionManagerPolicy>): VersionManagerP
     acquireMissingRemote: policy.acquireMissingRemote === true,
     acquisitionMode: policy.acquisitionMode === "NATIVE" ? "NATIVE" : "ARR",
     preferCompletePack: policy.preferCompletePack === true,
+    useArrIdentityResolution: policy.useArrIdentityResolution === true,
     safety: {
       deleteDryRun: policy.safety?.deleteDryRun !== false,
       requireRecoverableBeforeDelete: policy.safety?.requireRecoverableBeforeDelete ?? defaultVersionManagerPolicy.safety!.requireRecoverableBeforeDelete,

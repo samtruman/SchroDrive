@@ -162,8 +162,13 @@ export class HttpArrClient implements ArrClient {
     let commandBody: Record<string, unknown> = { name: commandName, path: scanPath, importMode: route.importMode || 'Copy' };
     if (route.symlinkLibraryPath) {
       const entityId = await findArrEntityId(route, event);
-      commandName = route.kind === 'radarr' ? 'RescanMovie' : 'RescanSeries';
-      commandBody = { name: commandName, [route.kind === 'radarr' ? 'movieId' : 'seriesId']: entityId };
+      if (entityId !== undefined) {
+        commandName = route.kind === 'radarr' ? 'RescanMovie' : 'RescanSeries';
+        commandBody = { name: commandName, [route.kind === 'radarr' ? 'movieId' : 'seriesId']: entityId };
+      }
+      // If the local parser cannot identify the parent entity, let ARR run
+      // its first-import parser against the visible file instead of failing
+      // before the scan is submitted.
     }
     const response = await fetch(`${route.baseUrl.replace(/\/$/, '')}/api/v3/command`, {
       method: 'POST',
@@ -190,7 +195,7 @@ function normalizedTitle(value: string): string {
   return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
-async function findArrEntityId(route: ArrRoute, event: DirectFileEvent): Promise<number> {
+async function findArrEntityId(route: ArrRoute, event: DirectFileEvent): Promise<number | undefined> {
   const filename = path.basename(event.path);
   const parsed = parseMediaFilename(filename, event.path);
   const title = normalizedTitle(parsed.title || event.path.split('/').filter(Boolean).slice(-2, -1)[0] || '');
@@ -201,8 +206,7 @@ async function findArrEntityId(route: ArrRoute, event: DirectFileEvent): Promise
   if (!response.ok) throw new Error(`Arr ${endpoint} lookup failed: HTTP ${response.status}`);
   const records = await response.json() as Array<{ id?: number; title?: string }>; 
   const match = records.find((record) => record.id && normalizedTitle(record.title || '') === title);
-  if (!match?.id) throw new Error(`Arr ${endpoint} record not found for ${parsed.title || filename}`);
-  return match.id;
+  return match?.id;
 }
 
 function safeSegment(value: string): string {
@@ -243,7 +247,7 @@ async function exposeAsSymlink(route: ArrRoute, event: DirectFileEvent, provider
 
 export interface ProviderReadOnlySource {
   listSnapshot(): Promise<ProviderSnapshot[]>;
-  listRecentSnapshot?(limit: number): Promise<ProviderSnapshot[]>;
+  listRecentSnapshot?(limit: number, knownProviderItemIds?: readonly string[]): Promise<ProviderSnapshot[]>;
 }
 
 /** Adapts SchröDrive's common provider contract to reconciliation snapshots. */
@@ -258,11 +262,22 @@ export class ProviderSnapshotSource implements ProviderReadOnlySource {
     return this.toSnapshots(torrents, trees, observedAt);
   }
 
-  async listRecentSnapshot(limit: number): Promise<ProviderSnapshot[]> {
+  async listRecentSnapshot(limit: number, knownProviderItemIds: readonly string[] = []): Promise<ProviderSnapshot[]> {
     const observedAt = new Date().toISOString();
-    const torrents = (await this.provider.listTorrents())
+    const allTorrents = await this.provider.listTorrents();
+    const knownIds = new Set(knownProviderItemIds.map((value) => {
+      const text = String(value);
+      const separator = text.indexOf(":");
+      return separator >= 0 ? text.slice(separator + 1) : text;
+    }));
+    const recent = allTorrents
       .sort((a, b) => (b.addedAt?.getTime() || 0) - (a.addedAt?.getTime() || 0))
       .slice(0, Math.max(0, limit));
+    const selected = new Map(recent.map((torrent) => [String(torrent.id), torrent]));
+    for (const torrent of allTorrents) {
+      if (knownIds.has(String(torrent.id))) selected.set(String(torrent.id), torrent);
+    }
+    const torrents = [...selected.values()];
     const directories = this.provider.fetchDirectoriesForIds
       ? await this.provider.fetchDirectoriesForIds(torrents)
       : await this.provider.fetchDirectories();
@@ -324,8 +339,11 @@ export class ProviderReconciliationIntake {
 
   async reconcile(mode: 'recent' | 'full' = 'full', recentLimit = 30): Promise<DirectFileEvent[]> {
     await this.pollPendingCommands();
+    const knownProviderItemIds = mode === 'recent'
+      ? this.store.listItems().filter((item) => item.lastAction !== 'deleted').map((item) => item.providerItemId)
+      : [];
     const current = mode === 'recent' && this.source.listRecentSnapshot
-      ? await this.source.listRecentSnapshot(recentLimit)
+      ? await this.source.listRecentSnapshot(recentLimit, knownProviderItemIds)
       : await this.source.listSnapshot();
     const seen = new Set(current.map((item) => item.providerItemId));
     const events: DirectFileEvent[] = [];
@@ -432,6 +450,7 @@ export class ProviderReconciliationIntake {
 export class ProviderReconciliationWorker {
   private recentTimer: ReturnType<typeof setInterval> | undefined;
   private fullTimer: ReturnType<typeof setInterval> | undefined;
+  private runQueue: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly intake: ProviderReconciliationIntake | ProviderReconciliationIntake[],
@@ -439,15 +458,35 @@ export class ProviderReconciliationWorker {
   ) {}
 
   private intakes(): ProviderReconciliationIntake[] { return Array.isArray(this.intake) ? this.intake : [this.intake]; }
-  async runRecent(): Promise<DirectFileEvent[]> { return (await Promise.all(this.intakes().map((intake) => intake.reconcile('recent', this.intervals.recentLimit || 30)))).flat(); }
-  async runFull(): Promise<DirectFileEvent[]> { return (await Promise.all(this.intakes().map((intake) => intake.reconcile('full')))).flat(); }
+  private enqueue<T>(mode: 'recent' | 'full', run: () => Promise<T>): Promise<T> {
+    const next = this.runQueue.then(async () => {
+      const startedAt = Date.now();
+      console.log(`[provider-reconciliation] ${mode} scan started`);
+      try {
+        const result = await run();
+        console.log(`[provider-reconciliation] ${mode} scan completed in ${Date.now() - startedAt}ms`);
+        return result;
+      } catch (error) {
+        console.error(`[provider-reconciliation] ${mode} scan failed`, error);
+        throw error;
+      }
+    });
+    this.runQueue = next.then(() => undefined, () => undefined);
+    return next;
+  }
+  runRecent(): Promise<DirectFileEvent[]> {
+    return this.enqueue('recent', async () => (await Promise.all(this.intakes().map((intake) => intake.reconcile('recent', this.intervals.recentLimit || 30)))).flat());
+  }
+  runFull(): Promise<DirectFileEvent[]> {
+    return this.enqueue('full', async () => (await Promise.all(this.intakes().map((intake) => intake.reconcile('full')))).flat());
+  }
 
   start(): void {
     if (this.recentTimer || this.fullTimer) return;
-    this.runRecent().catch(() => undefined);
-    if (this.intervals.runFullOnStart !== false) this.runFull().catch(() => undefined);
-    this.recentTimer = setInterval(() => { this.runRecent().catch(() => undefined); }, this.intervals.recentMs);
-    this.fullTimer = setInterval(() => { this.runFull().catch(() => undefined); }, this.intervals.fullMs);
+    void this.runRecent().catch(() => undefined);
+    if (this.intervals.runFullOnStart !== false) void this.runFull().catch(() => undefined);
+    this.recentTimer = setInterval(() => { void this.runRecent().catch(() => undefined); }, this.intervals.recentMs);
+    this.fullTimer = setInterval(() => { void this.runFull().catch(() => undefined); }, this.intervals.fullMs);
   }
 
   stop(): void {

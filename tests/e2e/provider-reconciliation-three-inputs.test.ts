@@ -97,6 +97,26 @@ describe('provider reconciliation fixture E2E', () => {
     }
   });
 
+  test('B4: falls back to the ARR first-import parser when local identity lookup misses', async () => {
+    let body: any;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === 'POST') {
+        body = JSON.parse(String(init.body));
+        return new Response(JSON.stringify({ id: 7, status: 'queued' }), { status: 201, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response(JSON.stringify([{ id: 1, title: 'A different series' }]), { status: 200 });
+    }) as typeof fetch;
+    const root = await mkdtemp(path.join(tmpdir(), 'provider-reconciliation-arr-parser-'));
+    try {
+      const routeWithLibrary = { ...route('sonarr', '/mnt/schrodrive/alldebrid'), symlinkLibraryPath: root };
+      await new HttpArrClient().submitScan(routeWithLibrary, event('Shows', 'shows/Unknown.Release.S01E03.mkv'));
+      expect(body).toMatchObject({ name: 'DownloadedEpisodesScan', importMode: 'Copy' });
+      expect(body.path).toContain('Unknown Release');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test('C: direct AllDebrid fixture reaches the same Arr completion boundary', async () => {
     const completed: string[] = [];
     const source = { async listSnapshot() { return [{ providerItemId: 'fixture-ad', name: 'Fixture.Show S01E02', status: 'finished', files: [{ path: 'arr-visible/show.mkv', size: 1 }], observedAt: '2026-09-17T00:00:00.000Z' }]; } };

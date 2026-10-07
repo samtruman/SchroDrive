@@ -212,12 +212,13 @@ async function getMountReadiness() {
     return statuses.find((status) => !status.ready) || { ready: true, reason: "ready" };
 }
 /** Returns readiness independently for each configured provider/WebDAV root. */
-async function getConfiguredMountReadiness() {
+async function getConfiguredMountReadiness(providerIds) {
     const roots = [];
     if (config_1.config.runMount) {
-        roots.push(...config_1.config.providers.map((provider) => path.join(config_1.config.mountBase, provider)));
+        const providers = providerIds?.length ? config_1.config.providers.filter((provider) => providerIds.includes(provider)) : config_1.config.providers;
+        roots.push(...providers.map((provider) => path.join(config_1.config.mountBase, provider)));
     }
-    if (config_1.config.webdavMountsEnabled)
+    if (!providerIds?.length && config_1.config.webdavMountsEnabled)
         roots.push(...getWebdavOrganiserRoots());
     if (roots.length === 0)
         return [];

@@ -49,8 +49,8 @@ describe("unified Media Manager review queue", () => {
   });
 
   test("classifies policy-only and recoverability-only reviews separately", () => {
-    const policy = group({ identity: { title: "Policy", normalizedTitle: "policy", year: 2024, kind: "movie", confidence: 0.98, source: "provider", resolutionStatus: "resolved" }, versions: [{ ...(group().versions[0] as any), id: "policy-v", reasons: [{ code: "hard_requirement_failed", message: "Requirement failed", facts: {} }] }] as any });
-    const recoverability = group({ identity: { title: "Recovery", normalizedTitle: "recovery", year: 2024, kind: "movie", confidence: 0.98, source: "provider", resolutionStatus: "resolved" }, versions: [{ ...(group().versions[0] as any), id: "recovery-v" }] as any });
+    const policy = group({ identity: { title: "Policy", normalizedTitle: "policy", year: 2024, kind: "movie", confidence: 0.98, source: "provider", resolutionStatus: "resolved", tmdbId: "policy-tmdb" }, versions: [{ ...(group().versions[0] as any), id: "policy-v", reasons: [{ code: "hard_requirement_failed", message: "Requirement failed", facts: {} }] }] as any });
+    const recoverability = group({ identity: { title: "Recovery", normalizedTitle: "recovery", year: 2024, kind: "movie", confidence: 0.98, source: "provider", resolutionStatus: "resolved", tmdbId: "recovery-tmdb" }, versions: [{ ...(group().versions[0] as any), id: "recovery-v" }] as any });
     const result = buildUnifiedReviewQueue([policy, recoverability]);
     expect(result.entries.find((entry) => entry.title === "Policy")?.issueTypes).toEqual(["POLICY_REVIEW"]);
     expect(result.entries.find((entry) => entry.title === "Recovery")?.issueTypes).toEqual(["RECOVERABILITY_ISSUE"]);
@@ -59,9 +59,10 @@ describe("unified Media Manager review queue", () => {
   test("does not expose fallback metadata as an identity action when the blocker is recovery", () => {
     const fallback = group({ identity: { title: "Fallback", normalizedTitle: "fallback", year: 2024, kind: "movie", confidence: 0.8, source: "provider", resolutionStatus: "fallback" } });
     const result = buildUnifiedReviewQueue([fallback]);
-    expect(result.entries[0].issueTypes).toEqual(["RECOVERABILITY_ISSUE"]);
+    expect(result.entries[0].issueTypes).toContain("IDENTITY_ISSUE");
+    expect(result.entries[0].issueTypes).toContain("RECOVERABILITY_ISSUE");
     expect(result.entries[0].allowedActions).toContain("DETAILS");
-    expect(result.entries[0].allowedActions).not.toContain("RESOLVE_IDENTITY");
+    expect(result.entries[0].allowedActions).toContain("RESOLVE_IDENTITY");
   });
 
   test("deduplicates Organizer and policy issues for the same canonical identity", () => {
@@ -81,6 +82,15 @@ describe("unified Media Manager review queue", () => {
     expect(result.entries).toHaveLength(1);
     expect(result.entries[0].issueTypes).toContain("IDENTITY_ISSUE");
     expect(result.entries[0].issueTypes).toContain("RECOVERABILITY_ISSUE");
+  });
+
+  test("groups unresolved episodes from the same title and season into one identity review", () => {
+    const first = group({ id: "episode-1", identity: { title: "Silo", normalizedTitle: "silo", year: undefined, kind: "episode", season: 3, episode: 1, confidence: 0.98, source: "provider", resolutionStatus: "uncertain" }, versions: [{ ...(group().versions[0] as any), id: "silo-s03e01" }] as any });
+    const second = group({ id: "episode-2", identity: { title: "Silo", normalizedTitle: "silo", year: undefined, kind: "episode", season: 3, episode: 2, confidence: 0.98, source: "provider", resolutionStatus: "uncertain" }, versions: [{ ...(group().versions[0] as any), id: "silo-s03e02" }] as any });
+    const result = buildUnifiedReviewQueue([first, second]);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].issueTypes).toContain("IDENTITY_ISSUE");
+    expect(result.entries[0].versionIds.sort()).toEqual(["silo-s03e01", "silo-s03e02"]);
   });
 
   test("does not merge same-title content with different canonical identities", () => {
