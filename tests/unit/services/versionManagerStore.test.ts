@@ -34,6 +34,36 @@ describe("version manager policy persistence", () => {
     expect(getVersionManagerScanJob(job.id)?.status).toBe("FAILED");
   });
 
+  test("keeps mirrored releases isolated by managed provider", () => {
+    const sharedInfohash = "0123456789abcdef0123456789abcdef01234567";
+    const groupFor = (provider: string, torrentId: string) => [{
+      id: `movie:934866:${provider}`,
+      identity: { kind: "movie", title: "Bad Genius", year: 2024, tmdbId: "934866", confidence: 1 },
+      versions: [{
+        id: `${provider}:${torrentId}:bad-genius.mkv`,
+        fingerprint: {
+          identity: { kind: "movie", title: "Bad Genius", year: 2024, tmdbId: "934866", confidence: 1 },
+          storage: { provider, torrentId, path: "Bad Genius (2024).mkv", size: 2_903_300_815, infohash: sharedInfohash },
+        },
+        decision: "KEEP",
+        reasons: [],
+        evaluations: [],
+      }],
+    }] as any;
+
+    saveVersionManagerSnapshot(groupFor("alldebrid", "642340852"), [], { providerId: "alldebrid", policyHash: "ad", status: "VALID" });
+    saveVersionManagerSnapshot(groupFor("realdebrid", "A6TNSNV6ND33Q"), [], { providerId: "realdebrid", policyHash: "rd", status: "VALID" });
+
+    const alldebrid = getLatestVersionManagerSnapshot("alldebrid");
+    const realdebrid = getLatestVersionManagerSnapshot("realdebrid");
+    expect(alldebrid?.providerId).toBe("alldebrid");
+    expect(alldebrid?.groups[0].versions).toHaveLength(1);
+    expect(alldebrid?.groups[0].versions[0].fingerprint.storage.provider).toBe("alldebrid");
+    expect(realdebrid?.providerId).toBe("realdebrid");
+    expect(realdebrid?.groups[0].versions).toHaveLength(1);
+    expect(realdebrid?.groups[0].versions[0].fingerprint.storage.provider).toBe("realdebrid");
+  });
+
   test("persists retention preferences used by delete impact evaluation", () => {
     const original = getVersionManagerPolicy();
     try {

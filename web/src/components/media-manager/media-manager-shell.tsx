@@ -128,9 +128,10 @@ async function readJsonResponse<T>(response: Response, operation: string): Promi
   return body as T;
 }
 
-async function refreshVersionManagerInventory(): Promise<void> {
+async function refreshVersionManagerInventory(providerId: string): Promise<void> {
+  const providerQuery = `provider=${encodeURIComponent(providerId)}`;
   const started = await readJsonResponse<any>(
-    await fetch("/api/version-manager/scan", { method: "POST", cache: "no-store" }),
+    await fetch(`/api/version-manager/scan?${providerQuery}`, { method: "POST", cache: "no-store" }),
     "Starting inventory refresh",
   );
   const jobId = String(started.job?.id || "");
@@ -153,6 +154,7 @@ async function refreshVersionManagerInventory(): Promise<void> {
 function IdentityResolver({
   reviewId,
   versionGroupId,
+  providerId,
   identity,
   initialQuery,
   initialType,
@@ -163,6 +165,7 @@ function IdentityResolver({
 }: {
   reviewId?: string;
   versionGroupId?: string;
+  providerId?: string;
   identity?: Record<string, unknown>;
   initialQuery?: string;
   initialType?: "movie" | "tv";
@@ -207,12 +210,12 @@ function IdentityResolver({
       };
       const response = await fetch(reviewId ? `/api/organizer/review/${encodeURIComponent(reviewId)}` : "/api/version-manager/identity/override", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify(reviewId ? { decision: "accepted", override } : { identity, versionGroupId, override }),
+        body: JSON.stringify(reviewId ? { decision: "accepted", override } : { provider: providerId, identity, versionGroupId, override }),
       });
       const body = await readJsonResponse<any>(response, "Saving identity match");
       let evaluation = body;
       if (reviewId && identity) {
-        const reevaluate = await fetch("/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ identity, override }) });
+        const reevaluate = await fetch("/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: providerId, identity, override }) });
         evaluation = await readJsonResponse<any>(reevaluate, "Re-evaluating identity");
       }
       setMessage(evaluation.reevaluated ? "Manual match saved and policy reevaluated." : "Manual match saved; it will be applied on the next cached evaluation.");
@@ -225,11 +228,11 @@ function IdentityResolver({
     if (!reviewId && !identity) return;
     setBusy(true); setMessage("");
     try {
-      const response = await fetch(reviewId ? `/api/organizer/review/${encodeURIComponent(reviewId)}` : "/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(reviewId ? { action: "clear-match" } : { action: "clear", identity, versionGroupId }) });
+      const response = await fetch(reviewId ? `/api/organizer/review/${encodeURIComponent(reviewId)}` : "/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(reviewId ? { action: "clear-match" } : { provider: providerId, action: "clear", identity, versionGroupId }) });
       const body = await readJsonResponse<any>(response, "Clearing manual identity");
       let evaluation = body;
       if (reviewId && identity) {
-        const reevaluate = await fetch("/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ action: "clear", identity }) });
+        const reevaluate = await fetch("/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: providerId, action: "clear", identity }) });
         evaluation = await readJsonResponse<any>(reevaluate, "Re-evaluating identity");
       }
       setMessage(evaluation.reevaluated ? "Manual match cleared and policy reevaluated." : "Manual match cleared; automatic resolver will be used on the next evaluation.");
@@ -328,6 +331,29 @@ function useJson<T>(url: string, enabled = true) {
   return { data, loading, error, reload: load };
 }
 
+function useMediaManagerProvider() {
+  const providerData = useJson<any>("/api/version-manager/providers");
+  const [providerId, setProviderId] = useState("");
+  useEffect(() => {
+    const providers = providerData.data?.providers || [];
+    if (!providers.length) return;
+    const saved = window.localStorage.getItem("media-manager-provider");
+    const next = providers.some((provider: any) => provider.id === saved)
+      ? saved
+      : (providers.find((provider: any) => provider.default)?.id || providers[0].id);
+    setProviderId((current) => providers.some((provider: any) => provider.id === current) ? current : next);
+  }, [providerData.data]);
+  const selectProvider = useCallback((value: string) => {
+    setProviderId(value);
+    window.localStorage.setItem("media-manager-provider", value);
+  }, []);
+  return { providers: providerData.data?.providers || [], providerId, selectProvider, loading: providerData.loading, error: providerData.error };
+}
+
+function ProviderSelector({ providers, value, onChange }: { providers: any[]; value: string; onChange: (value: string) => void }) {
+  return <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-3"><div><p className="text-sm font-semibold">Managed library</p><p className="text-xs text-muted-foreground">Every view and action below is limited to this debrid service.</p></div><select aria-label="Managed library" className="min-w-48 rounded border bg-background p-2 text-sm" value={value} onChange={(event) => onChange(event.target.value)}>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.name || provider.id}</option>)}</select></div>;
+}
+
 function SectionNav({ view, reviewCount }: { view: View; reviewCount?: number }) {
   const links = [
     ["Overview", "/media-manager"],
@@ -384,7 +410,7 @@ function Header({
   );
 }
 
-function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; onClose: () => void; onReviewAction?: (id: string, body: Record<string, unknown>, item?: any) => void; onSaved?: () => void }) {
+function DetailPanel({ item, providerId, onClose, onReviewAction, onSaved }: { item: any; providerId?: string; onClose: () => void; onReviewAction?: (id: string, body: Record<string, unknown>, item?: any) => void; onSaved?: () => void }) {
   const review = item.review || (item.parsed ? item : undefined);
   const identity = item.identity || item.contentIdentity || (review ? { title: review.parsed?.title, year: review.parsed?.year, kind: review.parsed?.kind, confidence: review.parsed?.confidence, source: review.override ? "manual" : "unknown" } : item.versions?.[0]?.fingerprint?.identity || {});
   const shownIdentity = displayIdentity(item);
@@ -463,7 +489,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
           </dl>
           {review && <div className="mt-4 rounded border bg-muted/20 p-3"><h3 className="mb-2 font-semibold">Detected identity</h3><p><b>Title:</b> {review.parsed?.title || "—"}</p><p><b>Type:</b> {review.parsed?.kind || "—"}</p><p><b>Status:</b> {review.parsed?.status || "—"}</p><p><b>Confidence:</b> {review.parsed?.confidence ?? "—"}</p><p><b>Reason:</b> {review.parsed?.reason || "—"}</p></div>}
           {review && <div className="mt-4 rounded border border-amber-500/40 bg-amber-500/5 p-3"><h3 className="mb-2 font-semibold">Problem and required action</h3><p>{(item.blockers || item.reasonCodes || []).join(" · ") || "The item requires operator review before an automatic decision is safe."}</p><p className="mt-1 text-xs text-muted-foreground">Identity confidence: {identity.confidence ?? "unknown"} · Recoverability: {item.recoverability?.status || "unknown"}</p><p className="mt-1 break-all text-xs text-muted-foreground">Source: {item.sourceBasename || review.sourceBasename || review.sourcePath || "not available"}</p></div>}
-          {(identity.title || item.title) && (review || item.allowIdentityActions !== false) && <div className="mt-4"><h3 className="mb-2 font-semibold">Identity actions</h3><IdentityResolver reviewId={item.reviewId || review?.id} versionGroupId={item.versionGroupId} identity={{ title: identity.title || item.title, year: identity.year, kind: identity.kind, mediaType: identity.mediaType, tmdbId: identity.tmdbId }} initialQuery={identity.title || item.title} initialType={identity.kind === "episode" || identity.mediaType === "tv" ? "tv" : "movie"} initialYear={identity.year} existingOverride={item.override || review?.override || (identity.source === "manual" ? { tmdbId: identity.tmdbId } : undefined)} actionLabel={identityAction} onSaved={onSaved} /></div>}
+          {(identity.title || item.title) && (review || item.allowIdentityActions !== false) && <div className="mt-4"><h3 className="mb-2 font-semibold">Identity actions</h3><IdentityResolver reviewId={item.reviewId || review?.id} versionGroupId={item.versionGroupId} providerId={providerId} identity={{ title: identity.title || item.title, year: identity.year, kind: identity.kind, mediaType: identity.mediaType, tmdbId: identity.tmdbId }} initialQuery={identity.title || item.title} initialType={identity.kind === "episode" || identity.mediaType === "tv" ? "tv" : "movie"} initialYear={identity.year} existingOverride={item.override || review?.override || (identity.source === "manual" ? { tmdbId: identity.tmdbId } : undefined)} actionLabel={identityAction} onSaved={onSaved} /></div>}
           {review && onReviewAction && <div className="mt-4 flex flex-wrap gap-2">{review.decision === "dismissed" ? <Button size="sm" onClick={() => onReviewAction(review.id, { action: "retry" }, review)}>Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => onReviewAction(review.id, { decision: "accepted" }, review)}>Accept as detected</Button><Button size="sm" variant="outline" onClick={() => onReviewAction(review.id, { action: "retry" }, review)}>Retry / Resume</Button><Button size="sm" variant="destructive" onClick={() => onReviewAction(review.id, { decision: "dismissed" }, review)}>Dismiss</Button></>}</div>}
         </section>
         <section>
@@ -539,10 +565,12 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
 }
 
 function Overview() {
-  const status = useJson<any>("/api/version-manager/status");
+  const provider = useMediaManagerProvider();
+  const providerQuery = provider.providerId ? `provider=${encodeURIComponent(provider.providerId)}` : "";
+  const status = useJson<any>(`/api/version-manager/status?${providerQuery}`, Boolean(provider.providerId));
   const deleteDryRun = status.data?.policy?.safety?.deleteDryRun !== false;
   const migration = useJson<any>("/api/version-manager/migration/state");
-  const reviewQueue = useJson<any>("/api/version-manager/review?status=pending");
+  const reviewQueue = useJson<any>(`/api/version-manager/review?status=pending&${providerQuery}`, Boolean(provider.providerId));
   const profiles = status.data?.profiles || [];
   const identityIssues = reviewQueue.data?.summary?.identityIssues ?? 0;
   const latestScan = status.data?.latestScan;
@@ -557,7 +585,8 @@ function Overview() {
     let cancelled = false;
     const loadJob = async () => {
       try {
-        const response = await fetch("/api/version-manager/scan", { cache: "no-store" });
+        if (!provider.providerId) return;
+        const response = await fetch(`/api/version-manager/scan?${providerQuery}`, { cache: "no-store" });
         const body = await readJsonResponse<any>(response, "Scan status");
         if (!cancelled) setScanJob(body.job || null);
       } catch (value: any) {
@@ -566,7 +595,7 @@ function Overview() {
     };
     void loadJob();
     return () => { cancelled = true; };
-  }, []);
+  }, [provider.providerId, providerQuery]);
 
   useEffect(() => {
     if (!scanning || !scanJob?.id) return;
@@ -578,19 +607,19 @@ function Overview() {
         if (["COMPLETED", "FAILED", "PARTIAL"].includes(body.job?.status)) {
           await status.reload();
           if (body.job.status === "COMPLETED") {
-            const result = await fetch("/api/version-manager/preview", { cache: "no-store" });
+            const result = await fetch(`/api/version-manager/preview?${providerQuery}`, { cache: "no-store" });
             setScan(await readJsonResponse<any>(result, "Inventory snapshot"));
           }
         }
       } catch (value: any) { setScanError(value.message || "Unable to read scan status"); }
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [scanJob?.id, scanning, status.reload]);
+  }, [scanJob?.id, scanning, status.reload, providerQuery]);
 
   async function runScan() {
     setScanError("");
     try {
-      const response = await fetch("/api/version-manager/scan", { method: "POST", cache: "no-store" });
+      const response = await fetch(`/api/version-manager/scan?${providerQuery}`, { method: "POST", cache: "no-store" });
       const body = await readJsonResponse<any>(response, "Starting library scan");
       setScanJob(body.job);
     } catch (value: any) {
@@ -605,6 +634,8 @@ function Overview() {
         description="Inventory, identity, versions, acquisition and recovery in one place."
         reviewCount={identityIssues}
       />
+      <ProviderSelector providers={provider.providers} value={provider.providerId} onChange={(value) => { provider.selectProvider(value); setScan(null); setScanJob(null); setScanError(""); }} />
+      <ErrorBox error={provider.error} />
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card p-4">
         <div>
           <p className="font-medium">Library status</p>
@@ -788,6 +819,8 @@ function LibraryReleaseList({
 
 function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const pathname = usePathname();
+  const provider = useMediaManagerProvider();
+  const providerQuery = provider.providerId ? `provider=${encodeURIComponent(provider.providerId)}` : "";
   const [preset, setPreset] = useState("all");
   const [query, setQuery] = useState("");
   const [profile, setProfile] = useState("all");
@@ -804,7 +837,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const [selectedDeleteItems, setSelectedDeleteItems] = useState<Map<string, SelectedDeleteItem>>(new Map());
   const [deleteNotice, setDeleteNotice] = useState("");
   const [deleteError, setDeleteError] = useState("");
-  const reviewQueue = useJson<any>("/api/version-manager/review?status=pending");
+  const reviewQueue = useJson<any>(`/api/version-manager/review?status=pending&${providerQuery}`, Boolean(provider.providerId));
   const [identityOnly, setIdentityOnly] = useState(false);
   const identityIssueCount = reviewQueue.data?.summary?.identityIssues ?? 0;
   useEffect(() => {
@@ -813,20 +846,20 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     setIdentityOnly(params.get("reason") === "identity");
   }, [pathname, initialPreset]);
   const preview = useJson<any>(
-    "/api/version-manager/preview",
-    preset === "all",
+    `/api/version-manager/preview?${providerQuery}`,
+    preset === "all" && Boolean(provider.providerId),
   );
   const deletePreview = useJson<any>(
-    "/api/version-manager/delete-preview",
-    preset === "all" || preset === "delete-preview" || preset === "delete",
+    `/api/version-manager/delete-preview?${providerQuery}`,
+    (preset === "all" || preset === "delete-preview" || preset === "delete") && Boolean(provider.providerId),
   );
   const deleteImpact = useJson<any>(
-    `/api/version-manager/delete?scope=${encodeURIComponent(deleteScope)}&q=${encodeURIComponent(query)}`,
-    preset === "delete-preview" || preset === "delete",
+    `/api/version-manager/delete?scope=${encodeURIComponent(deleteScope)}&q=${encodeURIComponent(query)}&${providerQuery}`,
+    (preset === "delete-preview" || preset === "delete") && Boolean(provider.providerId),
   );
   useEffect(() => {
     setSelectedDeleteItems(new Map());
-  }, [deleteScope, query]);
+  }, [deleteScope, query, provider.providerId]);
   const visibleDeleteItems = deleteImpact.data?.items || [];
   const visibleRecommendedDeleteRefs = recommendedDeleteRefs(visibleDeleteItems);
   function changeDeleteSelection(add: SelectedDeleteItem[], removeKeys: string[]) {
@@ -859,6 +892,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     });
   }
   async function executeBulkDelete(items: SelectedDeleteItem[]) {
+    if (!provider.providerId || items.some((item) => item.provider !== provider.providerId)) throw new Error("The selection does not belong to the currently managed provider");
     const deleteContext = preset === "all" ? deletePreview.data : deleteImpact.data;
     const dryRun = deleteContext?.dryRun !== false;
     const selection = items.map(({ provider, providerItemId }) => ({ provider, providerItemId }));
@@ -882,7 +916,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       setDeleteBusy("refresh");
       setDeleteNotice(`Deleted ${items.length} selected ProviderItems. Refreshing the library inventory…`);
       try {
-        await refreshVersionManagerInventory();
+        await refreshVersionManagerInventory(provider.providerId);
         await Promise.all([preview.reload(), deleteImpact.reload(), deletePreview.reload()]);
         setDeleteNotice(`Deleted ${items.length} selected ProviderItems. The library inventory is now up to date.`);
       } catch (refreshError: any) {
@@ -895,7 +929,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
         setDeleteBusy("refresh");
         setDeleteNotice(`${staleIds.length || "One or more"} selected ProviderItem${staleIds.length === 1 ? " is" : "s are"} already absent. No additional ProviderItems were deleted; refreshing the library before another selection…`);
         try {
-          await refreshVersionManagerInventory();
+          await refreshVersionManagerInventory(provider.providerId);
           await Promise.all([preview.reload(), deleteImpact.reload(), deletePreview.reload()]);
           setDeleteNotice("The library inventory was refreshed. Review the remaining candidates and confirm a new selection.");
         } catch (refreshError: any) {
@@ -914,19 +948,19 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     setConfirmation({ title: `Delete ${items.length} selected ProviderItems?`, description: "The complete selection will be revalidated as one retention decision. A policy-retained release may be deleted only when an admissible unselected alternative remains for every affected film or episode.", context: <div className="space-y-1"><p><b>Selected:</b> {items.length} physical ProviderItems</p><p><b>Known selected size:</b> {totalGiB ? `${totalGiB.toFixed(2)} GiB` : "unknown"}</p></div>, confirmLabel: `Delete ${items.length} selected`, variant: "destructive", onConfirm: () => executeBulkDelete(items) });
   }
   const reviewPreview = useJson<any>(
-    "/api/version-manager/preview",
-    preset === "review",
+    `/api/version-manager/preview?${providerQuery}`,
+    preset === "review" && Boolean(provider.providerId),
   );
   const missing = useJson<any>(
-    "/api/version-manager/missing",
-    preset === "missing",
+    `/api/version-manager/missing?${providerQuery}`,
+    preset === "missing" && Boolean(provider.providerId),
   );
   const [review, setReview] = useState<any>(null);
   const [reviewError, setReviewError] = useState("");
   const loadReview = useCallback(async () => {
     try {
       const response = await fetch(
-        `/api/version-manager/review?status=${reviewStatus}`,
+        `/api/version-manager/review?status=${reviewStatus}&${providerQuery}`,
         { cache: "no-store" },
       );
       const body = await readJsonResponse<any>(response, "Review queue request");
@@ -935,7 +969,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     } catch (value: any) {
       setReviewError(value.message || "Unable to load review");
     }
-  }, [reviewStatus]);
+  }, [reviewStatus, providerQuery]);
   useEffect(() => {
     if (preset === "review") void loadReview();
   }, [loadReview, preset, reviewStatus]);
@@ -1026,6 +1060,8 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
         description="One operational view for content, missing profiles and review work."
         reviewCount={identityIssueCount}
       />
+      <ProviderSelector providers={provider.providers} value={provider.providerId} onChange={(value) => { provider.selectProvider(value); setSelected(null); setSelectedDeleteItems(new Map()); setReview(null); setDeleteNotice(""); setDeleteError(""); }} />
+      <ErrorBox error={provider.error} />
       <div className="flex flex-wrap gap-2">
         <Button
           asChild
@@ -1157,7 +1193,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                       </div>
                     </CardContent>
                   </Card>
-                  {selected?.id === item.id && <DetailPanel item={{ ...item, allowIdentityActions: false }} onClose={() => setSelected(null)} />}
+                  {selected?.id === item.id && <DetailPanel providerId={provider.providerId} item={{ ...item, allowIdentityActions: false }} onClose={() => setSelected(null)} />}
                 </div>;
               })}
               {needs.length === 0 && (
@@ -1235,7 +1271,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                         const requirements = failedRequirementText(version);
                         return <div key={version.id} className="rounded border p-3 text-xs"><p className="break-all font-medium">{String(storage.path || version.releaseName || version.filename || version.id).split(/[\\/]/).pop()}</p><p className="mt-1 text-muted-foreground">{video.resolution || "resolution unknown"} · {video.codec || "codec unknown"} · audio {uniqueLanguages(fingerprint.audio || []) || "unknown"} · {formatSize(storage.size)} · {storage.provider || "provider unknown"} · ProviderItem {storage.torrentId || "unknown"}</p>{requirements.map((reason, index) => <p key={index} className="mt-1 text-amber-700">{reason}</p>)}</div>;
                       })}
-                      {entry.issueTypes?.includes("IDENTITY_ISSUE") && entry.decision !== "dismissed" && <IdentityResolver reviewId={entry.organizerReview?.id} versionGroupId={entry.versionGroupId} identity={entry.identity} initialQuery={entry.title || entry.sourceBasename} initialType={entry.kind === "episode" ? "tv" : "movie"} initialYear={entry.year} existingOverride={entry.organizerReview?.override} actionLabel={entry.organizerReview?.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />}
+                      {entry.issueTypes?.includes("IDENTITY_ISSUE") && entry.decision !== "dismissed" && <IdentityResolver reviewId={entry.organizerReview?.id} versionGroupId={entry.versionGroupId} providerId={provider.providerId} identity={entry.identity} initialQuery={entry.title || entry.sourceBasename} initialType={entry.kind === "episode" ? "tv" : "movie"} initialYear={entry.year} existingOverride={entry.organizerReview?.override} actionLabel={entry.organizerReview?.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />}
                       <div className="flex flex-wrap gap-2">
                         {entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "accepted" }, entry.organizerReview)}><Check className="mr-2 h-4 w-4" />Accept as detected</Button><Button size="sm" variant="destructive" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "dismissed" }, entry.organizerReview)}><X className="mr-2 h-4 w-4" />Dismiss</Button><Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry.organizerReview)}><RefreshCw className="mr-2 h-4 w-4" />Retry / Resume</Button></>)}
                         {!entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.key, { action: "restore" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.key, { action: "dismiss" }, entry)}><X className="mr-2 h-4 w-4" />Dismiss</Button>)}
@@ -1243,7 +1279,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                       </div>
                     </CardContent>
                   </Card>
-                  {expanded && <DetailPanel item={enriched} onClose={() => setSelected(null)} onReviewAction={requestReviewAction} onSaved={() => { void loadReview(); setSelected(null); }} />}
+                  {expanded && <DetailPanel providerId={provider.providerId} item={enriched} onClose={() => setSelected(null)} onReviewAction={requestReviewAction} onSaved={() => { void loadReview(); setSelected(null); }} />}
                 </div>;
               })}
               {review && contentReviewEntries.filter((entry: any) => {
@@ -1259,7 +1295,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
         </>
       )}
       {selected && preset !== "missing" && preset !== "review" && (
-        <DetailPanel item={selected} onClose={() => setSelected(null)} onReviewAction={requestReviewAction} onSaved={() => { void loadReview(); setSelected(null); }} />
+        <DetailPanel providerId={provider.providerId} item={selected} onClose={() => setSelected(null)} onReviewAction={requestReviewAction} onSaved={() => { void loadReview(); setSelected(null); }} />
       )}
       {confirmation && <ConfirmationDialog open={Boolean(confirmation)} onOpenChange={(open) => !open && setConfirmation(null)} title={confirmation.title} description={confirmation.description} context={confirmation.context} confirmLabel={confirmation.confirmLabel} variant={confirmation.variant} onConfirm={async () => { await confirmation.onConfirm(); setConfirmation(null); }} />}
     </div>
@@ -1877,7 +1913,9 @@ function LanguageCodePicker({ label, values, onChange, ariaLabel, ordered = fals
 }
 
 function SettingsView({ section = "profiles" }: { section?: string }) {
-  const status = useJson<any>("/api/version-manager/status");
+  const provider = useMediaManagerProvider();
+  const providerQuery = provider.providerId ? `provider=${encodeURIComponent(provider.providerId)}` : "";
+  const status = useJson<any>(`/api/version-manager/status?${providerQuery}`, Boolean(provider.providerId));
   const sectionIds = ["profiles", "languages", "rules", "safety", "retention"];
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [policy, setPolicy] = useState<any>({ acquisitionMode: "ARR", enableRemote: false, acquireMissingRemote: false, preferCompletePack: false, safety: { deleteDryRun: true, requireRecoverableBeforeDelete: true, allowDeleteWhenIdentityUncertain: false, allowDeleteWhenMetadataIncomplete: false } });
@@ -1958,7 +1996,7 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
     setSaved("");
     setSaveError("");
     try {
-      const response = await fetch("/api/version-manager/profiles/preview", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ profiles, policy }) });
+      const response = await fetch("/api/version-manager/profiles/preview", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: provider.providerId, profiles, policy }) });
       const payload = await response.json();
       if (!response.ok) throw new Error(payload.error || "Impact preview unavailable");
       setImpact(payload);
@@ -1987,6 +2025,8 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
         title="Media Manager Settings"
         description="Configure local retention criteria and safety for files already present."
       />
+      <ProviderSelector providers={provider.providers} value={provider.providerId} onChange={(value) => { provider.selectProvider(value); setImpact(null); }} />
+      <ErrorBox error={provider.error} />
       <Card id="media-manager-profiles" className="scroll-mt-20">
         <CardHeader><CardTitle className="text-base">How retention decides</CardTitle></CardHeader>
         <CardContent className="space-y-4">

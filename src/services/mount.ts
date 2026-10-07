@@ -240,12 +240,13 @@ export async function getMountReadiness(): Promise<MountReadiness> {
 }
 
 /** Returns readiness independently for each configured provider/WebDAV root. */
-export async function getConfiguredMountReadiness(): Promise<MountReadiness[]> {
+export async function getConfiguredMountReadiness(providerIds?: string[]): Promise<MountReadiness[]> {
   const roots: string[] = [];
   if (config.runMount) {
-    roots.push(...config.providers.map((provider) => path.join(config.mountBase, provider)));
+    const providers = providerIds?.length ? config.providers.filter((provider) => providerIds.includes(provider)) : config.providers;
+    roots.push(...providers.map((provider) => path.join(config.mountBase, provider)));
   }
-  if (config.webdavMountsEnabled) roots.push(...getWebdavOrganiserRoots());
+  if (!providerIds?.length && config.webdavMountsEnabled) roots.push(...getWebdavOrganiserRoots());
   if (roots.length === 0) return [];
   return Promise.all(roots.map((root) => evaluateMountReadiness([root])));
 }

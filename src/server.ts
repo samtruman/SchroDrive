@@ -64,8 +64,15 @@ async function loadVersionManagerInventory(stats?: MediaManagerInventoryStats): 
   return loadMediaManagerInventory(undefined, stats);
 }
 
-function readVersionManagerGroups(): { groups: any[]; snapshotId: string; snapshotCreatedAt: string; snapshotPolicyHash?: string } | null {
-  const snapshot = getLatestVersionManagerSnapshot();
+function configuredMediaManagerProvider(requested?: unknown): DebridProvider | undefined {
+  const providers = registry.configured();
+  const id = typeof requested === "string" ? requested.trim().toLowerCase() : "";
+  if (id) return providers.find((provider) => provider.id === id);
+  return providers.find((provider) => provider.id === "alldebrid") || providers[0];
+}
+
+function readVersionManagerGroups(providerId: string): { groups: any[]; snapshotId: string; snapshotCreatedAt: string; snapshotPolicyHash?: string; providerId: string } | null {
+  const snapshot = getLatestVersionManagerSnapshot(providerId);
   if (!snapshot) return null;
   const storedVersions = snapshot.groups.flatMap((group: any) => (group.versions || []).map((version: any) => ({ id: version.id, fingerprint: version.fingerprint })));
   const evaluated = applyManualIdentityOverrides(storedVersions);
@@ -74,6 +81,7 @@ function readVersionManagerGroups(): { groups: any[]; snapshotId: string; snapsh
     snapshotId: snapshot.id,
     snapshotCreatedAt: snapshot.createdAt,
     snapshotPolicyHash: snapshot.policyHash,
+    providerId,
   };
 }
 
@@ -228,11 +236,19 @@ export function startServer() {
    * The first milestone is deliberately read-only and never calls a provider
    * delete operation.
    */
+  app.get("/api/version-manager/providers", (_req, res) => {
+    const configured = registry.configured().sort((left, right) => Number(right.id === "alldebrid") - Number(left.id === "alldebrid"));
+    const providers = configured.map((provider, index) => ({ id: provider.id, name: provider.displayName, default: index === 0 }));
+    res.json({ ok: true, providers });
+  });
+
   app.get("/api/version-manager/status", (_req, res) => {
+    const provider = configuredMediaManagerProvider(_req.query.provider);
+    if (!provider) return res.status(400).json({ ok: false, error: "Selected debrid provider is not configured" });
     const profiles = getVersionProfiles();
     const policy = getVersionManagerPolicy();
     const currentPolicyHash = versionManagerPolicyHash(policy, profiles);
-    const evaluated = readVersionManagerGroups();
+    const evaluated = readVersionManagerGroups(provider.id);
     res.json({
       ok: true,
       enabled: true,
@@ -241,7 +257,8 @@ export function startServer() {
       policy,
       policyHash: versionManagerPolicyHash(policy, profiles),
       profiles,
-      latestScan: getLatestVersionManagerScan() || null,
+      provider: { id: provider.id, name: provider.displayName },
+      latestScan: getLatestVersionManagerScan(provider.id) || null,
       policyEvaluation: evaluated ? {
         status: evaluated.snapshotPolicyHash === currentPolicyHash ? "CURRENT" : "STALE",
         snapshotPolicyHash: evaluated.snapshotPolicyHash || null,
@@ -250,7 +267,7 @@ export function startServer() {
         evaluatedAt: evaluated.snapshotCreatedAt,
         counts: summarizeVersionManagerGroups(evaluated.groups, policy, profiles),
       } : { status: "NOT_EVALUATED", snapshotPolicyHash: null, currentPolicyHash },
-      scanJob: getVersionManagerScanRuntimeStatus(),
+      scanJob: getVersionManagerScanRuntimeStatus(provider.id),
     });
   });
 
@@ -264,14 +281,16 @@ export function startServer() {
   app.post("/api/version-manager/profiles/preview", (req, res) => {
     try {
       if (!Array.isArray(req.body?.profiles) || req.body.profiles.length === 0) return res.status(400).json({ ok: false, error: "profiles must be a non-empty array" });
-      const snapshot = getLatestVersionManagerSnapshot();
+      const provider = configuredMediaManagerProvider(req.body?.provider);
+      if (!provider) return res.status(400).json({ ok: false, error: "Selected debrid provider is not configured" });
+      const snapshot = getLatestVersionManagerSnapshot(provider.id);
       if (!snapshot || snapshot.status !== "VALID") return res.status(409).json({ ok: false, error: "No valid inventory snapshot is available" });
       const profiles = req.body.profiles.map((profile: any) => ({ ...profile, arrProfiles: profile.arrProfiles ? {
         movie: profile.arrProfiles.movie ? { ...profile.arrProfiles.movie, provider: "radarr" } : undefined,
         tv: profile.arrProfiles.tv ? { ...profile.arrProfiles.tv, provider: "sonarr" } : undefined,
       } : undefined, hardRequirements: profile.hardRequirements ? validateRule(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? validateScoringRules(profile.scoringRules) : undefined }));
       const policy = { ...getVersionManagerPolicy(), ...(req.body.policy || {}), safety: { ...getVersionManagerPolicy().safety, ...(req.body.policy?.safety || {}) } };
-      const records = applyManualIdentityOverrides(getLatestVersionManagerRecords());
+      const records = applyManualIdentityOverrides(getLatestVersionManagerRecords(provider.id));
       const current = evaluateVersionGroups(records, getVersionProfiles(), getVersionManagerPolicy());
       const proposed = evaluateVersionGroups(records, profiles, policy);
       const decisions = (groups: any[]) => groups.flatMap((group) => group.versions).reduce((counts: Record<string, number>, version: any) => { counts[version.decision] = (counts[version.decision] || 0) + 1; return counts; }, {});
@@ -284,19 +303,23 @@ export function startServer() {
 
   /** POST /api/version-manager/scan — starts or joins the canonical scan job. */
   app.post("/api/version-manager/scan", (_req, res) => {
-    const job = startVersionManagerScan();
-    res.status(202).json({ ok: true, job, statusUrl: `/api/version-manager/scan/${encodeURIComponent(job.id)}`, resultUrl: "/api/version-manager/preview" });
+    const provider = configuredMediaManagerProvider(_req.query.provider || _req.body?.provider);
+    if (!provider) return res.status(400).json({ ok: false, error: "Selected debrid provider is not configured" });
+    const job = startVersionManagerScan(provider.id);
+    res.status(202).json({ ok: true, provider: provider.id, job, statusUrl: `/api/version-manager/scan/${encodeURIComponent(job.id)}`, resultUrl: `/api/version-manager/preview?provider=${encodeURIComponent(provider.id)}` });
   });
 
   /** GET /api/version-manager/scan — returns the current scan job, if any. */
   app.get("/api/version-manager/scan", (_req, res) => {
-    res.json({ ok: true, ...getVersionManagerScanRuntimeStatus() });
+    const provider = configuredMediaManagerProvider(_req.query.provider);
+    if (!provider) return res.status(400).json({ ok: false, error: "Selected debrid provider is not configured" });
+    res.json({ ok: true, provider: provider.id, ...getVersionManagerScanRuntimeStatus(provider.id) });
   });
 
   app.get("/api/version-manager/scan/:id", (req, res) => {
     const job = getVersionManagerScanStatus(String(req.params.id));
     if (!job) return res.status(404).json({ ok: false, error: "Scan job not found" });
-    return res.json({ ok: true, job, resultUrl: "/api/version-manager/preview" });
+    return res.json({ ok: true, job, resultUrl: `/api/version-manager/preview?provider=${encodeURIComponent(job.providerId)}` });
   });
 
   /**
@@ -305,13 +328,15 @@ export function startServer() {
    */
   app.get("/api/version-manager/preview", async (_req, res) => {
     try {
-      const snapshot = readVersionManagerGroups();
+      const provider = configuredMediaManagerProvider(_req.query.provider);
+      if (!provider) return res.status(400).json({ ok: false, error: "Selected debrid provider is not configured" });
+      const snapshot = readVersionManagerGroups(provider.id);
       if (!snapshot) return res.status(503).json({ ok: false, snapshotAvailable: false, error: "No valid inventory snapshot is available; start a scan" });
       const groups = snapshot.groups;
       const policy = getVersionManagerPolicy();
       const profiles = getVersionProfiles();
       const versions = groups.flatMap((group: any) => group.versions || []);
-      return res.json({ ok: true, mode: "dry-run", scanId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, policyHash: versionManagerPolicyHash(policy, profiles), inventoryCount: versions.length, groupCount: groups.length, groups });
+      return res.json({ ok: true, provider: provider.id, mode: "dry-run", scanId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, policyHash: versionManagerPolicyHash(policy, profiles), inventoryCount: versions.length, groupCount: groups.length, groups });
     } catch (err: any) {
       return res.status(500).json({ ok: false, error: err?.message || "Version Manager preview failed" });
     }
@@ -321,7 +346,9 @@ export function startServer() {
   app.get("/api/version-manager/delete-preview", async (_req, res) => {
     try {
       const startedAt = Date.now();
-      const snapshot = readVersionManagerGroups();
+      const provider = configuredMediaManagerProvider(_req.query.provider);
+      if (!provider) return res.status(400).json({ ok: false, error: "Selected debrid provider is not configured" });
+      const snapshot = readVersionManagerGroups(provider.id);
       if (!snapshot) return res.status(503).json({ ok: false, snapshotAvailable: false, error: "No valid inventory snapshot is available; start a scan" });
       const groups = snapshot.groups;
       const policy = getVersionManagerPolicy();
@@ -341,7 +368,7 @@ export function startServer() {
       const policyHash = versionManagerPolicyHash(policy, profiles);
       saveVersionManagerPreviewAudit({ policyHash, evaluatedAt, contentCount: counts.contents, versionGroupCount: counts.versionGroups, versionCount: counts.versions, keepCount: counts.KEEP, deleteCandidateCount: counts.DELETE_CANDIDATE, reviewCount: counts.REVIEW, primaryMissing: counts.primaryMissing, remoteMissing: counts.remoteMissing });
       const dryRun = policy.safety?.deleteDryRun !== false;
-      return res.json({ ok: true, readOnly: dryRun, mode: dryRun ? "DRY_RUN" : "LIVE", deleteExecutor: "enabled", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, evaluatedAt, policyVersion: policy.policyVersion || "1", policyHash, counts, groups, performance: { totalMs: Date.now() - startedAt, source: "persisted-snapshot" } });
+      return res.json({ ok: true, provider: provider.id, readOnly: dryRun, mode: dryRun ? "DRY_RUN" : "LIVE", deleteExecutor: "enabled", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, evaluatedAt, policyVersion: policy.policyVersion || "1", policyHash, counts, groups, performance: { totalMs: Date.now() - startedAt, source: "persisted-snapshot" } });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message || "Delete preview failed" });
     }
@@ -350,12 +377,14 @@ export function startServer() {
   /** Physical delete-unit impact. Execution mode is controlled by the persisted safety flag. */
   app.get("/api/version-manager/delete", (_req, res) => {
     try {
-      const snapshot = readVersionManagerGroups();
+      const provider = configuredMediaManagerProvider(_req.query.provider);
+      if (!provider) return res.status(400).json({ ok: false, error: "Selected debrid provider is not configured" });
+      const snapshot = readVersionManagerGroups(provider.id);
       if (!snapshot) return res.status(503).json({ ok: false, snapshotAvailable: false, error: "No valid inventory snapshot is available; start a scan" });
       const query = typeof _req.query.q === "string" ? _req.query.q : "";
       const scope = typeof _req.query.scope === "string" ? _req.query.scope : "all";
       const dryRun = getVersionManagerPolicy().safety?.deleteDryRun !== false;
-      return res.json({ ok: true, readOnly: dryRun, executorEnabled: true, dryRun, mode: dryRun ? "DRY_RUN" : "LIVE", scope, snapshotId: snapshot.snapshotId, items: buildDeleteImpact(snapshot.groups, query, scope) });
+      return res.json({ ok: true, provider: provider.id, readOnly: dryRun, executorEnabled: true, dryRun, mode: dryRun ? "DRY_RUN" : "LIVE", scope, snapshotId: snapshot.snapshotId, items: buildDeleteImpact(snapshot.groups, query, scope) });
     } catch (error: any) { return res.status(500).json({ ok: false, error: error?.message || "Delete impact unavailable" }); }
   });
 
@@ -371,7 +400,7 @@ export function startServer() {
     const selection = Array.isArray(req.body?.selection)
       ? req.body.selection.map((item: any) => ({ provider: String(item?.provider || ""), providerItemId: String(item?.providerItemId || "") })).filter((item: any) => item.provider && item.providerItemId)
       : undefined;
-    const snapshot = readVersionManagerGroups();
+    const snapshot = providerId ? readVersionManagerGroups(providerId) : null;
     const policyDryRun = getVersionManagerPolicy().safety?.deleteDryRun !== false;
     const dryRun = policyDryRun || req.body?.dryRun === true;
     const mode = dryRun ? "DRY_RUN" as const : "LIVE" as const;
@@ -397,7 +426,7 @@ export function startServer() {
     const selection = Array.isArray(req.body?.selection)
       ? req.body.selection.map((item: any) => ({ provider: String(item?.provider || ""), providerItemId: String(item?.providerItemId || "") })).filter((item: any) => item.provider && item.providerItemId)
       : undefined;
-    const snapshot = readVersionManagerGroups();
+    const snapshot = providerId ? readVersionManagerGroups(providerId) : null;
     const policyDryRun = getVersionManagerPolicy().safety?.deleteDryRun !== false;
     const dryRun = policyDryRun || req.body?.dryRun === true;
     const mode = dryRun ? "DRY_RUN" as const : "LIVE" as const;
@@ -432,14 +461,17 @@ export function startServer() {
   /** Read-only operator queue combining Organizer and policy/recoverability review. */
   app.get("/api/version-manager/review", async (req, res) => {
     try {
+      const provider = configuredMediaManagerProvider(req.query.provider);
+      if (!provider) return res.status(400).json({ ok: false, error: "Selected debrid provider is not configured" });
       const requestedStatus = String(req.query.status || "pending");
       const status = requestedStatus === "dismissed" || requestedStatus === "all" ? requestedStatus : "pending";
-      const snapshot = readVersionManagerGroups();
+      const snapshot = readVersionManagerGroups(provider.id);
       if (!snapshot) return res.status(503).json({ ok: false, snapshotAvailable: false, error: "No valid inventory snapshot is available; start a scan" });
       const groups = snapshot.groups;
       const organizerStatus = status === "all" ? undefined : status;
-      const organizers = listOrganizerReviews(true, organizerStatus);
-      res.json({ ok: true, readOnly: true, ...buildUnifiedReviewQueue(groups, organizers, status) });
+      const providerBasenames = new Set(groups.flatMap((group: any) => group.versions || []).map((version: any) => String(version.fingerprint?.storage?.path || "").split(/[\\/]/).pop()?.toLowerCase()).filter(Boolean));
+      const organizers = listOrganizerReviews(true, organizerStatus).filter((entry) => providerBasenames.has(String(entry.sourceBasename || "").toLowerCase()));
+      res.json({ ok: true, provider: provider.id, readOnly: true, ...buildUnifiedReviewQueue(groups, organizers, status) });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message || "Unified review queue failed" });
     }
@@ -465,7 +497,9 @@ export function startServer() {
    */
   app.get("/api/version-manager/missing", async (_req, res) => {
     try {
-      const snapshot = readVersionManagerGroups();
+      const provider = configuredMediaManagerProvider(_req.query.provider);
+      if (!provider) return res.status(400).json({ ok: false, error: "Selected debrid provider is not configured" });
+      const snapshot = readVersionManagerGroups(provider.id);
       if (!snapshot) return res.status(503).json({ ok: false, snapshotAvailable: false, error: "No valid inventory snapshot is available; start a scan" });
       const versions = snapshot.groups.flatMap((group: any) => group.versions || []);
       const probe = { source: "persisted-snapshot", evaluation: "current-policy" };
@@ -482,7 +516,7 @@ export function startServer() {
         recordAcquisitionAudit({ needId: need.id, identity: need.contentIdentity, profileId: need.missingProfileId, adapterId: preview.adapterId, phase: "PREVIEW", status: preview.status, providerRequestId: preview.providerRequestId, detail: [preview.providerStatusSource, preview.mappingWarning].filter(Boolean).join("; ") });
         return preview;
       }));
-      return res.json({ ok: true, readOnly: true, mode: "dry-run", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, inventoryCount: versions.length, groupCount: groups.length, probe, needs, previews, adapter: await adapter.capabilities() });
+      return res.json({ ok: true, provider: provider.id, readOnly: true, mode: "dry-run", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, inventoryCount: versions.length, groupCount: groups.length, probe, needs, previews, adapter: await adapter.capabilities() });
     } catch (err: any) {
       return res.status(500).json({ ok: false, error: err?.message || "Missing profile preview failed" });
     }
@@ -831,8 +865,10 @@ export function startServer() {
   // not have an Organizer Review, then reevaluates the latest cached scan.
   // This is deliberately cache-only: it never starts a provider rescan.
   app.post('/api/version-manager/identity/override', (req, res) => {
+    const provider = configuredMediaManagerProvider(req.body?.provider);
+    if (!provider) return res.status(400).json({ ok: false, error: 'Selected debrid provider is not configured' });
     const requestedGroupId = typeof req.body?.versionGroupId === 'string' ? req.body.versionGroupId : undefined;
-    const snapshot = requestedGroupId ? readVersionManagerGroups() : null;
+    const snapshot = requestedGroupId ? readVersionManagerGroups(provider.id) : null;
     const requestedGroup = requestedGroupId ? snapshot?.groups.find((group) => group.id === requestedGroupId) : undefined;
     if (requestedGroupId && !requestedGroup) return res.status(404).json({ ok: false, error: 'Version group is no longer available; refresh Review' });
     const identity = requestedGroup?.identity || req.body?.identity;
@@ -857,7 +893,7 @@ export function startServer() {
       if (targetVersionIds.length) targetVersionIds.forEach((versionId: string) => saveManualIdentityOverrideForVersion(versionId, override!));
       else saveManualIdentityOverride(identityValue, override);
     }
-    const records = applyManualIdentityOverrides(getLatestVersionManagerRecords());
+    const records = applyManualIdentityOverrides(getLatestVersionManagerRecords(provider.id));
     const groups = evaluateVersionGroups(records, getVersionProfiles(), getVersionManagerPolicy());
     const key = identityOverrideKey(identityValue);
     const targetIds = new Set(targetVersionIds);

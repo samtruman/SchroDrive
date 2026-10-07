@@ -1,3 +1,4 @@
+import { registry } from "../providers";
 import { getConfiguredMountReadiness } from "./mount";
 import { loadMediaManagerInventory, type MediaManagerInventoryStats } from "./mediaManagerInventory";
 import { applyManualIdentityOverrides } from "./manualIdentity";
@@ -19,7 +20,7 @@ import {
 } from "./versionManagerStore";
 
 let recoveryChecked = false;
-let activeJob: Promise<void> | null = null;
+const activeJobs = new Map<string, Promise<void>>();
 
 function ensureRecovery(): void {
   if (recoveryChecked) return;
@@ -40,10 +41,12 @@ async function execute(job: VersionManagerScanJob): Promise<void> {
     recoverability: { requested: 0, cacheHits: 0, providerLookups: 0, resolved: 0, unknown: 0 },
   };
   try {
-    const initialReadiness = readinessError(await getConfiguredMountReadiness());
+    const provider = registry.get(job.providerId);
+    if (!provider || !provider.isConfigured()) throw new Error(`Provider ${job.providerId} is not configured`);
+    const initialReadiness = readinessError(await getConfiguredMountReadiness([job.providerId]));
     if (initialReadiness) throw new Error(initialReadiness);
 
-    const versions = await loadMediaManagerInventory(undefined, stats, (progress) => {
+    const versions = await loadMediaManagerInventory([provider], stats, (progress) => {
       updateVersionManagerScanJob(job.id, {
         status: progress.phase === "identity" ? "ENRICHING" : "SCANNING",
         phase: progress.phase,
@@ -69,12 +72,12 @@ async function execute(job: VersionManagerScanJob): Promise<void> {
     const policy = getVersionManagerPolicy();
     const groups = evaluateVersionGroups(evaluatedVersions, profiles, policy);
 
-    const finalReadiness = readinessError(await getConfiguredMountReadiness());
+    const finalReadiness = readinessError(await getConfiguredMountReadiness([job.providerId]));
     if (finalReadiness) throw new Error(finalReadiness);
 
     updateVersionManagerScanJob(job.id, { status: "PERSISTING", phase: "persistence", completed: 0, total: groups.length });
     const policyHash = versionManagerPolicyHash(policy, profiles);
-    const snapshotId = saveVersionManagerSnapshot(groups, profiles, { policyHash, status: "VALID" });
+    const snapshotId = saveVersionManagerSnapshot(groups, profiles, { policyHash, status: "VALID", providerId: job.providerId });
     const versionsFlat = groups.flatMap((group) => group.versions);
     saveVersionManagerPreviewAudit({
       policyHash, evaluatedAt: new Date().toISOString(), contentCount: groups.length,
@@ -87,27 +90,28 @@ async function execute(job: VersionManagerScanJob): Promise<void> {
     });
     updateVersionManagerScanJob(job.id, { status: "COMPLETED", phase: "idle", completed: groups.length, total: groups.length, finishedAt: new Date().toISOString(), snapshotId, snapshotValid: true });
   } catch (error: any) {
-    const validSnapshot = Boolean(getLatestVersionManagerSnapshot());
+    const validSnapshot = Boolean(getLatestVersionManagerSnapshot(job.providerId));
     updateVersionManagerScanJob(job.id, { status: "FAILED", phase: "idle", finishedAt: new Date().toISOString(), lastError: error?.message || "Inventory scan failed", snapshotValid: validSnapshot });
   }
 }
 
-export function startVersionManagerScan(): VersionManagerScanJob {
+export function startVersionManagerScan(providerId: string): VersionManagerScanJob {
   ensureRecovery();
-  const existing = getActiveVersionManagerScanJob();
+  const existing = getActiveVersionManagerScanJob(providerId);
   if (existing) return existing;
-  const job = createVersionManagerScanJob();
-  activeJob = execute(job).finally(() => { activeJob = null; });
-  void activeJob;
+  const job = createVersionManagerScanJob(providerId);
+  const work = execute(job).finally(() => { activeJobs.delete(providerId); });
+  activeJobs.set(providerId, work);
+  void work;
   return job;
 }
 
-export function getVersionManagerScanStatus(id?: string): VersionManagerScanJob | undefined {
+export function getVersionManagerScanStatus(id?: string, providerId?: string): VersionManagerScanJob | undefined {
   ensureRecovery();
-  return id ? getVersionManagerScanJob(id) : getActiveVersionManagerScanJob();
+  return id ? getVersionManagerScanJob(id) : getActiveVersionManagerScanJob(providerId);
 }
 
-export function getVersionManagerScanRuntimeStatus(): { active: boolean; job?: VersionManagerScanJob } {
+export function getVersionManagerScanRuntimeStatus(providerId?: string): { active: boolean; job?: VersionManagerScanJob } {
   ensureRecovery();
-  return { active: Boolean(activeJob), job: getActiveVersionManagerScanJob() };
+  return { active: providerId ? activeJobs.has(providerId) : activeJobs.size > 0, job: getActiveVersionManagerScanJob(providerId) };
 }

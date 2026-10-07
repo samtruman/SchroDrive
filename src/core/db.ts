@@ -204,6 +204,7 @@ function runMigrations(database: Database): void {
       ON organizer_reviews (decision, updated_at)`,
     `CREATE TABLE IF NOT EXISTS version_manager_scans (
       id TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL DEFAULT 'legacy',
       group_count INTEGER NOT NULL,
       version_count INTEGER NOT NULL,
       profiles_json TEXT NOT NULL,
@@ -214,6 +215,7 @@ function runMigrations(database: Database): void {
     )`,
     `CREATE TABLE IF NOT EXISTS version_manager_scan_jobs (
       id TEXT PRIMARY KEY,
+      provider_id TEXT NOT NULL DEFAULT 'legacy',
       status TEXT NOT NULL,
       phase TEXT NOT NULL,
       completed INTEGER NOT NULL DEFAULT 0,
@@ -345,6 +347,8 @@ function runMigrations(database: Database): void {
     "ALTER TABLE version_manager_scans ADD COLUMN groups_json TEXT",
     "ALTER TABLE version_manager_scans ADD COLUMN policy_hash TEXT",
     "ALTER TABLE version_manager_scans ADD COLUMN snapshot_status TEXT NOT NULL DEFAULT 'UNKNOWN'",
+    "ALTER TABLE version_manager_scans ADD COLUMN provider_id TEXT NOT NULL DEFAULT 'legacy'",
+    "ALTER TABLE version_manager_scan_jobs ADD COLUMN provider_id TEXT NOT NULL DEFAULT 'legacy'",
   ]) {
     try { database.exec(sql); } catch (err: any) {
       if (!/duplicate column name/i.test(String(err?.message || ""))) {
