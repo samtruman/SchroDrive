@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.BatchDeleteExecutionError = void 0;
+exports.ProviderInventoryDriftError = exports.BatchDeleteExecutionError = void 0;
 exports.executeVersionManagerDelete = executeVersionManagerDelete;
 exports.executeVersionManagerDeleteBatch = executeVersionManagerDeleteBatch;
 const deleteImpact_1 = require("./deleteImpact");
@@ -14,6 +14,16 @@ class BatchDeleteExecutionError extends Error {
     }
 }
 exports.BatchDeleteExecutionError = BatchDeleteExecutionError;
+class ProviderInventoryDriftError extends Error {
+    constructor(staleProviderItemIds) {
+        super(staleProviderItemIds.length === 1
+            ? `ProviderItem ${staleProviderItemIds[0]} no longer exists at the provider; refresh the inventory before continuing`
+            : `${staleProviderItemIds.length} selected ProviderItems no longer exist at the provider; refresh the inventory before continuing`);
+        this.staleProviderItemIds = staleProviderItemIds;
+        this.name = "ProviderInventoryDriftError";
+    }
+}
+exports.ProviderInventoryDriftError = ProviderInventoryDriftError;
 function revalidatedImpacts(request) {
     return request.selection?.length
         ? (0, deleteImpact_1.buildSelectedDeleteImpact)(request.groups, request.selection)
@@ -51,9 +61,9 @@ async function executeVersionManagerDeleteBatch(request) {
             throw new Error(`ProviderItem ${id} failed the final safety check`);
     }
     const current = new Set((await request.provider.listTorrents()).map((item) => String(item.id)));
-    const missing = providerItemIds.find((id) => !current.has(id));
-    if (missing)
-        throw new Error(`ProviderItem ${missing} no longer exists at the provider`);
+    const staleProviderItemIds = providerItemIds.filter((id) => !current.has(id));
+    if (staleProviderItemIds.length > 0)
+        throw new ProviderInventoryDriftError(staleProviderItemIds);
     const results = providerItemIds.map((id) => ({
         status: "VALIDATED",
         executed: false,

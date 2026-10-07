@@ -21,7 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { normalizeIdentitySearchPrefill } from "./identity-search-prefill";
-import { DeleteImpactCards, ReviewActionGuide } from "./operator-guidance";
+import { DeleteImpactCards, ReviewActionGuide, recommendedDeleteRefs } from "./operator-guidance";
 import { ConfirmationDialog } from "./confirmation-dialog";
 import { groupLibraryPhysicalReleases, libraryGroupProfileIds, matchesLibraryFilter, matchesMissingNeed, missingNeedVersions, missingProfileNeeds, sortMissingNeeds, type LibraryPhysicalRelease } from "./library-filters";
 
@@ -121,9 +121,33 @@ async function readJsonResponse<T>(response: Response, operation: string): Promi
     throw new Error(`${operation} failed (HTTP ${response.status}; server returned ${contentType || "non-JSON"})`);
   }
   if (!response.ok || body?.ok === false) {
-    throw new Error(body?.error || `${operation} failed (HTTP ${response.status})`);
+    const error = new Error(body?.error || `${operation} failed (HTTP ${response.status})`);
+    (error as any).payload = body;
+    throw error;
   }
   return body as T;
+}
+
+async function refreshVersionManagerInventory(): Promise<void> {
+  const started = await readJsonResponse<any>(
+    await fetch("/api/version-manager/scan", { method: "POST", cache: "no-store" }),
+    "Starting inventory refresh",
+  );
+  const jobId = String(started.job?.id || "");
+  if (!jobId) throw new Error("Inventory refresh did not return a scan job");
+  const deadline = Date.now() + 180_000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => window.setTimeout(resolve, 750));
+    const status = await readJsonResponse<any>(
+      await fetch(`/api/version-manager/scan/${encodeURIComponent(jobId)}`, { cache: "no-store" }),
+      "Refreshing inventory",
+    );
+    if (status.job?.status === "COMPLETED") return;
+    if (status.job?.status === "FAILED" || status.job?.status === "PARTIAL") {
+      throw new Error(status.job?.error || `Inventory refresh ended with ${status.job.status}`);
+    }
+  }
+  throw new Error("Inventory refresh is still running; reload the Library when it completes");
 }
 
 function IdentityResolver({
@@ -804,6 +828,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     setSelectedDeleteItems(new Map());
   }, [deleteScope, query]);
   const visibleDeleteItems = deleteImpact.data?.items || [];
+  const visibleRecommendedDeleteRefs = recommendedDeleteRefs(visibleDeleteItems);
   function changeDeleteSelection(add: SelectedDeleteItem[], removeKeys: string[]) {
     setSelectedDeleteItems((current) => {
       const next = new Map(current);
@@ -849,9 +874,35 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
         await readJsonResponse<any>(response, dryRun ? "Selection validation" : "Selected provider deletion");
       }
       setSelectedDeleteItems(new Map());
-      setDeleteNotice(dryRun ? `Validated ${items.length} selected ProviderItems. No provider data was deleted.` : `Deleted ${items.length} selected ProviderItems. Run a new scan to refresh the library.`);
-      await Promise.all([preview.reload(), deleteImpact.reload(), deletePreview.reload()]);
+      if (dryRun) {
+        setDeleteNotice(`Validated ${items.length} selected ProviderItems. No provider data was deleted.`);
+        await Promise.all([preview.reload(), deleteImpact.reload(), deletePreview.reload()]);
+        return;
+      }
+      setDeleteBusy("refresh");
+      setDeleteNotice(`Deleted ${items.length} selected ProviderItems. Refreshing the library inventory…`);
+      try {
+        await refreshVersionManagerInventory();
+        await Promise.all([preview.reload(), deleteImpact.reload(), deletePreview.reload()]);
+        setDeleteNotice(`Deleted ${items.length} selected ProviderItems. The library inventory is now up to date.`);
+      } catch (refreshError: any) {
+        setDeleteError(`Deletion completed, but the library refresh did not finish: ${refreshError?.message || "reload the Library before deleting again"}`);
+      }
     } catch (value: any) {
+      if (value?.payload?.refreshRequired) {
+        const staleIds = Array.isArray(value.payload.staleProviderItemIds) ? value.payload.staleProviderItemIds : [];
+        setSelectedDeleteItems(new Map());
+        setDeleteBusy("refresh");
+        setDeleteNotice(`${staleIds.length || "One or more"} selected ProviderItem${staleIds.length === 1 ? " is" : "s are"} already absent. No additional ProviderItems were deleted; refreshing the library before another selection…`);
+        try {
+          await refreshVersionManagerInventory();
+          await Promise.all([preview.reload(), deleteImpact.reload(), deletePreview.reload()]);
+          setDeleteNotice("The library inventory was refreshed. Review the remaining candidates and confirm a new selection.");
+        } catch (refreshError: any) {
+          setDeleteError(`Inventory changed and no additional ProviderItems were deleted. Automatic refresh failed: ${refreshError?.message || "reload the Library before continuing"}`);
+        }
+        return;
+      }
       setDeleteError(value.message || "Selected deletion failed");
       throw value;
     } finally { setDeleteBusy(""); }
@@ -1034,7 +1085,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 {Object.entries(deletePreview.data?.counts || {}).map(([label, value]) => <Stat key={label} label={label.replaceAll("_", " ")} value={String(value)} />)}
               </div>
-              {deleteScope === "candidates" && visibleDeleteItems.length > 0 && <div className="flex flex-wrap items-center justify-end gap-2 rounded-lg border p-3"><Button size="sm" variant="ghost" disabled={Boolean(deleteBusy) || selectedDeleteItems.size === 0} onClick={() => setSelectedDeleteItems(new Map())}>Clear selection</Button><span className="text-sm text-muted-foreground">{selectedDeleteItems.size} physical item{selectedDeleteItems.size === 1 ? "" : "s"} selected</span><Button size="sm" variant="destructive" disabled={Boolean(deleteBusy) || selectedDeleteItems.size === 0} onClick={requestBulkDelete}>{deleteBusy === "batch" ? "Deleting selection…" : "Delete selected"}</Button></div>}
+              {deleteScope === "candidates" && visibleDeleteItems.length > 0 && <div className="flex flex-wrap items-center justify-end gap-2 rounded-lg border p-3"><Button size="sm" variant="outline" disabled={Boolean(deleteBusy) || visibleRecommendedDeleteRefs.length === 0} onClick={() => changeDeleteSelection(visibleRecommendedDeleteRefs, [...selectedDeleteItems.keys()])}>Select all recommended</Button><Button size="sm" variant="ghost" disabled={Boolean(deleteBusy) || selectedDeleteItems.size === 0} onClick={() => setSelectedDeleteItems(new Map())}>Clear selection</Button><span className="text-sm text-muted-foreground">{selectedDeleteItems.size} physical item{selectedDeleteItems.size === 1 ? "" : "s"} selected</span><Button size="sm" variant="destructive" disabled={Boolean(deleteBusy) || selectedDeleteItems.size === 0} onClick={requestBulkDelete}>{deleteBusy === "batch" ? "Deleting selection…" : deleteBusy === "refresh" ? "Refreshing library…" : "Delete selected"}</Button></div>}
               <DeleteImpactCards items={visibleDeleteItems} scope={deleteScope} busyId={deleteBusy} selectedIds={new Set(selectedDeleteItems.keys())} onChangeSelection={changeDeleteSelection} />
             </>
           )}

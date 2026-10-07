@@ -428,11 +428,23 @@ function startServer() {
         }
         catch (error) {
             const batchError = error instanceof deleteExecutor_1.BatchDeleteExecutionError ? error : undefined;
+            const inventoryDrift = error instanceof deleteExecutor_1.ProviderInventoryDriftError ? error : undefined;
             for (const id of batchError?.completedIds || [])
                 (0, db_1.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId: id, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "DELETED", detail: "ProviderItem deleted before the batch stopped" });
             if (batchError?.failedProviderItemId)
                 (0, db_1.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId: batchError.failedProviderItemId, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "FAILED", detail: error?.message || "Batch delete failed" });
-            return res.status(409).json({ ok: false, policyDryRun, mode, completedIds: batchError?.completedIds || [], failedProviderItemId: batchError?.failedProviderItemId, error: error?.message || "Batch delete failed" });
+            for (const id of inventoryDrift?.staleProviderItemIds || [])
+                (0, db_1.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId: id, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "FAILED", detail: "ProviderItem is already absent; inventory refresh required before continuing" });
+            return res.status(409).json({
+                ok: false,
+                policyDryRun,
+                mode,
+                completedIds: batchError?.completedIds || [],
+                failedProviderItemId: batchError?.failedProviderItemId,
+                staleProviderItemIds: inventoryDrift?.staleProviderItemIds || [],
+                refreshRequired: Boolean(inventoryDrift),
+                error: error?.message || "Batch delete failed",
+            });
         }
     });
     /** Read-only operator queue combining Organizer and policy/recoverability review. */

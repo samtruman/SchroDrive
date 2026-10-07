@@ -24,7 +24,7 @@ function formatBytes(value: unknown): string | undefined {
   const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   return `${(bytes / 1024 ** unit).toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
-type PhysicalRef = { provider: string; providerItemId: string; physicalSize?: number };
+export type PhysicalRef = { provider: string; providerItemId: string; physicalSize?: number };
 
 function physicalRef(version: any): PhysicalRef {
   const storage = version.fingerprint?.storage || {};
@@ -142,6 +142,15 @@ function uniqueRefs(versions: any[]): PhysicalRef[] {
     if (ref.provider && ref.providerItemId) refs.set(selectionKey(ref), ref);
   }
   return [...refs.values()];
+}
+
+export function recommendedDeleteRefs(items: any[]): PhysicalRef[] {
+  return uniqueRefs(
+    groupDeleteItems(items)
+      .flatMap((group) => group.episodes)
+      .flatMap((episode) => episode.versions)
+      .filter((version: any) => version.decision === "DELETE_CANDIDATE"),
+  );
 }
 
 export function DeleteImpactCards({ items, scope, busyId, selectedIds, onChangeSelection }: { items: any[]; scope: string; busyId?: string; selectedIds?: Set<string>; onChangeSelection: (add: PhysicalRef[], removeKeys: string[]) => void }) {

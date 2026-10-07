@@ -1,20 +1,21 @@
-# API required by the deployed Media Manager GUI.
-# Keep this list aligned with the GUI build before any runtime update.
-/api/version-manager/providers
+# Backend API required by the current Media Manager GUI and its Next.js proxies.
+# Keep this list aligned with web/src/app/api/version-manager and media-manager-shell.tsx.
 /api/version-manager/status
 /api/version-manager/scan
 /api/version-manager/preview
 /api/version-manager/delete-preview
 /api/version-manager/delete
+/api/version-manager/delete/execute-batch
 /api/version-manager/review
 /api/version-manager/missing
+/api/version-manager/identity/search
+/api/version-manager/identity/override
+/api/version-manager/profiles
+/api/version-manager/profiles/preview
 /api/version-manager/migration/state
 /api/version-manager/migration/capabilities
-/api/version-manager/migration/preview
 /api/version-manager/migration/jobs
 /api/version-manager/import/preview
+/api/version-manager/export
 /api/version-manager/magnet-backup
 /api/organizer/review
-/api/organizer/snapshots
-/api/organizer/jellyfin-preview
-/api/organizer/rollback

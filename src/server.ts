@@ -52,7 +52,7 @@ import { buildUnifiedReviewQueue, setVersionManagerReviewDismissed } from "./ser
 import { getVersionManagerScanRuntimeStatus, getVersionManagerScanStatus, startVersionManagerScan } from "./services/versionManagerScanJob";
 import { createMagnetBackup, deleteMagnetBackup, getMagnetBackupSchedule, listMagnetBackups, magnetBackupDirectory, readMagnetBackup, saveMagnetBackupSchedule, startMagnetBackupScheduler, verifyMagnetBackup } from "./services/magnetBackup";
 import { buildDeleteImpact } from "./services/deleteImpact";
-import { BatchDeleteExecutionError, executeVersionManagerDelete, executeVersionManagerDeleteBatch } from "./services/deleteExecutor";
+import { BatchDeleteExecutionError, ProviderInventoryDriftError, executeVersionManagerDelete, executeVersionManagerDeleteBatch } from "./services/deleteExecutor";
 import { getMigrationJob, listMigrationJobs, startMigrationJob } from "./services/migrationJob";
 import { discoverSeerrArrProfiles } from "./services/seerrArrProfiles";
 
@@ -412,9 +412,20 @@ export function startServer() {
       return res.json({ ok: true, policyDryRun, mode, ...result });
     } catch (error: any) {
       const batchError = error instanceof BatchDeleteExecutionError ? error : undefined;
+      const inventoryDrift = error instanceof ProviderInventoryDriftError ? error : undefined;
       for (const id of batchError?.completedIds || []) recordVersionManagerDeleteAudit({ provider: providerId, providerItemId: id, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "DELETED", detail: "ProviderItem deleted before the batch stopped" });
       if (batchError?.failedProviderItemId) recordVersionManagerDeleteAudit({ provider: providerId, providerItemId: batchError.failedProviderItemId, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "FAILED", detail: error?.message || "Batch delete failed" });
-      return res.status(409).json({ ok: false, policyDryRun, mode, completedIds: batchError?.completedIds || [], failedProviderItemId: batchError?.failedProviderItemId, error: error?.message || "Batch delete failed" });
+      for (const id of inventoryDrift?.staleProviderItemIds || []) recordVersionManagerDeleteAudit({ provider: providerId, providerItemId: id, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "FAILED", detail: "ProviderItem is already absent; inventory refresh required before continuing" });
+      return res.status(409).json({
+        ok: false,
+        policyDryRun,
+        mode,
+        completedIds: batchError?.completedIds || [],
+        failedProviderItemId: batchError?.failedProviderItemId,
+        staleProviderItemIds: inventoryDrift?.staleProviderItemIds || [],
+        refreshRequired: Boolean(inventoryDrift),
+        error: error?.message || "Batch delete failed",
+      });
     }
   });
 

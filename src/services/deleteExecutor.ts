@@ -34,6 +34,15 @@ export class BatchDeleteExecutionError extends Error {
   }
 }
 
+export class ProviderInventoryDriftError extends Error {
+  constructor(public staleProviderItemIds: string[]) {
+    super(staleProviderItemIds.length === 1
+      ? `ProviderItem ${staleProviderItemIds[0]} no longer exists at the provider; refresh the inventory before continuing`
+      : `${staleProviderItemIds.length} selected ProviderItems no longer exist at the provider; refresh the inventory before continuing`);
+    this.name = "ProviderInventoryDriftError";
+  }
+}
+
 function revalidatedImpacts(request: Pick<DeleteExecutionRequest, "groups" | "selection">): DeleteImpact[] {
   return request.selection?.length
     ? buildSelectedDeleteImpact(request.groups, request.selection)
@@ -67,8 +76,8 @@ export async function executeVersionManagerDeleteBatch(request: Omit<DeleteExecu
   }
 
   const current = new Set((await request.provider.listTorrents()).map((item) => String(item.id)));
-  const missing = providerItemIds.find((id) => !current.has(id));
-  if (missing) throw new Error(`ProviderItem ${missing} no longer exists at the provider`);
+  const staleProviderItemIds = providerItemIds.filter((id) => !current.has(id));
+  if (staleProviderItemIds.length > 0) throw new ProviderInventoryDriftError(staleProviderItemIds);
 
   const results = providerItemIds.map((id) => ({
     status: "VALIDATED" as const,

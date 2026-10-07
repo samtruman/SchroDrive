@@ -1,5 +1,5 @@
 import { describe, expect, mock, test } from "bun:test";
-import { BatchDeleteExecutionError, executeVersionManagerDelete, executeVersionManagerDeleteBatch } from "../../../src/services/deleteExecutor";
+import { BatchDeleteExecutionError, ProviderInventoryDriftError, executeVersionManagerDelete, executeVersionManagerDeleteBatch } from "../../../src/services/deleteExecutor";
 
 function version(id: string, torrentId: string, decision: "KEEP" | "DELETE_CANDIDATE") {
   return {
@@ -92,6 +92,20 @@ describe("version manager delete executor", () => {
     const result = await executeVersionManagerDeleteBatch({ groups: batchGroups(), provider: source, providerItemIds: ["remove-a", "remove-b"], dryRun: true });
     expect(result).toMatchObject({ status: "VALIDATED", executed: false });
     expect(source.listTorrents).toHaveBeenCalledTimes(1);
+    expect(source.deleteTorrent).toHaveBeenCalledTimes(0);
+  });
+
+  test("batch reports every stale ProviderItem and never deletes another selection", async () => {
+    const source = provider();
+    source.listTorrents = mock(async () => [{ id: "remove-b" }]);
+    const ids = ["remove-a", "remove-b"];
+    try {
+      await executeVersionManagerDeleteBatch({ groups: batchGroups(), provider: source, providerItemIds: ids, dryRun: false, confirmation: JSON.stringify(ids) });
+      throw new Error("Expected inventory drift");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderInventoryDriftError);
+      expect((error as ProviderInventoryDriftError).staleProviderItemIds).toEqual(["remove-a"]);
+    }
     expect(source.deleteTorrent).toHaveBeenCalledTimes(0);
   });
 
