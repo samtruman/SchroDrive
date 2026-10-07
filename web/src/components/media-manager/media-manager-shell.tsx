@@ -23,7 +23,7 @@ import { Input } from "@/components/ui/input";
 import { normalizeIdentitySearchPrefill } from "./identity-search-prefill";
 import { DeleteImpactCards, ReviewActionGuide, recommendedDeleteRefs } from "./operator-guidance";
 import { ConfirmationDialog } from "./confirmation-dialog";
-import { groupLibraryPhysicalReleases, libraryGroupProfileIds, matchesLibraryFilter, matchesMissingNeed, missingNeedVersions, missingProfileNeeds, sortMissingNeeds, type LibraryPhysicalRelease } from "./library-filters";
+import { groupLibraryPhysicalReleases, libraryGroupProfileIds, matchesLibraryFilter, matchesMissingNeed, missingNeedVersions, missingProfileNeeds, physicalReleaseEpisodeCount, sortMissingNeeds, type LibraryPhysicalRelease } from "./library-filters";
 
 type View = "overview" | "library" | "migration" | "settings";
 type Profile = { id: string; name: string; enabled: boolean; priority?: number; description?: string; preferredResolution?: string; languagePolicy?: any; hardRequirements?: any; scoring?: Record<string, number>; scoringRules?: ScoringRule[]; sizePreference?: "LARGER" | "SMALLER" | "IGNORE"; minimumSizeDifferencePercent?: number; acquisitionBehavior?: string; target?: string; arrProfiles?: { movie?: { provider?: "radarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string }; tv?: { provider?: "sonarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string } } };
@@ -748,7 +748,7 @@ function LibraryReleaseList({
     <div className="space-y-2">
       <div className="flex justify-end"><Button size="sm" variant="outline" onClick={() => onSelectAll(releases)}>Select all releases</Button></div>
       {releases.map((release) => {
-        const uniqueUnits = new Set(release.members.map(({ group }) => group.id)).size;
+        const uniqueUnits = physicalReleaseEpisodeCount(release);
         const isPack = uniqueUnits > 1;
         return (
           <div key={release.key} className={`rounded border p-3 ${selectedIds.has(release.key) ? "border-destructive/60 bg-destructive/5" : ""}`}>

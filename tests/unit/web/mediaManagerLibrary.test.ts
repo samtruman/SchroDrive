@@ -6,6 +6,7 @@ import {
   matchesMissingNeed,
   missingNeedVersions,
   missingProfileNeeds,
+  physicalReleaseEpisodeCount,
   sortLibraryGroups,
   sortMissingNeeds,
 } from "../../../web/src/components/media-manager/library-filters";
@@ -89,5 +90,15 @@ describe("Library filter semantics", () => {
     expect(releases).toHaveLength(1);
     expect(releases[0]).toMatchObject({ key: "fixture:pack", physicalSize: 300, recoverable: true });
     expect(releases[0].members.map(({ group }) => group.id)).toEqual(["s01e01", "s01e02"]);
+    expect(physicalReleaseEpisodeCount(releases[0])).toBe(2);
+  });
+
+  test("does not label duplicate movie records as a season pack", () => {
+    const duplicateMovieRecords = [
+      { id: "review-copy", identity: { kind: "unknown" }, versions: [{ id: "review", decision: "REVIEW", fingerprint: { storage: { provider: "fixture", torrentId: "movie", fileId: "file", path: "1917.mkv", size: 100 } } }] },
+      { id: "movie-1917", identity: { title: "1917", kind: "movie", year: 2019 }, versions: [{ id: "keep", decision: "KEEP", fingerprint: { storage: { provider: "fixture", torrentId: "movie", fileId: "file", path: "1917.mkv", size: 100 } } }] },
+    ];
+    const [release] = groupLibraryPhysicalReleases(duplicateMovieRecords);
+    expect(physicalReleaseEpisodeCount(release)).toBe(0);
   });
 });

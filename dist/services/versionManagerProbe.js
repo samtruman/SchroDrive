@@ -3,6 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.mergeProbedFingerprint = mergeProbedFingerprint;
 exports.probeVersionRecords = probeVersionRecords;
 const promises_1 = require("node:fs/promises");
 const node_path_1 = __importDefault(require("node:path"));
@@ -91,6 +92,20 @@ function applyProbe(version, payload, ffprobeVersion) {
         version.fingerprint.identity.provenance = { ...version.fingerprint.identity.provenance, tmdbId: "FFPROBE" };
     }
 }
+function mergeProbedFingerprint(current, probed) {
+    const probedTmdbId = probed.identity.tmdbId;
+    const identity = probedTmdbId && !current.identity.tmdbId
+        ? { ...current.identity, tmdbId: probedTmdbId, provenance: { ...current.identity.provenance, tmdbId: "FFPROBE" } }
+        : current.identity;
+    return {
+        ...current,
+        identity,
+        video: { ...current.video, ...probed.video },
+        audio: structuredClone(probed.audio),
+        subtitles: structuredClone(probed.subtitles),
+        probe: structuredClone(probed.probe),
+    };
+}
 async function runProbe(filePath) {
     const child = Bun.spawn({ cmd: [process.env.FFPROBE_BIN || "ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", filePath], stdout: "pipe", stderr: "pipe" });
     const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
@@ -173,7 +188,7 @@ async function probeVersionRecords(versions, options = {}) {
         if (result.cacheHit)
             stats.cacheHits++;
         if (result.status === "complete" && result.fingerprint)
-            version.fingerprint = structuredClone(result.fingerprint);
+            version.fingerprint = mergeProbedFingerprint(version.fingerprint, result.fingerprint);
         else {
             version.fingerprint.probe = { status: "error", tool: "ffprobe", error: result.error };
             stats.errors++;

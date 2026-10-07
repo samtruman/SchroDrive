@@ -76,6 +76,17 @@ export interface LibraryPhysicalRelease {
   members: Array<{ group: any; version: any }>;
 }
 
+export function physicalReleaseEpisodeCount(release: LibraryPhysicalRelease): number {
+  return new Set(release.members.flatMap(({ group, version }) => {
+    const identity = group.identity || version.fingerprint?.identity || {};
+    const season = identity.season ?? version.season;
+    const episode = identity.episode ?? version.episode;
+    return (identity.kind === "episode" || season !== undefined || episode !== undefined) && season !== undefined && episode !== undefined
+      ? [`${season}:${episode}`]
+      : [];
+  })).size;
+}
+
 export function groupLibraryPhysicalReleases(groups: any[]): LibraryPhysicalRelease[] {
   const releases = new Map<string, LibraryPhysicalRelease & { seenFiles: Set<string> }>();
   for (const group of groups) {
