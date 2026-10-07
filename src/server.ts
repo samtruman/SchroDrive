@@ -42,7 +42,7 @@ import { getLatestVersionManagerRecords, getLatestVersionManagerScan, getLatestV
 import { probeVersionRecords } from "./services/versionManagerProbe";
 import { enrichVersionMetadata } from "./services/versionManagerMetadata";
 import { searchTmdbCandidates } from "./services/tmdbService";
-import { applyManualIdentityOverrides, clearManualIdentityOverride, identityOverrideKey, saveManualIdentityOverride, type ManualIdentityOverride } from "./services/manualIdentity";
+import { applyManualIdentityOverrides, clearManualIdentityOverride, clearManualIdentityOverrideForVersion, identityOverrideKey, saveManualIdentityOverride, saveManualIdentityOverrideForVersion, type ManualIdentityOverride } from "./services/manualIdentity";
 import { exportMigrationLibrary, normalizeMigrationExportMode, resolveProviderItemRecoverability } from "./services/migrationExporter";
 import { analyzeMigrationImport, executeMigrationImportBulk, executeMigrationImportItem, getRecoverableManifestItem, migrationAuditOutcome } from "./services/migrationImporter";
 import { aggregateMigrationJobs, effectiveMigrationStatus } from "./services/migrationState";
@@ -820,8 +820,12 @@ export function startServer() {
   // not have an Organizer Review, then reevaluates the latest cached scan.
   // This is deliberately cache-only: it never starts a provider rescan.
   app.post('/api/version-manager/identity/override', (req, res) => {
-    const identity = req.body?.identity;
-    if (!identity || typeof identity !== 'object') return res.status(400).json({ ok: false, error: 'identity is required' });
+    const requestedGroupId = typeof req.body?.versionGroupId === 'string' ? req.body.versionGroupId : undefined;
+    const snapshot = requestedGroupId ? readVersionManagerGroups() : null;
+    const requestedGroup = requestedGroupId ? snapshot?.groups.find((group) => group.id === requestedGroupId) : undefined;
+    if (requestedGroupId && !requestedGroup) return res.status(404).json({ ok: false, error: 'Version group is no longer available; refresh Review' });
+    const identity = requestedGroup?.identity || req.body?.identity;
+    if (!identity || typeof identity !== 'object') return res.status(400).json({ ok: false, error: 'identity or versionGroupId is required' });
     const identityValue = {
       title: typeof identity.title === 'string' ? identity.title : undefined,
       year: typeof identity.year === 'number' ? identity.year : undefined,
@@ -833,15 +837,24 @@ export function startServer() {
     let override: ManualIdentityOverride | undefined;
     try { override = validateReviewOverride(req.body?.override) as ManualIdentityOverride | undefined; }
     catch (err: any) { return res.status(400).json({ ok: false, error: err?.message || 'Invalid manual identity' }); }
-    if (req.body?.action === 'clear') clearManualIdentityOverride(identityValue);
-    else {
+    const targetVersionIds = requestedGroup?.versions.map((version: VersionRecord) => version.id) || [];
+    if (req.body?.action === 'clear') {
+      if (targetVersionIds.length) targetVersionIds.forEach(clearManualIdentityOverrideForVersion);
+      else clearManualIdentityOverride(identityValue);
+    } else {
       if (!override) return res.status(400).json({ ok: false, error: 'override is required' });
-      saveManualIdentityOverride(identityValue, override);
+      if (targetVersionIds.length) targetVersionIds.forEach((versionId: string) => saveManualIdentityOverrideForVersion(versionId, override!));
+      else saveManualIdentityOverride(identityValue, override);
     }
     const records = applyManualIdentityOverrides(getLatestVersionManagerRecords());
     const groups = evaluateVersionGroups(records, getVersionProfiles(), getVersionManagerPolicy());
     const key = identityOverrideKey(identityValue);
-    const affectedGroups = groups.filter((group) => identityOverrideKey(group.identity) === key || (override?.tmdbId && group.identity.tmdbId === override.tmdbId));
+    const targetIds = new Set(targetVersionIds);
+    const affectedGroups = groups.filter((group) =>
+      targetIds.size
+        ? group.versions.some((version) => targetIds.has(version.id))
+        : identityOverrideKey(group.identity) === key || Boolean(override?.tmdbId && group.identity.tmdbId === override.tmdbId),
+    );
     res.json({ ok: true, identity: affectedGroups[0]?.identity || identityValue, groups: affectedGroups, reevaluated: records.length > 0, readOnlyEvaluation: true });
   });
 

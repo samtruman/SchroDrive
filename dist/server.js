@@ -879,9 +879,14 @@ function startServer() {
     // not have an Organizer Review, then reevaluates the latest cached scan.
     // This is deliberately cache-only: it never starts a provider rescan.
     app.post('/api/version-manager/identity/override', (req, res) => {
-        const identity = req.body?.identity;
+        const requestedGroupId = typeof req.body?.versionGroupId === 'string' ? req.body.versionGroupId : undefined;
+        const snapshot = requestedGroupId ? readVersionManagerGroups() : null;
+        const requestedGroup = requestedGroupId ? snapshot?.groups.find((group) => group.id === requestedGroupId) : undefined;
+        if (requestedGroupId && !requestedGroup)
+            return res.status(404).json({ ok: false, error: 'Version group is no longer available; refresh Review' });
+        const identity = requestedGroup?.identity || req.body?.identity;
         if (!identity || typeof identity !== 'object')
-            return res.status(400).json({ ok: false, error: 'identity is required' });
+            return res.status(400).json({ ok: false, error: 'identity or versionGroupId is required' });
         const identityValue = {
             title: typeof identity.title === 'string' ? identity.title : undefined,
             year: typeof identity.year === 'number' ? identity.year : undefined,
@@ -897,17 +902,28 @@ function startServer() {
         catch (err) {
             return res.status(400).json({ ok: false, error: err?.message || 'Invalid manual identity' });
         }
-        if (req.body?.action === 'clear')
-            (0, manualIdentity_1.clearManualIdentityOverride)(identityValue);
+        const targetVersionIds = requestedGroup?.versions.map((version) => version.id) || [];
+        if (req.body?.action === 'clear') {
+            if (targetVersionIds.length)
+                targetVersionIds.forEach(manualIdentity_1.clearManualIdentityOverrideForVersion);
+            else
+                (0, manualIdentity_1.clearManualIdentityOverride)(identityValue);
+        }
         else {
             if (!override)
                 return res.status(400).json({ ok: false, error: 'override is required' });
-            (0, manualIdentity_1.saveManualIdentityOverride)(identityValue, override);
+            if (targetVersionIds.length)
+                targetVersionIds.forEach((versionId) => (0, manualIdentity_1.saveManualIdentityOverrideForVersion)(versionId, override));
+            else
+                (0, manualIdentity_1.saveManualIdentityOverride)(identityValue, override);
         }
         const records = (0, manualIdentity_1.applyManualIdentityOverrides)((0, versionManagerStore_1.getLatestVersionManagerRecords)());
         const groups = (0, versionManager_1.evaluateVersionGroups)(records, (0, versionManagerStore_1.getVersionProfiles)(), (0, versionManagerStore_1.getVersionManagerPolicy)());
         const key = (0, manualIdentity_1.identityOverrideKey)(identityValue);
-        const affectedGroups = groups.filter((group) => (0, manualIdentity_1.identityOverrideKey)(group.identity) === key || (override?.tmdbId && group.identity.tmdbId === override.tmdbId));
+        const targetIds = new Set(targetVersionIds);
+        const affectedGroups = groups.filter((group) => targetIds.size
+            ? group.versions.some((version) => targetIds.has(version.id))
+            : (0, manualIdentity_1.identityOverrideKey)(group.identity) === key || Boolean(override?.tmdbId && group.identity.tmdbId === override.tmdbId));
         res.json({ ok: true, identity: affectedGroups[0]?.identity || identityValue, groups: affectedGroups, reevaluated: records.length > 0, readOnlyEvaluation: true });
     });
     // Read-only TMDb candidate search used by the Media Manager identity picker.

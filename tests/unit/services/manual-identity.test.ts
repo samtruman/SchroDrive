@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { getDb } from "../../../src/core/db";
-import { applyManualIdentityOverride, applyManualIdentityOverrides, clearManualIdentityOverride, saveManualIdentityOverride } from "../../../src/services/manualIdentity";
+import { applyManualIdentityOverride, applyManualIdentityOverrides, clearManualIdentityOverride, clearManualIdentityOverrideForVersion, saveManualIdentityOverride, saveManualIdentityOverrideForVersion } from "../../../src/services/manualIdentity";
 import { evaluateVersionGroups, fingerprintTorrent, type ContentIdentity } from "../../../src/services/versionManager";
 
 function version(name: string, size: number) {
@@ -44,6 +44,19 @@ describe("manual identity overrides", () => {
     expect(group).toBeDefined();
     expect(group!.versions.some((item) => item.reasons.some((reason) => reason.code === "recoverability_unknown"))).toBe(true);
     expect(group!.versions.find((item) => item.fingerprint.storage.infoHash === undefined)?.decision).toBe("REVIEW");
+  });
+
+  test("targets unresolved media by version ID without changing every unknown item", () => {
+    const first = version("1917.(2019).4K.HDR.DV.mkv", 20_000);
+    const second = version("Other.Unresolved.File.mkv", 10_000);
+    first.fingerprint.identity = { kind: "unknown", confidence: 0, source: "unknown" };
+    second.fingerprint.identity = { kind: "unknown", confidence: 0, source: "unknown" };
+    saveManualIdentityOverrideForVersion(first.id, { tmdbId: "530915", title: "1917", year: 2019, kind: "movie" });
+    const applied = applyManualIdentityOverrides([first, second]);
+    expect(applied[0].fingerprint.identity).toMatchObject({ tmdbId: "530915", title: "1917", source: "manual" });
+    expect(applied[1].fingerprint.identity.tmdbId).toBeUndefined();
+    clearManualIdentityOverrideForVersion(first.id);
+    expect(applyManualIdentityOverrides([first])[0].fingerprint.identity.tmdbId).toBeUndefined();
   });
 
   test("legacy identity override without TMDb ID remains a valid compatibility path", () => {

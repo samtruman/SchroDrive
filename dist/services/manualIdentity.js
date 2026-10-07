@@ -2,6 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.identityOverrideKey = identityOverrideKey;
 exports.saveManualIdentityOverride = saveManualIdentityOverride;
+exports.saveManualIdentityOverrideForVersion = saveManualIdentityOverrideForVersion;
+exports.clearManualIdentityOverrideForVersion = clearManualIdentityOverrideForVersion;
 exports.clearManualIdentityOverride = clearManualIdentityOverride;
 exports.getManualIdentityOverride = getManualIdentityOverride;
 exports.applyManualIdentityOverride = applyManualIdentityOverride;
@@ -21,11 +23,22 @@ function readOverride(row) {
         return undefined;
     }
 }
-function saveManualIdentityOverride(identity, override) {
-    const key = identityOverrideKey(identity);
+function versionOverrideKey(versionId) {
+    return `version:${versionId}`;
+}
+function saveOverrideByKey(key, override) {
     (0, db_1.getDb)().prepare("INSERT OR REPLACE INTO version_manager_identity_overrides (identity_key, override_json, updated_at) VALUES (?, ?, ?)")
         .run(key, JSON.stringify(override), new Date().toISOString());
     return key;
+}
+function saveManualIdentityOverride(identity, override) {
+    return saveOverrideByKey(identityOverrideKey(identity), override);
+}
+function saveManualIdentityOverrideForVersion(versionId, override) {
+    return saveOverrideByKey(versionOverrideKey(versionId), override);
+}
+function clearManualIdentityOverrideForVersion(versionId) {
+    (0, db_1.getDb)().prepare("DELETE FROM version_manager_identity_overrides WHERE identity_key = ?").run(versionOverrideKey(versionId));
 }
 function clearManualIdentityOverride(identity) {
     const database = (0, db_1.getDb)();
@@ -66,8 +79,10 @@ function applyManualIdentityOverride(identity, override) {
     };
 }
 function applyManualIdentityOverrides(versions) {
+    const database = (0, db_1.getDb)();
     return versions.map((version) => {
-        const override = getManualIdentityOverride(version.fingerprint.identity);
+        const versionOverride = readOverride(database.prepare("SELECT override_json FROM version_manager_identity_overrides WHERE identity_key = ?").get(versionOverrideKey(version.id)));
+        const override = versionOverride || getManualIdentityOverride(version.fingerprint.identity);
         return override ? { ...version, fingerprint: { ...version.fingerprint, identity: applyManualIdentityOverride(version.fingerprint.identity, override) } } : version;
     });
 }

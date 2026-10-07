@@ -8,6 +8,53 @@ export function missingProfileNeeds(payload: any): any[] {
   return [];
 }
 
+export function missingNeedVersions(item: any): any[] {
+  if (Array.isArray(item?.existingVersions) && item.existingVersions.length) return item.existingVersions;
+  if (Array.isArray(item?.rejectedVersions) && item.rejectedVersions.length) return item.rejectedVersions;
+  return [];
+}
+
+export function missingNeedSearchText(item: any): string {
+  const identity = item?.contentIdentity || {};
+  return [
+    identity.title,
+    identity.year,
+    identity.season,
+    identity.episode,
+    item?.mediaType,
+    item?.profileId,
+    item?.profileName,
+    item?.whatIsMissing,
+    item?.why,
+    ...(item?.reasonCodes || []),
+    ...missingNeedVersions(item).flatMap((version: any) => [
+      version.id,
+      version.decision,
+      version.fingerprint?.storage?.provider,
+      version.fingerprint?.storage?.torrentId,
+      version.fingerprint?.storage?.path,
+    ]),
+  ].filter((value) => value !== undefined && value !== null).join(" ").toLowerCase();
+}
+
+export function matchesMissingNeed(item: any, filter: Pick<LibraryFilter, "query" | "profile" | "mediaType">): boolean {
+  const identity = item?.contentIdentity || {};
+  const isTv = item?.mediaType === "tv" || identity.kind === "episode";
+  return (!filter.query.trim() || missingNeedSearchText(item).includes(filter.query.trim().toLowerCase())) &&
+    (filter.profile === "all" || item?.profileId === filter.profile || item?.missingProfileId === filter.profile) &&
+    (filter.mediaType === "all" || (filter.mediaType === "tv" ? isTv : !isTv));
+}
+
+export function sortMissingNeeds(items: any[]): any[] {
+  return [...items].sort((left, right) => {
+    const leftIdentity = left?.contentIdentity || {};
+    const rightIdentity = right?.contentIdentity || {};
+    return String(leftIdentity.title || left?.title || "").localeCompare(String(rightIdentity.title || right?.title || "")) ||
+      Number(leftIdentity.season ?? left?.season ?? 0) - Number(rightIdentity.season ?? right?.season ?? 0) ||
+      Number(leftIdentity.episode ?? left?.episode ?? 0) - Number(rightIdentity.episode ?? right?.episode ?? 0);
+  });
+}
+
 export interface LibraryFilter {
   query: string;
   profile: string;
@@ -18,6 +65,46 @@ export interface LibraryFilter {
 
 function versionsOf(group: any): any[] {
   return Array.isArray(group?.versions) ? group.versions : [];
+}
+
+export interface LibraryPhysicalRelease {
+  key: string;
+  provider: string;
+  providerItemId: string;
+  physicalSize: number;
+  recoverable: boolean;
+  members: Array<{ group: any; version: any }>;
+}
+
+export function groupLibraryPhysicalReleases(groups: any[]): LibraryPhysicalRelease[] {
+  const releases = new Map<string, LibraryPhysicalRelease & { seenFiles: Set<string> }>();
+  for (const group of groups) {
+    for (const version of versionsOf(group)) {
+      const storage = version?.fingerprint?.storage || {};
+      const provider = String(storage.provider || "");
+      const providerItemId = String(storage.torrentId || "");
+      if (!provider || !providerItemId) continue;
+      const key = `${provider}:${providerItemId}`;
+      const release = releases.get(key) || {
+        key,
+        provider,
+        providerItemId,
+        physicalSize: 0,
+        recoverable: true,
+        members: [],
+        seenFiles: new Set<string>(),
+      };
+      release.members.push({ group, version });
+      const fileKey = String(storage.fileId || storage.path || version.id);
+      if (!release.seenFiles.has(fileKey)) {
+        release.seenFiles.add(fileKey);
+        release.physicalSize += Number(storage.size || 0);
+      }
+      if (storage.recoverability?.status !== "RECOVERABLE") release.recoverable = false;
+      releases.set(key, release);
+    }
+  }
+  return [...releases.values()].map(({ seenFiles: _seenFiles, ...release }) => release);
 }
 
 function identityOf(group: any): any {

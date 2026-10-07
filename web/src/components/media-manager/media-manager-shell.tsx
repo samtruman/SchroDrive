@@ -23,7 +23,7 @@ import { Input } from "@/components/ui/input";
 import { normalizeIdentitySearchPrefill } from "./identity-search-prefill";
 import { DeleteImpactCards, ReviewActionGuide } from "./operator-guidance";
 import { ConfirmationDialog } from "./confirmation-dialog";
-import { libraryGroupProfileIds, matchesLibraryFilter, missingProfileNeeds } from "./library-filters";
+import { groupLibraryPhysicalReleases, libraryGroupProfileIds, matchesLibraryFilter, matchesMissingNeed, missingNeedVersions, missingProfileNeeds, sortMissingNeeds, type LibraryPhysicalRelease } from "./library-filters";
 
 type View = "overview" | "library" | "migration" | "settings";
 type Profile = { id: string; name: string; enabled: boolean; priority?: number; description?: string; preferredResolution?: string; languagePolicy?: any; hardRequirements?: any; scoring?: Record<string, number>; scoringRules?: ScoringRule[]; sizePreference?: "LARGER" | "SMALLER" | "IGNORE"; minimumSizeDifferencePercent?: number; acquisitionBehavior?: string; target?: string; arrProfiles?: { movie?: { provider?: "radarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string }; tv?: { provider?: "sonarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string } } };
@@ -55,7 +55,7 @@ function StatusBadge({ value }: { value?: string }) {
 
 function displayIdentity(item: any): any {
   const identity = item?.identity || item?.contentIdentity || {};
-  const version = item?.versions?.[0] || item?.existingVersions?.[0];
+  const version = item?.versions?.[0] || item?.existingVersions?.[0] || item?.rejectedVersions?.[0];
   const fingerprint = version?.fingerprint || {};
   const storage = fingerprint.storage || {};
   const source = String(storage.path || version?.releaseName || version?.filename || "");
@@ -76,6 +76,41 @@ function ErrorBox({ error }: { error?: string }) {
   ) : null;
 }
 
+function formatSize(value: unknown): string {
+  const bytes = Number(value || 0);
+  if (!bytes) return "size unknown";
+  if (bytes >= 1_000_000_000) return `${(bytes / 1_000_000_000).toFixed(2)} GB`;
+  return `${Math.round(bytes / 1_000_000)} MB`;
+}
+
+function episodeLabel(identity: any): string {
+  if (identity?.kind !== "episode" && identity?.season === undefined && identity?.episode === undefined) return "";
+  const season = String(identity?.season ?? 0).padStart(2, "0");
+  const episode = String(identity?.episode ?? 0).padStart(2, "0");
+  return `S${season}E${episode}`;
+}
+
+function uniqueLanguages(items: any[]): string {
+  return [...new Set((items || []).map((item: any) => item?.language).filter(Boolean))].join("/");
+}
+
+function failedRequirementText(version: any): string[] {
+  return (version?.evaluations || []).flatMap((evaluation: any) =>
+    (evaluation?.reasons || []).map((reason: any) => {
+      const facts = reason?.facts || {};
+      const required = facts.required?.values?.join("/") || facts.required || "";
+      const availableAudio = Array.isArray(facts.availableAudio) ? facts.availableAudio.join("/") : "";
+      const availableSubtitles = Array.isArray(facts.availableSubtitles) ? facts.availableSubtitles.join("/") : "";
+      const comparison = [
+        required ? `required: ${required}` : "",
+        availableAudio ? `audio found: ${availableAudio}` : "",
+        availableSubtitles ? `subtitles found: ${availableSubtitles}` : "",
+      ].filter(Boolean).join(" · ");
+      return `${reason?.message || reason?.code || "Requirement failed"}${comparison ? ` — ${comparison}` : ""}`;
+    }),
+  );
+}
+
 async function readJsonResponse<T>(response: Response, operation: string): Promise<T> {
   const contentType = response.headers.get("content-type") || "";
   const text = await response.text();
@@ -93,6 +128,7 @@ async function readJsonResponse<T>(response: Response, operation: string): Promi
 
 function IdentityResolver({
   reviewId,
+  versionGroupId,
   identity,
   initialQuery,
   initialType,
@@ -102,6 +138,7 @@ function IdentityResolver({
   actionLabel,
 }: {
   reviewId?: string;
+  versionGroupId?: string;
   identity?: Record<string, unknown>;
   initialQuery?: string;
   initialType?: "movie" | "tv";
@@ -146,7 +183,7 @@ function IdentityResolver({
       };
       const response = await fetch(reviewId ? `/api/organizer/review/${encodeURIComponent(reviewId)}` : "/api/version-manager/identity/override", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify(reviewId ? { decision: "accepted", override } : { identity, override }),
+        body: JSON.stringify(reviewId ? { decision: "accepted", override } : { identity, versionGroupId, override }),
       });
       const body = await readJsonResponse<any>(response, "Saving identity match");
       let evaluation = body;
@@ -164,7 +201,7 @@ function IdentityResolver({
     if (!reviewId && !identity) return;
     setBusy(true); setMessage("");
     try {
-      const response = await fetch(reviewId ? `/api/organizer/review/${encodeURIComponent(reviewId)}` : "/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(reviewId ? { action: "clear-match" } : { action: "clear", identity }) });
+      const response = await fetch(reviewId ? `/api/organizer/review/${encodeURIComponent(reviewId)}` : "/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(reviewId ? { action: "clear-match" } : { action: "clear", identity, versionGroupId }) });
       const body = await readJsonResponse<any>(response, "Clearing manual identity");
       let evaluation = body;
       if (reviewId && identity) {
@@ -327,7 +364,11 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
   const review = item.review || (item.parsed ? item : undefined);
   const identity = item.identity || item.contentIdentity || (review ? { title: review.parsed?.title, year: review.parsed?.year, kind: review.parsed?.kind, confidence: review.parsed?.confidence, source: review.override ? "manual" : "unknown" } : item.versions?.[0]?.fingerprint?.identity || {});
   const shownIdentity = displayIdentity(item);
-  const versions = item.versions || item.existingVersions || [];
+  const versions = Array.isArray(item.versions) && item.versions.length
+    ? item.versions
+    : Array.isArray(item.existingVersions) && item.existingVersions.length
+      ? item.existingVersions
+      : item.rejectedVersions || [];
   const reasonText = (value: any) => [...new Set((Array.isArray(value) ? value : []).map((reason: any) => typeof reason === "string" ? reason : reason?.message).filter(Boolean))].join(" · ");
   const reviewStatus = review?.parsed?.status;
   const identityAction = review?.override ? "Change Match" : reviewStatus === "ambiguous" || reviewStatus === "unmatched" || reviewStatus === "fallback" || reviewStatus === "conflict" ? "Resolve Identity" : "Change Match";
@@ -398,7 +439,7 @@ function DetailPanel({ item, onClose, onReviewAction, onSaved }: { item: any; on
           </dl>
           {review && <div className="mt-4 rounded border bg-muted/20 p-3"><h3 className="mb-2 font-semibold">Detected identity</h3><p><b>Title:</b> {review.parsed?.title || "—"}</p><p><b>Type:</b> {review.parsed?.kind || "—"}</p><p><b>Status:</b> {review.parsed?.status || "—"}</p><p><b>Confidence:</b> {review.parsed?.confidence ?? "—"}</p><p><b>Reason:</b> {review.parsed?.reason || "—"}</p></div>}
           {review && <div className="mt-4 rounded border border-amber-500/40 bg-amber-500/5 p-3"><h3 className="mb-2 font-semibold">Problem and required action</h3><p>{(item.blockers || item.reasonCodes || []).join(" · ") || "The item requires operator review before an automatic decision is safe."}</p><p className="mt-1 text-xs text-muted-foreground">Identity confidence: {identity.confidence ?? "unknown"} · Recoverability: {item.recoverability?.status || "unknown"}</p><p className="mt-1 break-all text-xs text-muted-foreground">Source: {item.sourceBasename || review.sourceBasename || review.sourcePath || "not available"}</p></div>}
-          {(identity.title || item.title) && (review || item.allowIdentityActions !== false) && <div className="mt-4"><h3 className="mb-2 font-semibold">Identity actions</h3><IdentityResolver reviewId={item.reviewId || review?.id} identity={{ title: identity.title || item.title, year: identity.year, kind: identity.kind, mediaType: identity.mediaType, tmdbId: identity.tmdbId }} initialQuery={identity.title || item.title} initialType={identity.kind === "episode" || identity.mediaType === "tv" ? "tv" : "movie"} initialYear={identity.year} existingOverride={item.override || review?.override || (identity.source === "manual" ? { tmdbId: identity.tmdbId } : undefined)} actionLabel={identityAction} onSaved={onSaved} /></div>}
+          {(identity.title || item.title) && (review || item.allowIdentityActions !== false) && <div className="mt-4"><h3 className="mb-2 font-semibold">Identity actions</h3><IdentityResolver reviewId={item.reviewId || review?.id} versionGroupId={item.versionGroupId} identity={{ title: identity.title || item.title, year: identity.year, kind: identity.kind, mediaType: identity.mediaType, tmdbId: identity.tmdbId }} initialQuery={identity.title || item.title} initialType={identity.kind === "episode" || identity.mediaType === "tv" ? "tv" : "movie"} initialYear={identity.year} existingOverride={item.override || review?.override || (identity.source === "manual" ? { tmdbId: identity.tmdbId } : undefined)} actionLabel={identityAction} onSaved={onSaved} /></div>}
           {review && onReviewAction && <div className="mt-4 flex flex-wrap gap-2">{review.decision === "dismissed" ? <Button size="sm" onClick={() => onReviewAction(review.id, { action: "retry" }, review)}>Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => onReviewAction(review.id, { decision: "accepted" }, review)}>Accept as detected</Button><Button size="sm" variant="outline" onClick={() => onReviewAction(review.id, { action: "retry" }, review)}>Retry / Resume</Button><Button size="sm" variant="destructive" onClick={() => onReviewAction(review.id, { decision: "dismissed" }, review)}>Dismiss</Button></>}</div>}
         </section>
         <section>
@@ -665,6 +706,62 @@ function Overview() {
   );
 }
 
+function LibraryReleaseList({
+  releases,
+  selectedIds,
+  onToggle,
+  onSelectAll,
+  onDetails,
+}: {
+  releases: LibraryPhysicalRelease[];
+  selectedIds: Set<string>;
+  onToggle: (release: LibraryPhysicalRelease, checked: boolean) => void;
+  onSelectAll: (releases: LibraryPhysicalRelease[]) => void;
+  onDetails: (release: LibraryPhysicalRelease) => void;
+}) {
+  if (!releases.length) return <p className="text-sm text-muted-foreground">No physical release is available for the current filters.</p>;
+  return (
+    <div className="space-y-2">
+      <div className="flex justify-end"><Button size="sm" variant="outline" onClick={() => onSelectAll(releases)}>Select all releases</Button></div>
+      {releases.map((release) => {
+        const uniqueUnits = new Set(release.members.map(({ group }) => group.id)).size;
+        const isPack = uniqueUnits > 1;
+        return (
+          <div key={release.key} className={`rounded border p-3 ${selectedIds.has(release.key) ? "border-destructive/60 bg-destructive/5" : ""}`}>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <label className="flex min-w-0 flex-1 items-start gap-2">
+                <input className="mt-1" type="checkbox" checked={selectedIds.has(release.key)} onChange={(event) => onToggle(release, event.target.checked)} />
+                <span className="min-w-0">
+                  <span className="block font-medium">{isPack ? `Season pack · ${uniqueUnits} linked episodes` : "Single media release"}</span>
+                  <span className="block text-xs text-muted-foreground">{release.provider} · ProviderItem {release.providerItemId} · {formatSize(release.physicalSize)}</span>
+                </span>
+              </label>
+              <div className="flex items-center gap-2">{!release.recoverable && <Badge variant="destructive">RESTORE SAFETY BLOCK</Badge>}<Button size="sm" variant="ghost" onClick={() => onDetails(release)}>Details</Button></div>
+            </div>
+            <div className="mt-3 space-y-2">
+              {release.members.map(({ group, version }) => {
+                const identity = group.identity || {};
+                const fingerprint = version.fingerprint || {};
+                const video = fingerprint.video || {};
+                const storage = fingerprint.storage || {};
+                const fileName = String(storage.path || version.releaseName || version.filename || version.id).split(/[\\/]/).pop();
+                const audio = uniqueLanguages(fingerprint.audio || []);
+                return (
+                  <div key={version.id} className="rounded border border-border/60 p-2 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-2"><p className="break-all font-medium">{episodeLabel(identity) ? `${episodeLabel(identity)} · ` : ""}{fileName}</p><StatusBadge value={version.decision} /></div>
+                    <p className="mt-1 text-muted-foreground">{video.resolution || "resolution unknown"} · {video.codec || "codec unknown"} · {video.dolbyVision ? "Dolby Vision" : video.hdr10Plus ? "HDR10+" : video.hdr10 ? "HDR10" : "SDR"}{audio ? ` · audio ${audio}` : ""} · {formatSize(storage.size)}</p>
+                    {(version.reasons || []).length > 0 && <p className="mt-1">{(version.reasons || []).map((reason: any) => typeof reason === "string" ? reason : reason.message).filter(Boolean).join(" · ")}</p>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const pathname = usePathname();
   const [preset, setPreset] = useState("all");
@@ -677,7 +774,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const [deleteScope, setDeleteScope] = useState("candidates");
   const [selected, setSelected] = useState<any>(null);
   const [reviewStatus, setReviewStatus] = useState<"pending" | "dismissed" | "all">("pending");
-  const [reviewIssueFilter, setReviewIssueFilter] = useState<"all" | "identity" | "policy" | "recoverability">("all");
+  const [reviewIssueFilter, setReviewIssueFilter] = useState<"all" | "identity" | "policy">("all");
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null);
   const [deleteBusy, setDeleteBusy] = useState("");
   const [selectedDeleteItems, setSelectedDeleteItems] = useState<Map<string, SelectedDeleteItem>>(new Map());
@@ -697,7 +794,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   );
   const deletePreview = useJson<any>(
     "/api/version-manager/delete-preview",
-    preset === "delete-preview" || preset === "delete",
+    preset === "all" || preset === "delete-preview" || preset === "delete",
   );
   const deleteImpact = useJson<any>(
     `/api/version-manager/delete?scope=${encodeURIComponent(deleteScope)}&q=${encodeURIComponent(query)}`,
@@ -715,8 +812,30 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       return next;
     });
   }
+  function toggleLibraryRelease(release: LibraryPhysicalRelease, checked: boolean) {
+    const item = { provider: release.provider, providerItemId: release.providerItemId, physicalSize: release.physicalSize };
+    changeDeleteSelection(checked ? [item] : [], checked ? [] : [release.key]);
+  }
+  function selectLibraryReleases(releases: LibraryPhysicalRelease[]) {
+    changeDeleteSelection(releases.map((release) => ({ provider: release.provider, providerItemId: release.providerItemId, physicalSize: release.physicalSize })), []);
+  }
+  function showLibraryReleaseDetails(release: LibraryPhysicalRelease) {
+    const first = release.members[0];
+    setSelected({
+      identity: first?.group?.identity,
+      versions: release.members.map(({ version }) => version),
+      provider: release.provider,
+      providerItemId: release.providerItemId,
+      physicalSize: release.physicalSize,
+      state: "MANUAL_SELECTION",
+      protectedByKeep: release.members.some(({ version }) => version.decision === "KEEP"),
+      reasons: release.recoverable ? [] : ["Deletion is blocked because this ProviderItem is not confirmed recoverable."],
+      allowIdentityActions: false,
+    });
+  }
   async function executeBulkDelete(items: SelectedDeleteItem[]) {
-    const dryRun = deleteImpact.data?.dryRun !== false;
+    const deleteContext = preset === "all" ? deletePreview.data : deleteImpact.data;
+    const dryRun = deleteContext?.dryRun !== false;
     const selection = items.map(({ provider, providerItemId }) => ({ provider, providerItemId }));
     const grouped = new Map<string, SelectedDeleteItem[]>();
     for (const item of items) grouped.set(item.provider, [...(grouped.get(item.provider) || []), item]);
@@ -726,12 +845,12 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     try {
       for (const [provider, providerItems] of grouped) {
         const providerItemIds = providerItems.map((item) => String(item.providerItemId));
-        const response = await fetch("/api/version-manager/delete/batch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, providerItemIds, selection, snapshotId: deleteImpact.data?.snapshotId, dryRun, confirmation: dryRun ? undefined : JSON.stringify(providerItemIds) }) });
+        const response = await fetch("/api/version-manager/delete/batch", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, providerItemIds, selection, snapshotId: deleteContext?.snapshotId, dryRun, confirmation: dryRun ? undefined : JSON.stringify(providerItemIds) }) });
         await readJsonResponse<any>(response, dryRun ? "Selection validation" : "Selected provider deletion");
       }
       setSelectedDeleteItems(new Map());
       setDeleteNotice(dryRun ? `Validated ${items.length} selected ProviderItems. No provider data was deleted.` : `Deleted ${items.length} selected ProviderItems. Run a new scan to refresh the library.`);
-      await Promise.all([deleteImpact.reload(), deletePreview.reload()]);
+      await Promise.all([preview.reload(), deleteImpact.reload(), deletePreview.reload()]);
     } catch (value: any) {
       setDeleteError(value.message || "Selected deletion failed");
       throw value;
@@ -826,14 +945,28 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     }
     return [...rows.values()].sort((left, right) => sort === "versions" ? right.groups.reduce((n, group) => n + group.versions.length, 0) - left.groups.reduce((n, group) => n + group.versions.length, 0) : left.title.localeCompare(right.title));
   }, [groups, sort]);
-  const needs = missingProfileNeeds(missing.data).filter((item: any) =>
-    JSON.stringify(item).toLowerCase().includes(query.toLowerCase()),
+  const fullPhysicalReleaseByKey = useMemo(
+    () => new Map(groupLibraryPhysicalReleases(preview.data?.groups || []).map((release) => [release.key, release])),
+    [preview.data],
   );
+  const completePhysicalReleasesFor = (filteredGroups: any[]): LibraryPhysicalRelease[] =>
+    groupLibraryPhysicalReleases(filteredGroups).map((release) => fullPhysicalReleaseByKey.get(release.key) || release);
+  const rawNeeds = missingProfileNeeds(missing.data);
+  const missingProfileOptions = [...new Set<string>(rawNeeds.map((item: any) => item.profileId || item.missingProfileId).filter(Boolean))].sort();
+  const needs = sortMissingNeeds(rawNeeds.filter((item: any) => matchesMissingNeed(item, {
+    query,
+    profile,
+    mediaType: mediaType as "all" | "movie" | "tv",
+  })));
   const enrichReviewEntry = (entry: any) => {
     const ids = new Set(entry.versionIds || []);
-    const versions = (reviewPreview.data?.groups || []).flatMap((group: any) => group.versions || []).filter((version: any) => ids.has(version.id));
-    return { ...entry, versions, review: entry.review || entry.organizerReview };
+    const snapshotVersions = (reviewPreview.data?.groups || []).flatMap((group: any) => group.versions || []).filter((version: any) => ids.has(version.id));
+    const versions = Array.isArray(entry.versions) && entry.versions.length ? entry.versions : snapshotVersions;
+    return { ...entry, versions, review: entry.review || entry.organizerReview, allowIdentityActions: entry.issueTypes?.includes("IDENTITY_ISSUE") };
   };
+  const contentReviewEntries = (review?.entries || []).filter((entry: any) =>
+    entry.issueTypes?.includes("IDENTITY_ISSUE") || entry.issueTypes?.includes("POLICY_REVIEW"),
+  );
   return (
     <div className="space-y-6">
       <Header
@@ -865,57 +998,35 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
           <Link href="/media-manager/library/review">Review</Link>
         </Button>
         <Button asChild variant={preset === "delete" || preset === "delete-preview" ? "default" : "outline"} size="sm">
-          <Link href="/media-manager/library/delete">Delete</Link>
+          <Link href="/media-manager/library/delete">Policy Delete</Link>
         </Button>
       </div>
-      {preset !== "review" && preset !== "delete-preview" && (
+      {preset === "all" && (
         <>
-        <p className="text-xs text-muted-foreground">Filters use inventory fields: retained profile, media type, exact policy decision and version count. Status and Needs attention are not shown because the version-manager snapshot has no authoritative content-status field and the old attention rule duplicated Decision.</p>
-        <div className="grid gap-2 rounded-lg border p-3 sm:grid-cols-2 lg:grid-cols-5">
-          <div className="relative">
-            <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              className="pl-8"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search title, filename or ProviderItem…"
-            />
+          <p className="text-xs text-muted-foreground">All is grouped by media identity. “More than one version” finds films or episodes with alternatives; “Contains decision” finds content with at least one version in that policy state.</p>
+          <div className="grid gap-2 rounded-lg border p-3 sm:grid-cols-2 lg:grid-cols-5">
+            <div className="relative"><Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" /><Input className="pl-8" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, episode, filename or ProviderItem…" /></div>
+            <select className="rounded border bg-background p-2 text-sm" value={profile} onChange={(event) => setProfile(event.target.value)}><option value="all">Profile: All</option>{profileOptions.map((profileId) => <option key={profileId} value={profileId}>{profileId.toUpperCase()}</option>)}</select>
+            <select className="rounded border bg-background p-2 text-sm" value={mediaType} onChange={(event) => setMediaType(event.target.value)}><option value="all">Type: All</option><option value="movie">Movies</option><option value="tv">TV episodes</option></select>
+            <label className="flex items-center gap-2 rounded border px-2 text-sm"><input type="checkbox" checked={multipleVersions} onChange={(event) => setMultipleVersions(event.target.checked)} /> More than one version</label>
+            <select className="rounded border bg-background p-2 text-sm" value={sort} onChange={(event) => setSort(event.target.value)}><option value="title">Sort: title</option><option value="versions">Sort: version count</option></select>
+            <select className="rounded border bg-background p-2 text-sm" value={decision} onChange={(event) => setDecision(event.target.value)}><option value="all">Contains decision: All</option><option value="keep">KEEP</option><option value="review">REVIEW</option><option value="delete_candidate">DELETE CANDIDATE</option></select>
           </div>
-          <select
-            className="rounded border bg-background p-2 text-sm"
-            value={profile}
-            onChange={(event) => setProfile(event.target.value)}
-          >
-            <option value="all">Profile: All</option>
-            {profileOptions.map((profileId) => <option key={profileId} value={profileId}>{profileId.toUpperCase()}</option>)}
-          </select>
-          <select
-            className="rounded border bg-background p-2 text-sm"
-            value={mediaType}
-            onChange={(event) => setMediaType(event.target.value)}
-          >
-            <option value="all">Type: All</option>
-            <option value="movie">Movies</option>
-            <option value="tv">TV episodes</option>
-          </select>
-          <label className="flex items-center gap-2 rounded border px-2 text-sm"><input type="checkbox" checked={multipleVersions} onChange={(event) => setMultipleVersions(event.target.checked)} /> Multiple versions</label>
-          <select className="rounded border bg-background p-2 text-sm" value={sort} onChange={(event) => setSort(event.target.value)}><option value="title">Sort: title</option><option value="versions">Sort: versions</option></select>
-          <select
-            className="rounded border bg-background p-2 text-sm"
-            value={decision}
-            onChange={(event) => setDecision(event.target.value)}
-          >
-            <option value="all">Decision: All</option>
-            <option value="keep">KEEP</option>
-            <option value="review">REVIEW</option>
-            <option value="delete_candidate">DELETE_CANDIDATE</option>
-          </select>
-        </div>
+        </>
+      )}
+      {preset === "missing" && (
+        <>
+          <p className="text-xs text-muted-foreground">Missing lists enabled profile requirements that the currently inventoried files do not satisfy.</p>
+          <div className="grid gap-2 rounded-lg border p-3 sm:grid-cols-3">
+            <div className="relative"><Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" /><Input className="pl-8" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, episode, filename or failed requirement…" /></div>
+            <select className="rounded border bg-background p-2 text-sm" value={profile} onChange={(event) => setProfile(event.target.value)}><option value="all">Profile: All</option>{missingProfileOptions.map((profileId) => <option key={profileId} value={profileId}>{profileId.toUpperCase()}</option>)}</select>
+            <select className="rounded border bg-background p-2 text-sm" value={mediaType} onChange={(event) => setMediaType(event.target.value)}><option value="all">Type: All</option><option value="movie">Movies</option><option value="tv">TV episodes</option></select>
+          </div>
         </>
       )}
       {(preset === "delete" || preset === "delete-preview") && (
         <>
-          <div className="flex flex-wrap items-center gap-2"><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, release, filename or provider item…" /><select value={deleteScope} onChange={(event) => setDeleteScope(event.target.value)} className="rounded border bg-background p-2 text-sm"><option value="candidates">Delete candidates · physically eligible</option><option value="protected">Protected / Not deletable</option><option value="attention">Needs attention</option></select></div>
+          <div className="flex flex-wrap items-center gap-2"><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, release, filename or provider item…" /><select value={deleteScope} onChange={(event) => setDeleteScope(event.target.value)} className="rounded border bg-background p-2 text-sm"><option value="candidates">Delete candidates · physically eligible</option><option value="protected">Protected / Not deletable</option><option value="attention">Needs attention · policy / restore safety</option></select></div>
           <ErrorBox error={deletePreview.error || deleteImpact.error || deleteError} />
           {deleteNotice && <p className="rounded border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm">{deleteNotice}</p>}
           {deletePreview.loading ? <p className="text-sm text-muted-foreground">Evaluating policy…</p> : (
@@ -931,29 +1042,33 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       )}
       {preset === "all" && (
         <>
-          <ErrorBox error={preview.error} />
+          <ErrorBox error={preview.error || deletePreview.error || deleteError} />
+          {deleteNotice && <p className="rounded border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm">{deleteNotice}</p>}
+          {selectedDeleteItems.size > 0 && <div className="sticky top-2 z-10 flex flex-wrap items-center justify-end gap-2 rounded-lg border bg-background/95 p-3 shadow"><Button size="sm" variant="ghost" disabled={Boolean(deleteBusy)} onClick={() => setSelectedDeleteItems(new Map())}>Clear selection</Button><span className="text-sm text-muted-foreground">{selectedDeleteItems.size} physical release{selectedDeleteItems.size === 1 ? "" : "s"} selected</span><Button size="sm" variant="destructive" disabled={Boolean(deleteBusy) || deletePreview.loading} onClick={requestBulkDelete}>{deleteBusy === "batch" ? "Deleting selection…" : "Delete selected"}</Button></div>}
           {preview.loading ? (
             <p className="text-sm text-muted-foreground">Loading library…</p>
           ) : (
             <div className="space-y-3">
               {libraryRows.slice(0, 200).map((row, index) => (
-                <Card key={`${row.kind}-${row.title}-${index}`} className="cursor-pointer transition-colors hover:border-primary/50" onClick={() => row.kind !== "show" && setSelected(row.groups[0])} onKeyDown={(event) => { if (row.kind !== "show" && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); setSelected(row.groups[0]); } }} role={row.kind === "show" ? undefined : "button"} tabIndex={row.kind === "show" ? undefined : 0}>
-                  <CardContent className="space-y-2 p-3">
+                <Card key={`${row.kind}-${row.title}-${index}`}>
+                  <CardContent className="space-y-3 p-4">
                     <div className="flex flex-wrap items-center justify-between gap-3">
-                      <div><p className="font-medium">{row.title}</p><p className="text-xs text-muted-foreground">{row.year || "—"} · {row.kind === "show" ? "TV show" : row.kind === "movie" ? "Movie" : "Unresolved"} · {row.groups.reduce((count, group) => count + group.versions.length, 0)} versions</p></div>
-                      <div className="flex items-center gap-2"><StatusBadge value={row.kind === "show" ? "SERIES" : row.kind === "movie" ? "MOVIE" : "UNRESOLVED"} /><Button size="sm" variant="outline" onClick={(event) => { event.stopPropagation(); setSelected(row.groups[0]); }}>Details</Button></div>
+                      <div><p className="font-medium">{row.title}</p><p className="text-xs text-muted-foreground">{row.year || "—"} · {row.kind === "show" ? "TV series" : row.kind === "movie" ? "Movie" : "Unresolved"} · {completePhysicalReleasesFor(row.groups).length} physical releases</p></div>
+                      <StatusBadge value={row.kind === "show" ? "SERIES" : row.kind === "movie" ? "MOVIE" : "UNRESOLVED"} />
                     </div>
-                    {row.kind === "show" ? <div className="space-y-2 border-l-2 pl-3">{[...new Map(row.groups.map((group) => [group.identity?.season || 0, row.groups.filter((candidate) => (candidate.identity?.season || 0) === (group.identity?.season || 0))])).entries()].sort(([a], [b]) => a - b).map(([season, seasonGroups]) => <details key={season} className="rounded border p-2"><summary className="cursor-pointer text-sm font-medium">Season {season || "unknown"} · {seasonGroups.length} episodes</summary><div className="mt-2 space-y-2">{seasonGroups.sort((a, b) => (a.identity?.episode || 0) - (b.identity?.episode || 0)).map((group) => <div key={group.id} className="rounded border p-2 text-sm"><div className="flex flex-wrap items-center justify-between gap-2"><button className="font-medium hover:underline" onClick={() => setSelected(group)}>Episode {group.identity?.episode || "unknown"} · {group.versions.length} versions</button><Button size="sm" variant="outline" onClick={(event) => { event.stopPropagation(); setSelected(group); }}>Details</Button></div><div className="mt-1 flex flex-wrap gap-1">{group.versions.map((version: any) => <StatusBadge key={version.id} value={version.decision} />)}</div></div>)}</div></details>)}</div> : <div className="grid gap-2 sm:grid-cols-2">{row.groups.flatMap((group) => group.versions).slice(0, 8).map((version: any) => { const fingerprint = version.fingerprint || {}; const storage = fingerprint.storage || {}; const video = fingerprint.video || {}; return <button className="rounded border p-2 text-left text-xs hover:border-primary/50" key={version.id} onClick={() => setSelected(row.groups.find((group) => group.versions.some((candidate: any) => candidate.id === version.id)))}><p className="font-medium">{video.resolution || "Resolution unknown"} · {video.codec || "Codec unknown"} · {video.dolbyVision || video.hdr10 ? "HDR" : "SDR"}</p><p className="text-muted-foreground">{String(storage.path || version.releaseName || version.filename || "Release unknown").split(/[\\/]/).pop()} · {version.decision || "REVIEW"}</p></button>; })}</div>}
+                    {row.kind === "show" ? (
+                      <div className="space-y-2 border-l-2 pl-3">
+                        {[...new Set(row.groups.map((group) => group.identity?.season || 0))].sort((a, b) => a - b).map((season) => {
+                          const seasonGroups = row.groups.filter((group) => (group.identity?.season || 0) === season);
+                          const releases = completePhysicalReleasesFor(seasonGroups);
+                          return <details key={season} className="rounded border p-3"><summary className="cursor-pointer font-medium">Season {season || "unknown"} · {seasonGroups.length} episodes · {releases.length} physical releases</summary><div className="mt-3"><LibraryReleaseList releases={releases} selectedIds={new Set(selectedDeleteItems.keys())} onToggle={toggleLibraryRelease} onSelectAll={selectLibraryReleases} onDetails={showLibraryReleaseDetails} /></div></details>;
+                        })}
+                      </div>
+                    ) : <LibraryReleaseList releases={completePhysicalReleasesFor(row.groups)} selectedIds={new Set(selectedDeleteItems.keys())} onToggle={toggleLibraryRelease} onSelectAll={selectLibraryReleases} onDetails={showLibraryReleaseDetails} />}
                   </CardContent>
                 </Card>
               ))}
-              {libraryRows.length === 0 && (
-                <Card>
-                  <CardContent className="p-6 text-sm text-muted-foreground">
-                    No contents match the current filters.
-                  </CardContent>
-                </Card>
-              )}
+              {libraryRows.length === 0 && <Card><CardContent className="p-6 text-sm text-muted-foreground">No contents match the current filters.</CardContent></Card>}
             </div>
           )}
         </>
@@ -967,40 +1082,33 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
             </p>
           ) : (
             <div className="space-y-3">
-              {needs.map((item: any, index: number) => (
-                <Card
-                  key={item.needId || item.id || index}
-                  className="cursor-pointer hover:border-primary/50"
-                  onClick={() => setSelected(item)}
-                >
-                  <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
-                    <div>
-                      <p className="font-medium">
-                        {item.contentIdentity?.title ||
-                          item.title ||
-                          "Unknown content"}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        {item.contentIdentity?.mediaType || "—"} · profile{" "}
-                        {item.profileId || item.missingProfileId || "—"}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <StatusBadge value={item.status || "REVIEW"} />
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setSelected(item);
-                        }}
-                      >
-                        Details
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+              {needs.map((item: any, index: number) => {
+                const identity = item.contentIdentity || {};
+                const versions = missingNeedVersions(item);
+                const itemKey = item.needId || item.id || String(index);
+                return <div key={itemKey} className="space-y-2">
+                  <Card>
+                    <CardContent className="space-y-3 p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div><p className="font-medium">{identity.title || item.title || "Unknown content"}{episodeLabel(identity) ? ` · ${episodeLabel(identity)}` : ""}</p><p className="text-xs text-muted-foreground">{identity.year || "—"} · {item.mediaType || identity.kind || "unknown"} · profile {item.profileName || item.profileId || item.missingProfileId || "—"}</p></div>
+                        <div className="flex items-center gap-2"><StatusBadge value="REQUIREMENT MISSING" /><Button size="sm" variant="outline" onClick={() => setSelected(selected?.id === item.id ? null : item)}>Details</Button></div>
+                      </div>
+                      <div className="rounded border border-amber-500/40 bg-amber-500/5 p-3"><p className="font-medium">{item.whatIsMissing || "Enabled profile requirements are not satisfied"}</p><p className="mt-1 text-sm text-muted-foreground">{item.why || item.nextAction}</p></div>
+                      <div className="space-y-2">
+                        {versions.map((version: any) => {
+                          const fingerprint = version.fingerprint || {};
+                          const storage = fingerprint.storage || {};
+                          const video = fingerprint.video || {};
+                          const name = String(storage.path || version.releaseName || version.filename || version.id).split(/[\\/]/).pop();
+                          const requirements = failedRequirementText(version);
+                          return <div key={version.id} className="rounded border p-3 text-xs"><p className="break-all font-medium">Current file · {name}</p><p className="mt-1 text-muted-foreground">{video.resolution || "resolution unknown"} · {video.codec || "codec unknown"} · audio {uniqueLanguages(fingerprint.audio || []) || "unknown"} · subtitles {uniqueLanguages(fingerprint.subtitles || []) || "none"} · {formatSize(storage.size)}</p><p className="text-muted-foreground">{storage.provider || "provider unknown"} · ProviderItem {storage.torrentId || "unknown"}</p>{requirements.map((reason, reasonIndex) => <p key={reasonIndex} className="mt-1 text-amber-700">{reason}</p>)}</div>;
+                        })}
+                      </div>
+                    </CardContent>
+                  </Card>
+                  {selected?.id === item.id && <DetailPanel item={{ ...item, allowIdentityActions: false }} onClose={() => setSelected(null)} />}
+                </div>;
+              })}
               {needs.length === 0 && (
                 <Card>
                   <CardContent className="p-6 text-sm text-muted-foreground">
@@ -1023,14 +1131,13 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                 <p className="text-sm text-muted-foreground">
                   {identityOnly
                     ? "Identity issues with a manual Resolve Identity action."
-                    : "Organizer identity issues and other operator review work."}
+                    : "Identity matching and policy requirements that need an operator decision. Restore-safety blockers are shown in Policy Delete."}
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2 text-sm">
-                <span>All <Badge variant="outline">{review?.summary?.total ?? "—"}</Badge></span>
+                <span>All <Badge variant="outline">{review ? contentReviewEntries.length : "—"}</Badge></span>
                 <span>Identity <Badge variant={review?.summary?.identityIssues > 0 ? "destructive" : "outline"}>{review?.summary?.identityIssues ?? "—"}</Badge></span>
                 <span>Policy <Badge variant="outline">{review?.summary?.policyReviews ?? "—"}</Badge></span>
-                <span>Recoverability <Badge variant="outline">{review?.summary?.recoverabilityIssues ?? "—"}</Badge></span>
               </div>
             </CardContent>
           </Card>
@@ -1045,7 +1152,6 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
               <option value="all">All issues</option>
               <option value="identity">Identity issues</option>
               <option value="policy">Policy review</option>
-              <option value="recoverability">Recoverability issues</option>
             </select>
             <span className="text-xs text-muted-foreground">Dismissed items remain auditable and can be restored.</span>
           </div>
@@ -1056,41 +1162,44 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
             </p>
           ) : (
             <div className="space-y-3">
-              {(review.entries || []).filter((entry: any) => {
+              {contentReviewEntries.filter((entry: any) => {
                 if (identityOnly && !entry.issueTypes?.includes("IDENTITY_ISSUE")) return false;
                 if (reviewIssueFilter === "identity" && !entry.issueTypes?.includes("IDENTITY_ISSUE")) return false;
                 if (reviewIssueFilter === "policy" && !entry.issueTypes?.includes("POLICY_REVIEW")) return false;
-                if (reviewIssueFilter === "recoverability" && !entry.issueTypes?.includes("RECOVERABILITY_ISSUE")) return false;
                 return true;
-              }).map((entry: any) => (
-                <Card key={entry.id}>
-                  <CardContent className="space-y-3 p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <p className="font-medium">{entry.title || entry.sourceBasename || "Unidentified content"}</p>
-                        <p className="break-all text-xs text-muted-foreground">{entry.year || "—"} · {entry.kind || "unknown"}{entry.sourceBasename ? ` · ${entry.sourceBasename}` : ""}</p>
+              }).map((entry: any) => {
+                const enriched = enrichReviewEntry(entry);
+                const expanded = selected?.key === entry.key;
+                return <div key={entry.id || entry.key} className="space-y-2">
+                  <Card>
+                    <CardContent className="space-y-3 p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div><p className="font-medium">{entry.title || entry.sourceBasename || "Unidentified content"}{episodeLabel(entry.identity || entry) ? ` · ${episodeLabel(entry.identity || entry)}` : ""}</p><p className="break-all text-xs text-muted-foreground">{entry.year || "—"} · {entry.kind || "unknown"}{entry.sourceBasename ? ` · ${entry.sourceBasename}` : ""}</p></div>
+                        <div className="flex flex-wrap gap-1">{(entry.issueTypes || []).map((issue: string) => <StatusBadge key={issue} value={issue} />)}</div>
                       </div>
-                      <div className="flex flex-wrap gap-1">{(entry.issueTypes || []).map((issue: string) => <StatusBadge key={issue} value={issue} />)}</div>
-                    </div>
-                    <p className="text-sm">{(entry.blockers || []).slice(0, 3).join(" · ") || "Review required"}</p>
-                    {entry.organizerReview && entry.decision !== "dismissed" && <IdentityResolver reviewId={entry.organizerReview.id} identity={entry.identity} initialQuery={entry.title} initialType={entry.kind === "episode" ? "tv" : "movie"} initialYear={entry.year} existingOverride={entry.organizerReview.override} actionLabel={entry.organizerReview.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />}
-                    <div className="flex flex-wrap gap-2">
-                      {entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "accepted" }, entry.organizerReview)}><Check className="mr-2 h-4 w-4" />Accept as detected</Button><Button size="sm" variant="destructive" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "dismissed" }, entry.organizerReview)}><X className="mr-2 h-4 w-4" />Dismiss</Button><Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry.organizerReview)}><RefreshCw className="mr-2 h-4 w-4" />Retry / Resume</Button></>)}
-                      {!entry.organizerReview && (entry.decision === "dismissed"
-                        ? <Button size="sm" onClick={() => requestReviewAction(entry.key, { action: "restore" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button>
-                        : <Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.key, { action: "dismiss" }, entry)}><X className="mr-2 h-4 w-4" />Dismiss</Button>)}
-                      <Button size="sm" variant="ghost" onClick={() => setSelected(enrichReviewEntry(entry))}>
-                        <ExternalLink className="mr-2 h-4 w-4" />Details
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-              {review.entries && review.entries.filter((entry: any) => {
+                      <p className="text-sm font-medium">{(entry.blockers || []).slice(0, 3).join(" · ") || "Review required"}</p>
+                      {(enriched.versions || []).map((version: any) => {
+                        const fingerprint = version.fingerprint || {};
+                        const storage = fingerprint.storage || {};
+                        const video = fingerprint.video || {};
+                        const requirements = failedRequirementText(version);
+                        return <div key={version.id} className="rounded border p-3 text-xs"><p className="break-all font-medium">{String(storage.path || version.releaseName || version.filename || version.id).split(/[\\/]/).pop()}</p><p className="mt-1 text-muted-foreground">{video.resolution || "resolution unknown"} · {video.codec || "codec unknown"} · audio {uniqueLanguages(fingerprint.audio || []) || "unknown"} · {formatSize(storage.size)} · {storage.provider || "provider unknown"} · ProviderItem {storage.torrentId || "unknown"}</p>{requirements.map((reason, index) => <p key={index} className="mt-1 text-amber-700">{reason}</p>)}</div>;
+                      })}
+                      {entry.issueTypes?.includes("IDENTITY_ISSUE") && entry.decision !== "dismissed" && <IdentityResolver reviewId={entry.organizerReview?.id} versionGroupId={entry.versionGroupId} identity={entry.identity} initialQuery={entry.title || entry.sourceBasename} initialType={entry.kind === "episode" ? "tv" : "movie"} initialYear={entry.year} existingOverride={entry.organizerReview?.override} actionLabel={entry.organizerReview?.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />}
+                      <div className="flex flex-wrap gap-2">
+                        {entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "accepted" }, entry.organizerReview)}><Check className="mr-2 h-4 w-4" />Accept as detected</Button><Button size="sm" variant="destructive" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "dismissed" }, entry.organizerReview)}><X className="mr-2 h-4 w-4" />Dismiss</Button><Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry.organizerReview)}><RefreshCw className="mr-2 h-4 w-4" />Retry / Resume</Button></>)}
+                        {!entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.key, { action: "restore" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.key, { action: "dismiss" }, entry)}><X className="mr-2 h-4 w-4" />Dismiss</Button>)}
+                        <Button size="sm" variant="ghost" onClick={() => setSelected(expanded ? null : enriched)}><ExternalLink className="mr-2 h-4 w-4" />{expanded ? "Close details" : "Details"}</Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                  {expanded && <DetailPanel item={enriched} onClose={() => setSelected(null)} onReviewAction={requestReviewAction} onSaved={() => { void loadReview(); setSelected(null); }} />}
+                </div>;
+              })}
+              {review && contentReviewEntries.filter((entry: any) => {
                 if (identityOnly && !entry.issueTypes?.includes("IDENTITY_ISSUE")) return false;
                 if (reviewIssueFilter === "identity" && !entry.issueTypes?.includes("IDENTITY_ISSUE")) return false;
                 if (reviewIssueFilter === "policy" && !entry.issueTypes?.includes("POLICY_REVIEW")) return false;
-                if (reviewIssueFilter === "recoverability" && !entry.issueTypes?.includes("RECOVERABILITY_ISSUE")) return false;
                 return true;
               }).length === 0 && (
                 <Card><CardContent className="p-6 text-sm text-muted-foreground">No review items match the selected filter.</CardContent></Card>
@@ -1099,7 +1208,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
           )}
         </>
       )}
-      {selected && (
+      {selected && preset !== "missing" && preset !== "review" && (
         <DetailPanel item={selected} onClose={() => setSelected(null)} onReviewAction={requestReviewAction} onSaved={() => { void loadReview(); setSelected(null); }} />
       )}
       {confirmation && <ConfirmationDialog open={Boolean(confirmation)} onOpenChange={(open) => !open && setConfirmation(null)} title={confirmation.title} description={confirmation.description} context={confirmation.context} confirmLabel={confirmation.confirmLabel} variant={confirmation.variant} onConfirm={async () => { await confirmation.onConfirm(); setConfirmation(null); }} />}

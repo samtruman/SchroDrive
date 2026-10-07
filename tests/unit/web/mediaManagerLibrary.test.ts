@@ -1,9 +1,13 @@
 import { describe, expect, test } from "bun:test";
 import {
+  groupLibraryPhysicalReleases,
   libraryGroupProfileIds,
   matchesLibraryFilter,
+  matchesMissingNeed,
+  missingNeedVersions,
   missingProfileNeeds,
   sortLibraryGroups,
+  sortMissingNeeds,
 } from "../../../web/src/components/media-manager/library-filters";
 
 const movie = {
@@ -57,5 +61,33 @@ describe("Library filter semantics", () => {
     expect(missingProfileNeeds({ needs: current, previews: legacy })).toBe(current);
     expect(missingProfileNeeds({ previews: legacy })).toBe(legacy);
     expect(missingProfileNeeds({})).toEqual([]);
+  });
+
+  test("filters and sorts missing needs by their own semantics and current files", () => {
+    const westies = {
+      id: "westies",
+      contentIdentity: { title: "The Westies", kind: "episode", season: 1, episode: 6 },
+      mediaType: "tv",
+      profileId: "primary",
+      whatIsMissing: "required audio",
+      existingVersions: [],
+      rejectedVersions: [{ id: "version-1", fingerprint: { storage: { provider: "alldebrid", torrentId: "755", path: "/The.Westies.S01E06.mkv" } } }],
+    };
+    const silo = { id: "silo", contentIdentity: { title: "Silo", kind: "episode", season: 3, episode: 1 }, mediaType: "tv", profileId: "primary", rejectedVersions: [] };
+    expect(missingNeedVersions(westies)).toHaveLength(1);
+    expect(matchesMissingNeed(westies, { query: "s01e06", profile: "primary", mediaType: "tv" })).toBe(true);
+    expect(matchesMissingNeed(westies, { query: "", profile: "other", mediaType: "all" })).toBe(false);
+    expect(sortMissingNeeds([westies, silo]).map((item) => item.id)).toEqual(["silo", "westies"]);
+  });
+
+  test("groups season-pack members into one physical release and deduplicates its size", () => {
+    const packGroups = [
+      { id: "s01e01", identity: { title: "Show", kind: "episode", season: 1, episode: 1 }, versions: [{ id: "pack-e01", decision: "KEEP", fingerprint: { storage: { provider: "fixture", torrentId: "pack", fileId: "e01", path: "e01.mkv", size: 100, recoverability: { status: "RECOVERABLE" } } } }] },
+      { id: "s01e02", identity: { title: "Show", kind: "episode", season: 1, episode: 2 }, versions: [{ id: "pack-e02", decision: "KEEP", fingerprint: { storage: { provider: "fixture", torrentId: "pack", fileId: "e02", path: "e02.mkv", size: 200, recoverability: { status: "RECOVERABLE" } } } }] },
+    ];
+    const releases = groupLibraryPhysicalReleases(packGroups);
+    expect(releases).toHaveLength(1);
+    expect(releases[0]).toMatchObject({ key: "fixture:pack", physicalSize: 300, recoverable: true });
+    expect(releases[0].members.map(({ group }) => group.id)).toEqual(["s01e01", "s01e02"]);
   });
 });

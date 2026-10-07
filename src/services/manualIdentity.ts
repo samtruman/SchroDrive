@@ -25,11 +25,26 @@ function readOverride(row: any): ManualIdentityOverride | undefined {
   catch { return undefined; }
 }
 
-export function saveManualIdentityOverride(identity: IdentityKeyInput, override: ManualIdentityOverride): string {
-  const key = identityOverrideKey(identity);
+function versionOverrideKey(versionId: string): string {
+  return `version:${versionId}`;
+}
+
+function saveOverrideByKey(key: string, override: ManualIdentityOverride): string {
   getDb().prepare("INSERT OR REPLACE INTO version_manager_identity_overrides (identity_key, override_json, updated_at) VALUES (?, ?, ?)")
     .run(key, JSON.stringify(override), new Date().toISOString());
   return key;
+}
+
+export function saveManualIdentityOverride(identity: IdentityKeyInput, override: ManualIdentityOverride): string {
+  return saveOverrideByKey(identityOverrideKey(identity), override);
+}
+
+export function saveManualIdentityOverrideForVersion(versionId: string, override: ManualIdentityOverride): string {
+  return saveOverrideByKey(versionOverrideKey(versionId), override);
+}
+
+export function clearManualIdentityOverrideForVersion(versionId: string): void {
+  getDb().prepare("DELETE FROM version_manager_identity_overrides WHERE identity_key = ?").run(versionOverrideKey(versionId));
 }
 
 export function clearManualIdentityOverride(identity: IdentityKeyInput): void {
@@ -73,8 +88,10 @@ export function applyManualIdentityOverride(identity: ContentIdentity, override:
 }
 
 export function applyManualIdentityOverrides(versions: VersionRecord[]): VersionRecord[] {
+  const database = getDb();
   return versions.map((version) => {
-    const override = getManualIdentityOverride(version.fingerprint.identity);
+    const versionOverride = readOverride(database.prepare("SELECT override_json FROM version_manager_identity_overrides WHERE identity_key = ?").get(versionOverrideKey(version.id)));
+    const override = versionOverride || getManualIdentityOverride(version.fingerprint.identity);
     return override ? { ...version, fingerprint: { ...version.fingerprint, identity: applyManualIdentityOverride(version.fingerprint.identity, override) } } : version;
   });
 }
