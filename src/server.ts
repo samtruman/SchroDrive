@@ -56,6 +56,8 @@ import { BatchDeleteExecutionError, ProviderInventoryDriftError, executeVersionM
 import { getMigrationJob, listMigrationJobs, startMigrationJob } from "./services/migrationJob";
 import { discoverSeerrArrProfiles } from "./services/seerrArrProfiles";
 import { refreshProviderActivity } from "./services/providerReconciliationRuntime";
+import { auditOrganizedLibrary } from "./services/organizedAudit";
+import { getBuildInfo } from "./services/buildInfo";
 
 // ===========================================================================
 // Server Initialisation
@@ -227,6 +229,7 @@ export function startServer() {
   app.get("/api/status", (_req, res) => {
     res.json({
       ok: true,
+      build: getBuildInfo(),
       isDocker: isRunningInDocker(),
       services: {
         webhook: config.runWebhook,
@@ -266,6 +269,20 @@ export function startServer() {
         return summary;
       })(),
     });
+  });
+
+  /** GET /api/build-info - Returns the deployed build/runtime identity. */
+  app.get("/api/build-info", (_req, res) => {
+    res.json({ ok: true, build: getBuildInfo() });
+  });
+
+  /** GET /api/organizer/audit-cleanup - Read-only organized-library audit. */
+  app.get("/api/organizer/audit-cleanup", (_req, res) => {
+    try {
+      res.json({ ok: true, audit: auditOrganizedLibrary() });
+    } catch (err: any) {
+      res.status(500).json({ ok: false, error: err?.message || "Unable to audit organized library" });
+    }
   });
 
   // ===========================================================================

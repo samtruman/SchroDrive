@@ -25,7 +25,7 @@ import { DeleteImpactCards, ReviewActionGuide, recommendedDeleteRefs } from "./o
 import { ConfirmationDialog } from "./confirmation-dialog";
 import { groupLibraryPhysicalReleases, libraryGroupProfileIds, matchesLibraryFilter, matchesMissingNeed, missingNeedVersions, missingProfileNeeds, physicalReleaseEpisodeCount, sortMissingNeeds, type LibraryPhysicalRelease } from "./library-filters";
 
-type View = "overview" | "library" | "migration" | "settings";
+type View = "overview" | "library" | "migration" | "settings" | "audit";
 type Profile = { id: string; name: string; enabled: boolean; priority?: number; description?: string; preferredResolution?: string; languagePolicy?: any; hardRequirements?: any; scoring?: Record<string, number>; scoringRules?: ScoringRule[]; sizePreference?: "LARGER" | "SMALLER" | "IGNORE"; minimumSizeDifferencePercent?: number; releaseGroupConsistency?: "DISABLED" | "SEASON"; acquisitionBehavior?: string; target?: string; arrProfiles?: { movie?: { provider?: "radarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string }; tv?: { provider?: "sonarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string } } };
 type ScoringRule = { op?: "COMPARE" | "IN" | "HAS"; field: string; operator?: string; value?: unknown; values?: unknown[]; weight: number };
 type PendingConfirmation = { title: string; description: string; context?: ReactNode; confirmLabel: string; variant?: "default" | "secondary" | "outline" | "destructive"; onConfirm: () => Promise<void> };
@@ -361,6 +361,7 @@ function SectionNav({ view, reviewCount }: { view: View; reviewCount?: number })
     ["Overview", "/media-manager"],
     ["Library", "/media-manager/library"],
     ["Backup & Migration", "/media-manager/migration/export"],
+    ["Audit Cleanup", "/media-manager/audit-cleanup"],
     ["Settings", "/media-manager/settings/profiles"],
   ] as const;
   return (
@@ -373,6 +374,7 @@ function SectionNav({ view, reviewCount }: { view: View; reviewCount?: number })
             (view === "overview" && label === "Overview") ||
             (view === "library" && label === "Library") ||
             (view === "migration" && label === "Backup & Migration") ||
+            (view === "audit" && label === "Audit Cleanup") ||
             (view === "settings" && label === "Settings")
               ? "default"
               : "ghost"
@@ -2189,9 +2191,51 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
     </div>
   );
 }
+function AuditCleanup() {
+  const { data, loading, error, reload } = useJson<any>("/api/organizer/audit-cleanup");
+  const audit = data?.audit;
+  return (
+    <div className="space-y-5">
+      <Header view="audit" title="Audit Cleanup" description="Read-only audit of duplicate links and equivalent organized folders." />
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm text-muted-foreground">No files or provider items are changed by this audit.</p>
+        <Button variant="outline" onClick={() => void reload()} disabled={loading}><RefreshCw className={loading ? "mr-2 h-4 w-4 animate-spin" : "mr-2 h-4 w-4"} />Refresh audit</Button>
+      </div>
+      {error && <div className="rounded border border-destructive/40 p-3 text-sm text-destructive">{error}</div>}
+      {loading && !audit && <Card><CardContent className="p-5 text-sm text-muted-foreground">Scanning organized links...</CardContent></Card>}
+      {audit && <>
+        <div className="grid gap-3 sm:grid-cols-4">
+          {[
+            ["Issues", audit.summary.issues],
+            ["Duplicate source links", audit.summary.duplicateSourceLinks],
+            ["Folder variants", audit.summary.duplicateFolderVariants],
+            ["Scanned links", audit.summary.scannedLinks],
+          ].map(([label, value]) => (
+            <Card key={String(label)}><CardContent className="p-4"><p className="text-xs uppercase tracking-wide text-muted-foreground">{label}</p><p className="mt-2 text-2xl font-semibold">{value}</p></CardContent></Card>
+          ))}
+        </div>
+        <div className="space-y-3">
+          {audit.issues.length === 0 && <Card><CardContent className="p-5 text-sm text-muted-foreground">No cleanup candidates found.</CardContent></Card>}
+          {audit.issues.map((issue: any, index: number) => (
+            <Card key={issue.type + index}>
+              <CardHeader><CardTitle className="text-base">{issue.type === "DUPLICATE_SOURCE_LINK" ? "Duplicate source links" : "Equivalent folder variants"}</CardTitle></CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <p className="font-medium">{issue.title}</p>
+                <p className="text-muted-foreground">{issue.detail}</p>
+                <ul className="space-y-1 text-xs text-muted-foreground">{issue.paths.map((item: string) => <li key={item} className="break-all">{item}</li>)}</ul>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      </>}
+    </div>
+  );
+}
+
 export function MediaManagerShell({ view, section }: { view: View; section?: string }) {
   if (view === "overview") return <Overview />;
   if (view === "library") return <Library initialPreset={section || "all"} />;
   if (view === "migration") return <Migration section={section || "export"} />;
+  if (view === "audit") return <AuditCleanup />;
   return <SettingsView section={section || "profiles"} />;
 }

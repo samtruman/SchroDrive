@@ -58,6 +58,8 @@ const deleteExecutor_1 = require("./services/deleteExecutor");
 const migrationJob_1 = require("./services/migrationJob");
 const seerrArrProfiles_1 = require("./services/seerrArrProfiles");
 const providerReconciliationRuntime_1 = require("./services/providerReconciliationRuntime");
+const organizedAudit_1 = require("./services/organizedAudit");
+const buildInfo_1 = require("./services/buildInfo");
 // ===========================================================================
 // Server Initialisation
 // ===========================================================================
@@ -222,6 +224,7 @@ function startServer() {
     app.get("/api/status", (_req, res) => {
         res.json({
             ok: true,
+            build: (0, buildInfo_1.getBuildInfo)(),
             isDocker: (0, configApi_1.isRunningInDocker)(),
             services: {
                 webhook: config_1.config.runWebhook,
@@ -261,6 +264,19 @@ function startServer() {
                 return summary;
             })(),
         });
+    });
+    /** GET /api/build-info - Returns the deployed build/runtime identity. */
+    app.get("/api/build-info", (_req, res) => {
+        res.json({ ok: true, build: (0, buildInfo_1.getBuildInfo)() });
+    });
+    /** GET /api/organizer/audit-cleanup - Read-only organized-library audit. */
+    app.get("/api/organizer/audit-cleanup", (_req, res) => {
+        try {
+            res.json({ ok: true, audit: (0, organizedAudit_1.auditOrganizedLibrary)() });
+        }
+        catch (err) {
+            res.status(500).json({ ok: false, error: err?.message || "Unable to audit organized library" });
+        }
     });
     // ===========================================================================
     // Version Manager (read-only preview)

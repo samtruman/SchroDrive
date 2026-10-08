@@ -425,7 +425,23 @@ The Media Manager UI exposes:
 - profile/settings editor: language policy, rules, scoring, retention, safety,
   remote/acquisition behavior, and ARR mappings;
 - scan status and snapshot/evaluation freshness indicators;
-- backup, migration preview, and migration job status.
+- backup, migration preview, and migration job status;
+- Audit Cleanup, a read-only report of duplicate source symlinks and equivalent
+  organized-folder variants.
+
+Audit Cleanup never removes files, symlinks, provider items, or directories.
+Each finding is an operator-review candidate and must be resolved explicitly.
+
+### 10a. Deployment identity
+
+The backend exposes a build record through /api/status and /api/build-info.
+The sidebar shows the short build commit above System Online. A deployment may
+also provide image, build time, runtime commit, and frontend commit metadata
+through the build manifest or environment. Unknown values remain visible as
+unknown; they are never inferred from a stale UI bundle.
+
+The build label is diagnostic only. It does not trigger a restart, scan, or
+provider action.
 
 Review and Missing support dismiss/restore state. Dismissal hides an item from
 the pending queue; it does not delete a provider item or alter inventory.

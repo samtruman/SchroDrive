@@ -1,5 +1,7 @@
 "use client"
 
+import { useEffect, useState } from "react"
+
 import {
   LayoutDashboard,
   Settings,
@@ -62,6 +64,14 @@ const navigation = [
 
 export function AppSidebar() {
   const pathname = usePathname()
+  const [build, setBuild] = useState<{ commit?: string; version?: string } | null>(null)
+
+  useEffect(() => {
+    fetch("/api/status", { cache: "no-store" })
+      .then((response) => response.json())
+      .then((data) => setBuild(data.build || null))
+      .catch(() => setBuild(null))
+  }, [])
 
   return (
     <Sidebar>
@@ -95,6 +105,9 @@ export function AppSidebar() {
         ))}
       </SidebarContent>
       <SidebarFooter>
+        <div className="px-3 pb-2 text-[11px] text-muted-foreground">
+          Build {build?.commit && build.commit !== "unknown" ? build.commit.slice(0, 7) : build?.version || "unknown"}
+        </div>
         <div className="rounded-lg border bg-muted/50 p-3 mx-2 mb-2">
           <div className="flex items-center gap-2">
             <div className="h-2 w-2 rounded-full bg-green-500" />
