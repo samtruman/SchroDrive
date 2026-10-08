@@ -561,8 +561,16 @@ function evaluateProfile(version: VersionRecord, profile: VersionProfile): Profi
 }
 
 function compareForProfile(left: VersionEvaluation, right: VersionEvaluation, profile: VersionProfile): number {
-  const leftScore = left.evaluations.find((evaluation) => evaluation.profileId === profile.id)?.score || 0;
-  const rightScore = right.evaluations.find((evaluation) => evaluation.profileId === profile.id)?.score || 0;
+  const comparisonScore = (version: VersionEvaluation): number => {
+    const evaluation = version.evaluations.find((candidate) => candidate.profileId === profile.id);
+    if (!evaluation) return 0;
+    // Ineligible versions intentionally have no final score. For fallback
+    // retention, compare the already computed policy breakdown so a better
+    // 1080p version can be selected while the target remains missing.
+    return evaluation.score ?? Object.values(evaluation.breakdown).reduce((sum, value) => sum + value, 0);
+  };
+  const leftScore = comparisonScore(left);
+  const rightScore = comparisonScore(right);
   if (leftScore !== rightScore) return rightScore - leftScore;
   const preference = profile.sizePreference || "IGNORE";
   if (preference === "IGNORE" || left.fingerprint.video.resolution !== right.fingerprint.video.resolution) return 0;
@@ -641,6 +649,31 @@ export function evaluateVersionGroups(versions: VersionRecord[], profiles = defa
         winner.decision = "KEEP";
         winner.satisfiesProfiles = [...new Set([...(winner.satisfiesProfiles || []), profile.id])];
         winner.reasons.push({ code: "profile_winner", message: `Best eligible version for ${profile.name}`, facts: { profile: profile.id, score: winner.evaluations.find((e) => e.profileId === profile.id)?.score } });
+      }
+    }
+    // A group can have several usable versions even when none satisfies the
+    // primary profile (for example two 1080p files while 2160p is missing).
+    // Keep the best available fallback so the surplus versions can still be
+    // presented as safe delete candidates; profile missing remains true.
+    if (evaluations.length > 1 && !evaluations.some((version) => version.decision === "KEEP")) {
+      const fallbackProfile = activeProfiles.find((profile) => profile.target === "QUALITY") || activeProfiles[0];
+      if (fallbackProfile) {
+        const fallbackCandidates = evaluations.filter((version) => version.fingerprint.identity.confidence >= 0.65);
+        const orderedFallback = [...fallbackCandidates].sort((left, right) => compareForProfile(left, right, fallbackProfile));
+        const fallbackWinner = orderedFallback[0];
+        const tied = fallbackWinner && orderedFallback[1] && compareForProfile(fallbackWinner, orderedFallback[1], fallbackProfile) === 0;
+        if (fallbackWinner && !tied) {
+          fallbackWinner.decision = "KEEP";
+          fallbackWinner.reasons.push({ code: "fallback_retained", message: `Best available fallback retained while ${fallbackProfile.name} remains unsatisfied`, facts: { profile: fallbackProfile.id } });
+          for (const candidate of evaluations) {
+            if (candidate.id === fallbackWinner.id) continue;
+            const recoverability = candidate.fingerprint.storage.recoverability?.status || (candidate.fingerprint.storage.infoHash ? "RECOVERABLE" : "UNKNOWN");
+            const safeForDelete = (policy.safety?.requireRecoverableBeforeDelete ?? true) ? recoverability === "RECOVERABLE" : true;
+            if (!safeForDelete) continue;
+            candidate.decision = "DELETE_CANDIDATE";
+            candidate.reasons.push({ code: "duplicate_fallback", message: "Duplicate version of the same episode; a better fallback is retained", facts: { retainedVersionId: fallbackWinner.id } });
+          }
+        }
       }
     }
     for (const version of evaluations) {

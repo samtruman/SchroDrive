@@ -3,6 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getVersionManagerPolicy = getVersionManagerPolicy;
 exports.saveVersionManagerPolicy = saveVersionManagerPolicy;
 exports.getVersionManagerPolicyHash = getVersionManagerPolicyHash;
+exports.listVersionManagerMissingDismissals = listVersionManagerMissingDismissals;
+exports.setVersionManagerMissingDismissed = setVersionManagerMissingDismissed;
 exports.saveVersionManagerPreviewAudit = saveVersionManagerPreviewAudit;
 exports.getVersionProfiles = getVersionProfiles;
 exports.saveVersionProfiles = saveVersionProfiles;
@@ -51,6 +53,21 @@ function saveVersionManagerPolicy(policy) {
 }
 function getVersionManagerPolicyHash() {
     return (0, versionManager_1.versionManagerPolicyHash)(getVersionManagerPolicy(), getVersionProfiles());
+}
+function listVersionManagerMissingDismissals(providerId) {
+    const rows = (0, db_1.getDb)().prepare("SELECT dismissal_key FROM version_manager_missing_dismissals WHERE provider_id = ?").all(providerId);
+    return new Set(rows.map((row) => row.dismissal_key));
+}
+function setVersionManagerMissingDismissed(providerId, dismissalKey, dismissed) {
+    const database = (0, db_1.getDb)();
+    if (dismissed) {
+        database.prepare("INSERT OR REPLACE INTO version_manager_missing_dismissals (dismissal_key, provider_id, updated_at) VALUES (?, ?, ?)")
+            .run(dismissalKey, providerId, new Date().toISOString());
+    }
+    else {
+        database.prepare("DELETE FROM version_manager_missing_dismissals WHERE provider_id = ? AND dismissal_key = ?")
+            .run(providerId, dismissalKey);
+    }
 }
 function saveVersionManagerPreviewAudit(audit) {
     (0, db_1.getDb)().prepare(`INSERT INTO version_manager_preview_audit

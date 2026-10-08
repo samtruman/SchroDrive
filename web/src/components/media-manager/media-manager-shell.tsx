@@ -688,9 +688,9 @@ function Overview() {
             <p className="mt-1 text-xs text-muted-foreground">Manual match available</p>
           </Link>
           <Link href="/media-manager/library/review" className="rounded-md border p-3 transition-colors hover:border-primary">
-            <p className="text-sm text-muted-foreground">Policy review</p>
-            <p className="mt-1 text-2xl font-semibold">{evaluation?.counts?.reviewCount ?? latestScan?.reviewCount ?? "—"}</p>
-            <p className="mt-1 text-xs text-muted-foreground">Safety and policy blockers</p>
+            <p className="text-sm text-muted-foreground">Manual review</p>
+            <p className="mt-1 text-2xl font-semibold">{reviewQueue.loading ? "—" : reviewQueue.data?.entries?.length ?? 0}</p>
+            <p className="mt-1 text-xs text-muted-foreground">Identity and recoverability issues</p>
           </Link>
           <Link href="/media-manager/library/missing" className="rounded-md border p-3 transition-colors hover:border-primary">
             <p className="text-sm text-muted-foreground">Missing</p>
@@ -833,7 +833,8 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const [deleteScope, setDeleteScope] = useState("candidates");
   const [selected, setSelected] = useState<any>(null);
   const [reviewStatus, setReviewStatus] = useState<"pending" | "dismissed" | "all">("pending");
-  const [reviewIssueFilter, setReviewIssueFilter] = useState<"all" | "identity" | "policy">("all");
+  const [reviewIssueFilter, setReviewIssueFilter] = useState<"all" | "identity" | "recoverability">("all");
+  const [missingStatus, setMissingStatus] = useState<"pending" | "dismissed" | "all">("pending");
   const [confirmation, setConfirmation] = useState<PendingConfirmation | null>(null);
   const [deleteBusy, setDeleteBusy] = useState("");
   const [selectedDeleteItems, setSelectedDeleteItems] = useState<Map<string, SelectedDeleteItem>>(new Map());
@@ -966,7 +967,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     preset === "review" && Boolean(provider.providerId),
   );
   const missing = useJson<any>(
-    `/api/version-manager/missing?${providerQuery}`,
+    `/api/version-manager/missing?status=${missingStatus}&${providerQuery}`,
     preset === "missing" && Boolean(provider.providerId),
   );
   const [review, setReview] = useState<any>(null);
@@ -1004,6 +1005,17 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       throw new Error(body.error || "Unable to save review action");
     }
     await Promise.all([loadReview(), reviewQueue.reload()]);
+  }
+  async function missingAction(item: any, action: "dismiss" | "restore") {
+    const key = item.dismissalKey || item.id;
+    if (!key || !provider.providerId) return;
+    const response = await fetch(`/api/version-manager/missing/${encodeURIComponent(key)}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ provider: provider.providerId, action }),
+    });
+    await readJsonResponse<any>(response, action === "dismiss" ? "Dismissing missing item" : "Restoring missing item");
+    await missing.reload();
   }
   function requestReviewAction(id: string, body: Record<string, unknown>, item?: any) {
     const isRestore = body.action === "retry" && item?.decision === "dismissed";
@@ -1062,6 +1074,21 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     profile,
     mediaType: mediaType as "all" | "movie" | "tv",
   })));
+  const missingRows = useMemo(() => {
+    type MissingRow = { title: string; year?: number; mediaType: string; season?: number; items: any[] };
+    const rows = new Map<string, MissingRow>();
+    for (const item of needs) {
+      const identity = item.contentIdentity || {};
+      const isTv = item.mediaType === "tv" || identity.kind === "episode";
+      const title = String(identity.title || item.title || "Unknown content");
+      const canonical = identity.tmdbId || identity.tvdbId || identity.imdbId || `${String(identity.normalizedTitle || title).toLowerCase()}:${identity.year || ""}`;
+      const key = isTv ? `tv:${canonical}:season:${identity.season ?? item.season ?? "unknown"}` : `movie:${canonical}`;
+      const current: MissingRow = rows.get(key) || { title, year: identity.year, mediaType: isTv ? "tv" : "movie", season: isTv ? identity.season ?? item.season : undefined, items: [] };
+      current.items.push(item);
+      rows.set(key, current);
+    }
+    return [...rows.values()].sort((left, right) => left.title.localeCompare(right.title) || Number(left.season || 0) - Number(right.season || 0));
+  }, [needs]);
   const enrichReviewEntry = (entry: any) => {
     const ids = new Set(entry.versionIds || []);
     const snapshotVersions = (reviewPreview.data?.groups || []).flatMap((group: any) => group.versions || []).filter((version: any) => ids.has(version.id));
@@ -1069,7 +1096,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     return { ...entry, versions, review: entry.review || entry.organizerReview, allowIdentityActions: entry.issueTypes?.includes("IDENTITY_ISSUE") };
   };
   const contentReviewEntries = (review?.entries || []).filter((entry: any) =>
-    entry.issueTypes?.includes("IDENTITY_ISSUE") || entry.issueTypes?.includes("POLICY_REVIEW"),
+    entry.issueTypes?.includes("IDENTITY_ISSUE") || entry.issueTypes?.includes("RECOVERABILITY_ISSUE"),
   );
   return (
     <div className="space-y-6">
@@ -1123,11 +1150,12 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       {preset === "missing" && (
         <>
           <p className="text-xs text-muted-foreground">Policy Missing lists identified films and episodes for which no current file reaches the configured profile target, including its target resolution and mandatory requirements.</p>
-          <div className="grid gap-2 rounded-lg border p-3 sm:grid-cols-3">
-            <div className="relative"><Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" /><Input className="pl-8" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, episode, filename or failed requirement…" /></div>
-            <select className="rounded border bg-background p-2 text-sm" value={profile} onChange={(event) => setProfile(event.target.value)}><option value="all">Profile: All</option>{missingProfileOptions.map((profileId) => <option key={profileId} value={profileId}>{profileId.toUpperCase()}</option>)}</select>
-            <select className="rounded border bg-background p-2 text-sm" value={mediaType} onChange={(event) => setMediaType(event.target.value)}><option value="all">Type: All</option><option value="movie">Movies</option><option value="tv">TV episodes</option></select>
-          </div>
+            <div className="grid gap-2 rounded-lg border p-3 sm:grid-cols-4">
+              <div className="relative"><Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" /><Input className="pl-8" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, episode, filename or failed requirement…" /></div>
+              <select className="rounded border bg-background p-2 text-sm" value={profile} onChange={(event) => setProfile(event.target.value)}><option value="all">Profile: All</option>{missingProfileOptions.map((profileId) => <option key={profileId} value={profileId}>{profileId.toUpperCase()}</option>)}</select>
+              <select className="rounded border bg-background p-2 text-sm" value={mediaType} onChange={(event) => setMediaType(event.target.value)}><option value="all">Type: All</option><option value="movie">Movies</option><option value="tv">TV episodes</option></select>
+              <select className="rounded border bg-background p-2 text-sm" value={missingStatus} onChange={(event) => setMissingStatus(event.target.value as typeof missingStatus)}><option value="pending">Pending</option><option value="dismissed">Dismissed</option><option value="all">All statuses</option></select>
+            </div>
         </>
       )}
       {(preset === "delete" || preset === "delete-preview") && (
@@ -1188,33 +1216,27 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
             </p>
           ) : (
             <div className="space-y-3">
-              {needs.map((item: any, index: number) => {
-                const identity = item.contentIdentity || {};
-                const versions = missingNeedVersions(item);
-                const itemKey = item.needId || item.id || String(index);
-                return <div key={itemKey} className="space-y-2">
-                  <Card>
-                    <CardContent className="space-y-3 p-4">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div><p className="font-medium">{identity.title || item.title || "Unknown content"}{episodeLabel(identity) ? ` · ${episodeLabel(identity)}` : ""}</p><p className="text-xs text-muted-foreground">{identity.year || "—"} · {item.mediaType || identity.kind || "unknown"} · profile {item.profileName || item.profileId || item.missingProfileId || "—"}</p></div>
-                        <div className="flex items-center gap-2"><StatusBadge value="REQUIREMENT MISSING" /><Button size="sm" variant="outline" onClick={() => setSelected(selected?.id === item.id ? null : item)}>Details</Button></div>
-                      </div>
-                      <div className="rounded border border-amber-500/40 bg-amber-500/5 p-3"><p className="font-medium">{item.whatIsMissing || item.reason || "The configured profile target is not satisfied"}</p><p className="mt-1 text-sm text-muted-foreground">{item.why || item.nextAction || (item.reasonCode === "TARGET_RESOLUTION_MISSING" ? "The current files remain available, but none reaches the target resolution." : "No current file satisfies every mandatory requirement.")}</p></div>
-                      <div className="space-y-2">
-                        {versions.map((version: any) => {
-                          const fingerprint = version.fingerprint || {};
-                          const storage = fingerprint.storage || {};
-                          const video = fingerprint.video || {};
-                          const name = String(storage.path || version.releaseName || version.filename || version.id).split(/[\\/]/).pop();
-                          const requirements = failedRequirementText(version);
-                          return <div key={version.id} className="rounded border p-3 text-xs"><p className="break-all font-medium">Current file · {name}</p><p className="mt-1 text-muted-foreground">{video.resolution || "resolution unknown"} · {video.codec || "codec unknown"} · audio {uniqueLanguages(fingerprint.audio || []) || "unknown"} · subtitles {uniqueLanguages(fingerprint.subtitles || []) || "none"} · {formatSize(storage.size)}</p><p className="text-muted-foreground">{storage.provider || "provider unknown"} · ProviderItem {storage.torrentId || "unknown"}</p>{requirements.map((reason, reasonIndex) => <p key={reasonIndex} className="mt-1 text-amber-700">{reason}</p>)}</div>;
-                        })}
-                      </div>
-                    </CardContent>
-                  </Card>
-                  {selected?.id === item.id && <DetailPanel providerId={provider.providerId} item={{ ...item, allowIdentityActions: false }} onClose={() => setSelected(null)} />}
-                </div>;
-              })}
+              {missingRows.map((row) => <Card key={`${row.mediaType}:${row.title}:${row.season || "movie"}`}>
+                <CardContent className="space-y-3 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div><p className="font-medium">{row.title}{row.mediaType === "tv" ? ` · Season ${row.season ?? "unknown"}` : ""}</p><p className="text-xs text-muted-foreground">{row.year || "—"} · {row.mediaType === "tv" ? `${row.items.length} missing episode${row.items.length === 1 ? "" : "s"}` : "movie"}</p></div>
+                    <StatusBadge value="REQUIREMENT MISSING" />
+                  </div>
+                  <div className="space-y-2 border-l-2 pl-3">
+                    {row.items.map((item: any, index: number) => {
+                      const identity = item.contentIdentity || {};
+                      const versions = missingNeedVersions(item);
+                      const itemKey = item.dismissalKey || item.id || String(index);
+                      const dismissed = item.decision === "dismissed";
+                      return <div key={itemKey} className="rounded border p-3">
+                        <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-medium">{row.mediaType === "tv" ? episodeLabel(identity) || `Episode ${identity.episode || item.episode || "unknown"}` : row.title}</p><p className="text-xs text-muted-foreground">profile {item.profileName || item.profileId || item.missingProfileId || "—"} · {item.whatIsMissing || item.reason || "profile target not satisfied"}</p></div><div className="flex items-center gap-2">{dismissed ? <StatusBadge value="DISMISSED" /> : <StatusBadge value="MISSING" />}<Button size="sm" variant="outline" onClick={() => setSelected(selected?.id === itemKey ? null : { ...item, id: itemKey })}>Details</Button><Button size="sm" variant="ghost" onClick={() => void missingAction(item, dismissed ? "restore" : "dismiss")}>{dismissed ? "Restore" : "Dismiss"}</Button></div></div>
+                        {!dismissed && versions.length > 0 && <div className="mt-2 space-y-2">{versions.map((version: any) => { const fingerprint = version.fingerprint || {}; const storage = fingerprint.storage || {}; const video = fingerprint.video || {}; const name = String(storage.path || version.releaseName || version.filename || version.id).split(/[\\/]/).pop(); return <div key={version.id} className="rounded border p-2 text-xs"><p className="break-all font-medium">Current file · {name}</p><p className="mt-1 text-muted-foreground">{video.resolution || "resolution unknown"} · {video.codec || "codec unknown"} · audio {uniqueLanguages(fingerprint.audio || []) || "unknown"} · subtitles {uniqueLanguages(fingerprint.subtitles || []) || "none"} · {formatSize(storage.size)}</p>{failedRequirementText(version).map((reason, reasonIndex) => <p key={reasonIndex} className="mt-1 text-amber-700">{reason}</p>)}</div>; })}</div>}
+                        {selected?.id === itemKey && <DetailPanel providerId={provider.providerId} item={{ ...item, id: itemKey, allowIdentityActions: false }} onClose={() => setSelected(null)} />}
+                      </div>;
+                    })}
+                  </div>
+                </CardContent>
+              </Card>)}
               {needs.length === 0 && (
                 <Card>
                   <CardContent className="space-y-2 p-6 text-sm text-muted-foreground">
@@ -1236,13 +1258,13 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                 <p className="text-sm text-muted-foreground">
                   {identityOnly
                     ? "Identity issues with a manual Resolve Identity action."
-                    : "Identity matching and policy requirements that need an operator decision. Restore-safety blockers are shown in Policy Delete."}
+                    : "Identity and recoverability issues that need an operator decision. Policy-only items are shown in Policy Missing. Restore-safety blockers are shown in Policy Delete."}
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-2 text-sm">
                 <span>All <Badge variant="outline">{review ? contentReviewEntries.length : "—"}</Badge></span>
                 <span>Identity <Badge variant={review?.summary?.identityIssues > 0 ? "destructive" : "outline"}>{review?.summary?.identityIssues ?? "—"}</Badge></span>
-                <span>Policy <Badge variant="outline">{review?.summary?.policyReviews ?? "—"}</Badge></span>
+                <span>Recoverability <Badge variant="outline">{review?.summary?.recoverabilityIssues ?? "—"}</Badge></span>
               </div>
             </CardContent>
           </Card>
@@ -1256,7 +1278,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
             <select className="rounded border bg-background p-2 text-sm" value={reviewIssueFilter} onChange={(event) => setReviewIssueFilter(event.target.value as typeof reviewIssueFilter)}>
               <option value="all">All issues</option>
               <option value="identity">Identity issues</option>
-              <option value="policy">Policy review</option>
+              <option value="recoverability">Recoverability issues</option>
             </select>
             <span className="text-xs text-muted-foreground">Dismissed items remain auditable and can be restored.</span>
           </div>
@@ -1270,7 +1292,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
               {contentReviewEntries.filter((entry: any) => {
                 if (identityOnly && !entry.issueTypes?.includes("IDENTITY_ISSUE")) return false;
                 if (reviewIssueFilter === "identity" && !entry.issueTypes?.includes("IDENTITY_ISSUE")) return false;
-                if (reviewIssueFilter === "policy" && !entry.issueTypes?.includes("POLICY_REVIEW")) return false;
+                if (reviewIssueFilter === "recoverability" && !entry.issueTypes?.includes("RECOVERABILITY_ISSUE")) return false;
                 return true;
               }).map((entry: any) => {
                 const enriched = enrichReviewEntry(entry);
@@ -1304,7 +1326,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
               {review && contentReviewEntries.filter((entry: any) => {
                 if (identityOnly && !entry.issueTypes?.includes("IDENTITY_ISSUE")) return false;
                 if (reviewIssueFilter === "identity" && !entry.issueTypes?.includes("IDENTITY_ISSUE")) return false;
-                if (reviewIssueFilter === "policy" && !entry.issueTypes?.includes("POLICY_REVIEW")) return false;
+                if (reviewIssueFilter === "recoverability" && !entry.issueTypes?.includes("RECOVERABILITY_ISSUE")) return false;
                 return true;
               }).length === 0 && (
                 <Card><CardContent className="p-6 text-sm text-muted-foreground">No review items match the selected filter.</CardContent></Card>

@@ -48,11 +48,11 @@ describe("unified Media Manager review queue", () => {
     expect(result.entries[0].allowedActions).toContain("RESOLVE_IDENTITY");
   });
 
-  test("classifies policy-only and recoverability-only reviews separately", () => {
+  test("excludes policy-only reviews while retaining recoverability issues", () => {
     const policy = group({ identity: { title: "Policy", normalizedTitle: "policy", year: 2024, kind: "movie", confidence: 0.98, source: "provider", resolutionStatus: "resolved", tmdbId: "policy-tmdb" }, versions: [{ ...(group().versions[0] as any), id: "policy-v", reasons: [{ code: "hard_requirement_failed", message: "Requirement failed", facts: {} }] }] as any });
     const recoverability = group({ identity: { title: "Recovery", normalizedTitle: "recovery", year: 2024, kind: "movie", confidence: 0.98, source: "provider", resolutionStatus: "resolved", tmdbId: "recovery-tmdb" }, versions: [{ ...(group().versions[0] as any), id: "recovery-v" }] as any });
     const result = buildUnifiedReviewQueue([policy, recoverability]);
-    expect(result.entries.find((entry) => entry.title === "Policy")?.issueTypes).toEqual(["POLICY_REVIEW"]);
+    expect(result.entries.find((entry) => entry.title === "Policy")).toBeUndefined();
     expect(result.entries.find((entry) => entry.title === "Recovery")?.issueTypes).toEqual(["RECOVERABILITY_ISSUE"]);
   });
 
@@ -91,6 +91,14 @@ describe("unified Media Manager review queue", () => {
     expect(result.entries).toHaveLength(1);
     expect(result.entries[0].issueTypes).toContain("IDENTITY_ISSUE");
     expect(result.entries[0].versionIds.sort()).toEqual(["silo-s03e01", "silo-s03e02"]);
+  });
+
+  test("keeps canonical episodes separate in identity review", () => {
+    const first = group({ id: "episode-1", identity: { title: "The Last of Us", normalizedTitle: "the last of us", year: 2023, kind: "episode", season: 1, episode: 1, tmdbId: "100", confidence: 0.98, source: "provider", resolutionStatus: "resolved" }, versions: [{ ...(group().versions[0] as any), id: "tlou-s01e01" }] as any });
+    const second = group({ id: "episode-2", identity: { title: "The Last of Us", normalizedTitle: "the last of us", year: 2023, kind: "episode", season: 1, episode: 2, tmdbId: "100", confidence: 0.98, source: "provider", resolutionStatus: "resolved" }, versions: [{ ...(group().versions[0] as any), id: "tlou-s01e02" }] as any });
+    const result = buildUnifiedReviewQueue([first, second]);
+    expect(result.entries).toHaveLength(2);
+    expect(result.entries.map((entry) => entry.versionIds[0]).sort()).toEqual(["tlou-s01e01", "tlou-s01e02"]);
   });
 
   test("does not merge same-title content with different canonical identities", () => {

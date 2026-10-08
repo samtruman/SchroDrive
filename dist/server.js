@@ -570,6 +570,9 @@ function startServer() {
             const provider = configuredMediaManagerProvider(_req.query.provider);
             if (!provider)
                 return res.status(400).json({ ok: false, error: "Selected debrid provider is not configured" });
+            const status = String(_req.query.status || "pending");
+            if (!["pending", "dismissed", "all"].includes(status))
+                return res.status(400).json({ ok: false, error: "status must be pending, dismissed or all" });
             const snapshot = readVersionManagerGroups(provider.id);
             if (!snapshot)
                 return res.status(503).json({ ok: false, snapshotAvailable: false, error: "No valid inventory snapshot is available; start a scan" });
@@ -582,17 +585,36 @@ function startServer() {
                 adapterId: "seerr",
                 acquisitionEnabled: profile.target === "DIRECT_PLAY" ? policy.acquireMissingRemote : false,
             }));
+            const dismissed = (0, versionManagerStore_1.listVersionManagerMissingDismissals)(provider.id);
+            const visibleNeeds = needs
+                .map((need) => ({ ...need, dismissalKey: need.id, decision: dismissed.has(need.id) ? "dismissed" : "pending" }))
+                .filter((need) => status === "all" || need.decision === status);
             const adapter = new seerrAcquisitionAdapter_1.SeerrAcquisitionAdapter();
-            const previews = await Promise.all(needs.map(async (need) => {
+            const previews = await Promise.all(visibleNeeds.map(async (need) => {
                 const preview = await adapter.preview(need);
                 (0, db_1.recordAcquisitionAudit)({ needId: need.id, identity: need.contentIdentity, profileId: need.missingProfileId, adapterId: preview.adapterId, phase: "PREVIEW", status: preview.status, providerRequestId: preview.providerRequestId, detail: [preview.providerStatusSource, preview.mappingWarning].filter(Boolean).join("; ") });
                 return preview;
             }));
-            return res.json({ ok: true, provider: provider.id, readOnly: true, mode: "dry-run", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, inventoryCount: versions.length, groupCount: groups.length, probe, needs, previews, adapter: await adapter.capabilities() });
+            return res.json({ ok: true, provider: provider.id, readOnly: true, mode: "dry-run", status, snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, inventoryCount: versions.length, groupCount: groups.length, probe, needs: visibleNeeds, previews, adapter: await adapter.capabilities() });
         }
         catch (err) {
             return res.status(500).json({ ok: false, error: err?.message || "Missing profile preview failed" });
         }
+    });
+    app.post("/api/version-manager/missing/:key", (req, res) => {
+        const providerId = String(req.body?.provider || req.query.provider || "").trim().toLowerCase();
+        const key = String(req.params.key || "");
+        if (!providerId || !key.startsWith("need:"))
+            return res.status(400).json({ ok: false, error: "provider and a valid missing need key are required" });
+        if (req.body?.action === "dismiss") {
+            (0, versionManagerStore_1.setVersionManagerMissingDismissed)(providerId, key, true);
+            return res.json({ ok: true, decision: "dismissed", dismissalKey: key });
+        }
+        if (req.body?.action === "restore") {
+            (0, versionManagerStore_1.setVersionManagerMissingDismissed)(providerId, key, false);
+            return res.json({ ok: true, decision: "pending", dismissalKey: key });
+        }
+        return res.status(400).json({ ok: false, error: "action must be dismiss or restore" });
     });
     /** Read-only provider-inventory export for backup/migration. */
     app.get("/api/version-manager/export", async (req, res) => {

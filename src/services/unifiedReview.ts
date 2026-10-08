@@ -66,9 +66,12 @@ function digest(value: string): string {
 
 function identityKey(identity: Partial<VersionGroup["identity"]> | undefined): string | undefined {
   if (!identity) return undefined;
-  if (identity.tmdbId) return `tmdb:${identity.kind || "unknown"}:${identity.tmdbId}`;
-  if (identity.imdbId) return `imdb:${identity.kind || "unknown"}:${identity.imdbId}`;
-  if (identity.tvdbId) return `tvdb:${identity.kind || "unknown"}:${identity.tvdbId}`;
+  const episodeSuffix = identity.kind === "episode"
+    ? `:season:${identity.season ?? "unknown"}:episode:${identity.episode ?? "unknown"}`
+    : "";
+  if (identity.tmdbId) return `tmdb:${identity.kind || "unknown"}:${identity.tmdbId}${episodeSuffix}`;
+  if (identity.imdbId) return `imdb:${identity.kind || "unknown"}:${identity.imdbId}${episodeSuffix}`;
+  if (identity.tvdbId) return `tvdb:${identity.kind || "unknown"}:${identity.tvdbId}${episodeSuffix}`;
   if (!identity.normalizedTitle && !identity.title) return undefined;
   let title = identity.normalizedTitle || identity.title || "";
   let year = identity.year;
@@ -92,6 +95,9 @@ function keyForIdentity(identity: VersionGroup["identity"] | undefined, fallback
 }
 
 function identityReviewKey(identity: VersionGroup["identity"]): string {
+  // Unresolved episode reviews stay grouped by title/season so an operator can
+  // resolve the series context once. Canonical provider identities use
+  // identityKey(), which includes the exact episode number.
   return `identity_review:${identity.kind || "episode"}:${identity.normalizedTitle || identity.title || "unknown"}:season:${identity.season ?? "unknown"}`;
 }
 
@@ -206,12 +212,13 @@ export function buildUnifiedReviewQueue(groups: VersionGroup[], organizerReviews
     // unresolved groups in the Identity Review queue even when filename
     // parsing produced a high-confidence fallback title.
     const hasIdentity = !group.identity.tmdbId || identityStatus === "uncertain" || identityStatus === "conflict" || group.identity.confidence < 0.65 || reasonCodes.some((code) => identityReasons.has(code) && group.identity.confidence < 0.65);
-    const policyReasons = reasonCodes.filter((code) => !recoverabilityReasons.has(code) && !(identityReasons.has(code) && hasIdentity));
     const issueTypes: UnifiedReviewIssueType[] = [];
     if (hasIdentity) issueTypes.push("IDENTITY_ISSUE");
     if (hasRecoverability) issueTypes.push("RECOVERABILITY_ISSUE");
-    if (policyReasons.length > 0) issueTypes.push("POLICY_REVIEW");
-    if (issueTypes.length === 0) issueTypes.push("POLICY_REVIEW");
+    // Policy-missing items are already represented by the Missing queue.
+    // Review is reserved for identity and recoverability decisions that need
+    // an operator action. Do not duplicate policy-only entries here.
+    if (issueTypes.length === 0) continue;
     const states = reviewVersions.map(recoverabilityFor);
     const state = states.includes("NOT_RECOVERABLE") ? "NOT_RECOVERABLE" : states.includes("UNKNOWN") ? "UNKNOWN" : "RECOVERABLE";
     const sources = [...new Set(reviewVersions.map((version) => version.fingerprint.storage.recoverability?.source || (version.fingerprint.storage.infoHash ? "INFOHASH" : "UNKNOWN")))];

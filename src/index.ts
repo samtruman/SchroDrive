@@ -12,7 +12,7 @@ import { getDb, closeDb, pruneOldEntries, pruneExpiredStrmCodes } from "./core/d
 import { startStrmServer, stopStrmServer } from "./services/strmService";
 import { startCloudLinksBridge, stopCloudLinksBridge } from "./services/cloudLinks/bridge";
 import { startArrBridge, stopArrBridge } from "./services/arrBridge";
-import { startProviderReconciliation } from "./services/providerReconciliationRuntime";
+import { registerProviderReconciliationWorker, startProviderReconciliation } from "./services/providerReconciliationRuntime";
 import type { ProviderReconciliationWorker } from "./services/providerReconciliation";
 
 const program = new Command();
@@ -109,6 +109,7 @@ program
     }
 
     providerReconciliationWorker = startProviderReconciliation();
+    registerProviderReconciliationWorker(providerReconciliationWorker);
     
     // Start the main server
     startServer();

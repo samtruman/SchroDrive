@@ -262,9 +262,20 @@ export default function DashboardPage() {
     }
   }, []) // Empty deps - only run once on mount
 
-  function handleRefresh() {
+  async function handleRefresh() {
     setRefreshing(true)
-    fetchData(true) // Force refresh
+    setStreamStatus("Refreshing provider activity and organised files…")
+    try {
+      const response = await fetch("/api/dashboard/refresh", { method: "POST" })
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok || data.ok === false) {
+        throw new Error(data.error || "Dashboard refresh failed")
+      }
+      fetchData(true)
+    } catch (error: unknown) {
+      setRefreshing(false)
+      setStreamStatus(`Refresh failed: ${error instanceof Error ? error.message : "unknown error"}`)
+    }
   }
 
   // Calculate stats from real data - combine torrents + downloads
@@ -349,7 +360,7 @@ export default function DashboardPage() {
           )}
           <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing || isStreaming}>
             {(refreshing || isStreaming) ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            <span className="ml-2">Refresh</span>
+            <span className="ml-2">{refreshing ? "Refreshing…" : "Refresh"}</span>
           </Button>
         </div>
       </div>

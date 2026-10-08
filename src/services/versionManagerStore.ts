@@ -35,6 +35,22 @@ export function getVersionManagerPolicyHash(): string {
   return versionManagerPolicyHash(getVersionManagerPolicy(), getVersionProfiles());
 }
 
+export function listVersionManagerMissingDismissals(providerId: string): Set<string> {
+  const rows = getDb().prepare("SELECT dismissal_key FROM version_manager_missing_dismissals WHERE provider_id = ?").all(providerId) as Array<{ dismissal_key: string }>;
+  return new Set(rows.map((row) => row.dismissal_key));
+}
+
+export function setVersionManagerMissingDismissed(providerId: string, dismissalKey: string, dismissed: boolean): void {
+  const database = getDb();
+  if (dismissed) {
+    database.prepare("INSERT OR REPLACE INTO version_manager_missing_dismissals (dismissal_key, provider_id, updated_at) VALUES (?, ?, ?)")
+      .run(dismissalKey, providerId, new Date().toISOString());
+  } else {
+    database.prepare("DELETE FROM version_manager_missing_dismissals WHERE provider_id = ? AND dismissal_key = ?")
+      .run(providerId, dismissalKey);
+  }
+}
+
 export interface VersionManagerPreviewAudit {
   policyHash: string;
   evaluatedAt: string;

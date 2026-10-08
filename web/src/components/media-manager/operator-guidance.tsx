@@ -90,16 +90,20 @@ function PhysicalReleaseCard({ release, selected, selectable, disabled, onToggle
       || Number(leftIdentity.episode ?? left.episode ?? 0) - Number(rightIdentity.episode ?? right.episode ?? 0);
   });
   const canSelect = selectable && Boolean(release.ref.provider && release.ref.providerItemId);
+  const impact = release.versions.find((version: any) => version.providerItem?.state)?.providerItem;
+  const physicallyBlocked = Boolean(impact && impact.state !== "READY");
+  const canSelectRelease = canSelect && !physicallyBlocked;
   const decisions = new Set(release.versions.map((version: any) => version.decision).filter(Boolean));
   const releaseRole = decisions.has("REVIEW") ? "Needs review" : decisions.has("KEEP") && decisions.has("DELETE_CANDIDATE") ? "Protected mixed release" : decisions.has("DELETE_CANDIDATE") ? "Deletion candidate" : decisions.has("KEEP") ? "Policy retained" : "Unclassified release";
   return <div className={`overflow-hidden rounded border ${selected ? "border-destructive/60 bg-destructive/5" : decisions.has("DELETE_CANDIDATE") ? "border-amber-500/40" : decisions.has("KEEP") ? "border-emerald-500/40" : "border-border/70"}`}>
-    <label className={`flex items-start gap-3 p-3 ${canSelect ? "cursor-pointer" : ""}`}>
-      {selectable && <input type="checkbox" checked={selected} disabled={disabled || !canSelect} onChange={(event) => onToggle(event.target.checked)} className="mt-1 h-4 w-4 shrink-0" />}
+    <label className={`flex items-start gap-3 p-3 ${canSelectRelease ? "cursor-pointer" : ""}`}>
+      {selectable && <input type="checkbox" checked={selected} disabled={disabled || !canSelectRelease} onChange={(event) => onToggle(event.target.checked)} className="mt-1 h-4 w-4 shrink-0" />}
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center justify-between gap-2"><p className="font-medium">{episodeCount > 1 ? `Season pack · ${episodeCount} linked episodes` : "Single media release"}</p><span className="rounded border px-2 py-0.5 text-xs">{releaseRole}</span></div>
         <p className="text-xs text-muted-foreground">{release.ref.provider || "Provider unavailable"} · ProviderItem {release.ref.providerItemId || "unavailable"}{selected ? " · selected for deletion" : ""}</p>
       </div>
     </label>
+    {physicallyBlocked && <p className="border-t px-3 py-2 text-xs text-amber-700">Visible policy candidate, but physical deletion is blocked: {(impact.reasons || []).join(" · ")}</p>}
     <div className="divide-y border-t">{orderedVersions.map((version: any, index: number) => <VersionRow key={version.id || index} version={version} />)}</div>
   </div>;
 }

@@ -271,6 +271,12 @@ function runMigrations(database: Database): void {
       review_key TEXT PRIMARY KEY,
       updated_at TEXT NOT NULL
     )`,
+    `CREATE TABLE IF NOT EXISTS version_manager_missing_dismissals (
+      dismissal_key TEXT NOT NULL,
+      provider_id TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (provider_id, dismissal_key)
+    )`,
     `CREATE TABLE IF NOT EXISTS version_manager_delete_audit (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       provider TEXT NOT NULL,

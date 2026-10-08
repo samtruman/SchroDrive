@@ -38,7 +38,7 @@ import { evaluateVersionGroups, validateRule, validateScoringRules, versionManag
 import { loadMediaManagerInventory, type MediaManagerInventoryStats } from "./services/mediaManagerInventory";
 import { deriveAcquisitionNeeds } from "./services/acquisition";
 import { SeerrAcquisitionAdapter } from "./services/seerrAcquisitionAdapter";
-import { getLatestVersionManagerRecords, getLatestVersionManagerScan, getLatestVersionManagerSnapshot, getVersionManagerPolicy, getVersionProfiles, saveVersionManagerPolicy, saveVersionManagerPreviewAudit, saveVersionManagerScan, saveVersionManagerSnapshot, saveVersionProfiles } from "./services/versionManagerStore";
+import { getLatestVersionManagerRecords, getLatestVersionManagerScan, getLatestVersionManagerSnapshot, getVersionManagerPolicy, getVersionProfiles, listVersionManagerMissingDismissals, saveVersionManagerPolicy, saveVersionManagerPreviewAudit, saveVersionManagerScan, saveVersionManagerSnapshot, saveVersionProfiles, setVersionManagerMissingDismissed } from "./services/versionManagerStore";
 import { probeVersionRecords } from "./services/versionManagerProbe";
 import { enrichVersionMetadata } from "./services/versionManagerMetadata";
 import { searchTmdbCandidates } from "./services/tmdbService";
@@ -55,6 +55,7 @@ import { buildDeleteImpact } from "./services/deleteImpact";
 import { BatchDeleteExecutionError, ProviderInventoryDriftError, executeVersionManagerDelete, executeVersionManagerDeleteBatch } from "./services/deleteExecutor";
 import { getMigrationJob, listMigrationJobs, startMigrationJob } from "./services/migrationJob";
 import { discoverSeerrArrProfiles } from "./services/seerrArrProfiles";
+import { refreshProviderActivity } from "./services/providerReconciliationRuntime";
 
 // ===========================================================================
 // Server Initialisation
@@ -159,6 +160,17 @@ export function startServer() {
   // ===========================================================================
   // Configuration API
   // ===========================================================================
+
+  /** POST /api/dashboard/refresh — Refreshes recent provider activity and organised links. */
+  app.post("/api/dashboard/refresh", async (_req, res) => {
+    try {
+      const result = await refreshProviderActivity();
+      res.json({ ok: true, ...result });
+    } catch (error: any) {
+      console.error("[api/dashboard/refresh] Refresh failed:", error?.message || String(error));
+      res.status(503).json({ ok: false, error: error?.message || "Dashboard refresh failed" });
+    }
+  });
 
   /**
    * GET /api/config — Returns the current configuration with metadata.
@@ -542,6 +554,8 @@ export function startServer() {
     try {
       const provider = configuredMediaManagerProvider(_req.query.provider);
       if (!provider) return res.status(400).json({ ok: false, error: "Selected debrid provider is not configured" });
+      const status = String(_req.query.status || "pending");
+      if (!["pending", "dismissed", "all"].includes(status)) return res.status(400).json({ ok: false, error: "status must be pending, dismissed or all" });
       const snapshot = readVersionManagerGroups(provider.id);
       if (!snapshot) return res.status(503).json({ ok: false, snapshotAvailable: false, error: "No valid inventory snapshot is available; start a scan" });
       const versions = snapshot.groups.flatMap((group: any) => group.versions || []);
@@ -553,16 +567,35 @@ export function startServer() {
         adapterId: "seerr",
         acquisitionEnabled: profile.target === "DIRECT_PLAY" ? policy.acquireMissingRemote : false,
       }));
+      const dismissed = listVersionManagerMissingDismissals(provider.id);
+      const visibleNeeds = needs
+        .map((need) => ({ ...need, dismissalKey: need.id, decision: dismissed.has(need.id) ? "dismissed" : "pending" }))
+        .filter((need) => status === "all" || need.decision === status);
       const adapter = new SeerrAcquisitionAdapter();
-      const previews = await Promise.all(needs.map(async (need) => {
+      const previews = await Promise.all(visibleNeeds.map(async (need) => {
         const preview = await adapter.preview(need);
         recordAcquisitionAudit({ needId: need.id, identity: need.contentIdentity, profileId: need.missingProfileId, adapterId: preview.adapterId, phase: "PREVIEW", status: preview.status, providerRequestId: preview.providerRequestId, detail: [preview.providerStatusSource, preview.mappingWarning].filter(Boolean).join("; ") });
         return preview;
       }));
-      return res.json({ ok: true, provider: provider.id, readOnly: true, mode: "dry-run", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, inventoryCount: versions.length, groupCount: groups.length, probe, needs, previews, adapter: await adapter.capabilities() });
+      return res.json({ ok: true, provider: provider.id, readOnly: true, mode: "dry-run", status, snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, inventoryCount: versions.length, groupCount: groups.length, probe, needs: visibleNeeds, previews, adapter: await adapter.capabilities() });
     } catch (err: any) {
       return res.status(500).json({ ok: false, error: err?.message || "Missing profile preview failed" });
     }
+  });
+
+  app.post("/api/version-manager/missing/:key", (req, res) => {
+    const providerId = String(req.body?.provider || req.query.provider || "").trim().toLowerCase();
+    const key = String(req.params.key || "");
+    if (!providerId || !key.startsWith("need:")) return res.status(400).json({ ok: false, error: "provider and a valid missing need key are required" });
+    if (req.body?.action === "dismiss") {
+      setVersionManagerMissingDismissed(providerId, key, true);
+      return res.json({ ok: true, decision: "dismissed", dismissalKey: key });
+    }
+    if (req.body?.action === "restore") {
+      setVersionManagerMissingDismissed(providerId, key, false);
+      return res.json({ ok: true, decision: "pending", dismissalKey: key });
+    }
+    return res.status(400).json({ ok: false, error: "action must be dismiss or restore" });
   });
 
   /** Read-only provider-inventory export for backup/migration. */

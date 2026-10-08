@@ -67,6 +67,23 @@ describe("version manager", () => {
     expect(needs[0].existingVersions).toHaveLength(1);
   });
 
+  test("retains the best recoverable fallback and marks surplus versions for deletion when the target is missing", () => {
+    const smaller = fingerprintTorrent(torrent("Example.Show.S01E02.1080p.WEB-DL.ENG.H264.mkv", 8_000_000_000), "alldebrid")[0];
+    const larger = fingerprintTorrent(torrent("Example.Show.S01E02.1080p.WEB-DL.ENG.HEVC.mkv", 12_000_000_000), "alldebrid")[0];
+    for (const version of [smaller, larger]) {
+      version.fingerprint.identity = { ...version.fingerprint.identity, tmdbId: "123", resolutionStatus: "resolved", confidence: 1, kind: "episode", season: 1, episode: 2 };
+      version.fingerprint.storage.infoHash = version === smaller ? "a".repeat(40) : "b".repeat(40);
+      version.fingerprint.storage.recoverability = { status: "RECOVERABLE", source: "INFOHASH", infoHash: version.fingerprint.storage.infoHash };
+    }
+    const [group] = evaluateVersionGroups([smaller, larger], [profile()]);
+    expect(group.profileStatuses).toEqual([{ profileId: "primary", satisfied: false }]);
+    expect(group.versions.find((version) => version.id === larger.id)?.decision).toBe("KEEP");
+    expect(group.versions.find((version) => version.id === larger.id)?.reasons.some((reason) => reason.code === "fallback_retained")).toBe(true);
+    expect(group.versions.find((version) => version.id === smaller.id)?.decision).toBe("DELETE_CANDIDATE");
+    expect(group.versions.find((version) => version.id === smaller.id)?.reasons.some((reason) => reason.code === "duplicate_fallback")).toBe(true);
+    expect(deriveAcquisitionNeeds([group], [profile()], { acquisitionEnabled: false })).toHaveLength(1);
+  });
+
   test("marks the quality target satisfied when a valid target-resolution version exists", () => {
     const quality = profile();
     const groups = evaluateVersionGroups(

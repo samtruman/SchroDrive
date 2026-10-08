@@ -2,6 +2,7 @@ import { config } from "../core/config";
 import { registry } from "../providers";
 import { parseMediaFilename } from "./mediaParser";
 import { recordOrganizerReview } from "./organizerReview";
+import { organizeOnce } from "./organizer";
 import {
   ProviderSnapshotSource,
   ProviderReconciliationIntake,
@@ -59,4 +60,27 @@ export function startProviderReconciliation(): ProviderReconciliationWorker | un
   worker.start();
   console.log("[provider-reconciliation] started; provider intake is read-only and provider deletion/repair is not used");
   return worker;
+}
+
+/**
+ * Runs the lightweight provider refresh used by the Dashboard.
+ *
+ * This deliberately does not run the Version Manager inventory scan. The
+ * Dashboard only needs current provider activity and newly visible organised
+ * links; the full policy/profile inventory remains an explicit Media Manager
+ * operation.
+ */
+let activeProviderReconciliationWorker: ProviderReconciliationWorker | undefined;
+
+export async function refreshProviderActivity(): Promise<{ events: number; organizerCompleted: boolean }> {
+  const events = activeProviderReconciliationWorker
+    ? await activeProviderReconciliationWorker.runRecent()
+    : [];
+  await organizeOnce();
+  return { events: events.length, organizerCompleted: true };
+}
+
+/** Registers the worker created during application startup for on-demand refreshes. */
+export function registerProviderReconciliationWorker(worker: ProviderReconciliationWorker | undefined): void {
+  activeProviderReconciliationWorker = worker;
 }
