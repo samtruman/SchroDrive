@@ -227,8 +227,18 @@ function applyOrganizerReviewOverride(parsed, override, sourceBasename) {
  * Keeps uncertain identities out of the organised library until an operator
  * explicitly accepts an override. A dismissed item is handled by the caller.
  */
-function shouldDeferToReview(identity, decision) {
-    return identity.status !== "matched" && decision !== "accepted";
+function shouldDeferToReview(identity, decision, parsed) {
+    if (decision === "accepted")
+        return false;
+    if (identity.status !== "matched")
+        return true;
+    // A TV item without a concrete season/episode must never be placed directly
+    // in the organised library. Absolute-numbered anime is the only exception.
+    if (parsed?.type === "tv" && parsed.absolute === undefined &&
+        (typeof parsed.season !== "number" || typeof parsed.episode !== "number")) {
+        return true;
+    }
+    return false;
 }
 /**
  * Extracts hints from parent directory names, looking for patterns like
@@ -996,7 +1006,7 @@ async function organizeOnce(opts) {
         if (persistedReview?.decision === "accepted" && persistedReview.override) {
             parsed = applyOrganizerReviewOverride(parsed, persistedReview.override, base);
         }
-        if (shouldDeferToReview(structuredIdentity, persistedReview?.decision)) {
+        if (shouldDeferToReview(structuredIdentity, persistedReview?.decision, parsed)) {
             (0, organizerReview_1.recordOrganizerReview)(src, structuredIdentity);
             unknownCount++;
             if (unknownSamples.length < 10)

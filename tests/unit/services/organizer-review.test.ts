@@ -127,6 +127,19 @@ describe("Organizer review queue", () => {
     expect(shouldDeferToReview({ ...parsed, status: "matched" })).toBe(false);
   });
 
+  test("defers a TV identity without season and episode", () => {
+    const matchedIdentity = { ...parsed, status: "matched" as const, kind: "episode" as const, title: "Example Show" };
+    const incompleteTv: Parsed = { type: "tv", show: "Example Show", ext: ".mkv" };
+    expect(shouldDeferToReview(matchedIdentity, undefined, incompleteTv)).toBe(true);
+    expect(shouldDeferToReview(matchedIdentity, "accepted", incompleteTv)).toBe(false);
+  });
+
+  test("allows absolute-numbered anime without season and episode", () => {
+    const matchedIdentity = { ...parsed, status: "matched" as const, kind: "anime-episode" as const, title: "Example Anime" };
+    const absoluteAnime: Parsed = { type: "tv", show: "Example Anime", absolute: 12, ext: ".mkv" };
+    expect(shouldDeferToReview(matchedIdentity, undefined, absoluteAnime)).toBe(false);
+  });
+
   test("applies an accepted override without changing the source filename", () => {
     const unresolved: Parsed = { type: "unknown", ext: ".mkv" };
     expect(applyOrganizerReviewOverride(

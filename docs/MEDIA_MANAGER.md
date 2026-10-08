@@ -322,7 +322,17 @@ overrides take precedence over weak title matching. Evidence may include:
 Movie and episode identities are never merged solely because their titles look
 similar. Series title, year, season, episode and media kind remain part of the
 group key. Ambiguous, conflicting, low-confidence, or missing TMDb identities
-remain REVIEW unless an operator supplies a valid override.
+remain REVIEW unless an operator supplies a valid override. A TV item is also
+held for REVIEW when its title is recognized but its season or episode cannot
+be determined. It must not be placed directly in a season directory or in a
+series-level fallback file. Absolute-numbered anime is the explicit exception
+when an absolute episode number is available.
+
+Season and episode numbers are parsed from the release name and path context;
+TMDb confirms the series identity and type but does not infer missing episode
+numbers. Parser anomalies such as placeholder markers (S00E00) must be
+resolved before organization, otherwise the item remains in REVIEW for manual
+assignment.
 
 The identity picker can search TMDb and apply or clear a manual override. The
 override reevaluates the latest cached records and does not start a provider

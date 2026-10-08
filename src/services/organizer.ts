@@ -223,8 +223,19 @@ export function applyOrganizerReviewOverride(parsed: Parsed, override: ReviewOve
 export function shouldDeferToReview(
   identity: ReturnType<typeof parseMediaFilename>,
   decision?: ReviewDecision,
+  parsed?: Parsed,
 ): boolean {
-  return identity.status !== "matched" && decision !== "accepted";
+  if (decision === "accepted") return false;
+  if (identity.status !== "matched") return true;
+
+  // A TV item without a concrete season/episode must never be placed directly
+  // in the organised library. Absolute-numbered anime is the only exception.
+  if (parsed?.type === "tv" && parsed.absolute === undefined &&
+      (typeof parsed.season !== "number" || typeof parsed.episode !== "number")) {
+    return true;
+  }
+
+  return false;
 }
 
 /**
@@ -1065,7 +1076,7 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
       parsed = applyOrganizerReviewOverride(parsed, persistedReview.override, base);
     }
 
-    if (shouldDeferToReview(structuredIdentity, persistedReview?.decision)) {
+    if (shouldDeferToReview(structuredIdentity, persistedReview?.decision, parsed)) {
       recordOrganizerReview(src, structuredIdentity);
       unknownCount++;
       if (unknownSamples.length < 10) unknownSamples.push(src);
