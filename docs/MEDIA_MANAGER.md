@@ -597,11 +597,38 @@ The PR should be split into reviewable commits where practical:
 
 ### 18. Validation status
 
-The consolidated baseline is tagged baseline-2026-10-08 at commit 7db43c5.
-The repository typecheck and the unit/e2e/regression suite passed with 340
-tests and 0 failures before the documentation-only follow-up commit.
+The consolidated baseline is branch baseline/schrodrive-2026-10-08 at commit d806fe9.
+The repository typecheck and the unit/e2e/regression suite passed with 343
+tests and 0 failures before this documentation-only follow-up.
 
 The current production image is not a substitute for source validation. Any
 future PR must be tested from a clean branch based on the baseline and must
 not be considered deployed until source, built frontend, image, Compose
 reference, and runtime mounts have been compared.
+
+## Inventory readiness and provider resilience
+
+The Media Manager operates on a detailed provider inventory. A lightweight
+provider listing is not sufficient for policy evaluation, duplicate detection,
+season-pack analysis, or delete-impact analysis.
+
+During a cold start, the mount may initially have only a lightweight provider
+index while detailed file trees are being restored or refreshed. The Media
+Manager must therefore expose an explicit inventory state and must not present
+partial data as a complete evaluation. It should show progress, pending items,
+timeouts, retries, and the timestamp of the last successful detailed scan.
+
+The planned provider inventory architecture uses a persistent incremental index
+rather than rebuilding all file trees on every restart:
+
+- provider status and file-tree metadata are persisted under application data;
+- the last valid item-level result is retained when a provider request fails;
+- new or changed torrents are refreshed in bounded batches;
+- detailed file trees can be loaded lazily when an item is opened;
+- background reconciliation continues after the HTTP API and mount are ready;
+- one provider timeout is isolated from the rest of the inventory.
+
+The Media Manager becomes fully actionable only when the required inventory
+scope is ready. This preserves the correctness of Missing, Review, Delete
+Candidates, season-pack comparison, and duplicate analysis while keeping the
+mount and general SchroDrive UI available during startup.
