@@ -1,4 +1,159 @@
-# Media Manager
+# Media Manager - upstream proposal
+
+## Proposal summary
+
+This proposal adds a policy-aware Media Manager to SchroDrive. It gives
+operators one consistent way to understand the media already present in a
+provider, compare multiple releases, identify missing profile requirements,
+review uncertain metadata, and safely remove redundant provider items.
+
+The proposal is intentionally provider-neutral. It does not replace existing
+provider clients, Radarr, Sonarr, Seerr, or Jellyfin. It adds a persisted
+read model and policy engine above those integrations, with explicit actions
+for acquisition, review, migration, and deletion.
+
+The core user experience is:
+
+    inventory -> identity -> policy evaluation -> explainable projection
+             -> optional, explicitly confirmed action
+
+The important distinction is that a policy decision is not automatically a
+destructive action. A scan can classify a release as DELETE_CANDIDATE, but
+only the explicit delete endpoint can request deletion, and safety checks run
+again immediately before the provider operation.
+
+## Problem
+
+Provider-backed libraries commonly contain:
+
+- several releases of the same movie or episode;
+- files with different resolution, language, codec, audio, or source quality;
+- season packs mixed with independent episode releases;
+- incomplete or conflicting identities;
+- content that does not satisfy the configured quality profile;
+- files that are missing from the preferred profile but still useful as a
+  lower-quality fallback.
+
+Without a canonical model, these cases are difficult to explain and unsafe to
+manage. A flat file list cannot distinguish a duplicate from the only copy, a
+season pack from unrelated episodes, or an inferior release from a valid
+alternative.
+
+The Media Manager addresses this by making identity, policy, physical provider
+ownership, and operator actions explicit.
+
+## Proposed design
+
+The feature introduces four cooperating concepts:
+
+1. canonical provider inventory and file fingerprints;
+2. identity-first grouping into movies, episodes, and versions;
+3. profile-based evaluation with hard requirements and ranking;
+4. read-only projections plus guarded explicit actions.
+
+The Web UI reads the same persisted snapshot as the API. It does not create a
+second inventory or make decisions that differ from the backend.
+
+## User-visible behavior
+
+The feature exposes four complementary views:
+
+- Library: what exists, grouped by canonical identity and version;
+- Policy Missing: what each enabled profile still requires, grouped by title,
+  series, season, and episode;
+- Review: what cannot be decided safely because identity, metadata,
+  recoverability, or policy conditions are uncertain;
+- Policy Delete: which physical provider items are redundant and eligible for
+  explicit deletion, including retained alternatives and blockers.
+
+Multiple files for one episode are compared even when all are 1080p. A 1080p
+release is not discarded simply because the preferred profile targets 2160p.
+The preferred resolution remains missing, while an inferior same-resolution
+duplicate can still be identified as a deletion candidate.
+
+Language is an eligibility criterion, not merely a sort key. A release with a
+required language can therefore be retained over a larger or higher-quality
+release that lacks it.
+
+Season packs are evaluated per episode. A pack is one physical deletion unit,
+but its individual episodes must actually cover the affected identities.
+Incomplete packs cannot be used as a replacement for episodes they do not
+contain.
+
+## Safety model
+
+The default delete mode is DRY_RUN. In this mode the selected provider items
+are revalidated but the provider delete API is not called.
+
+LIVE deletion is opt-in and requires:
+
+- disabling the persisted dry-run safety flag;
+- an unchanged snapshot ID;
+- final policy and physical-impact evaluation;
+- provider inventory revalidation;
+- recoverability and only-copy checks;
+- KEEP/protected alternative checks;
+- exact confirmation of the selected provider item or batch.
+
+No scan, refresh, policy evaluation, or UI rendering performs a delete.
+
+Acquisition is also explicit. Missing is read-only by default. A request is
+sent only when acquisition is enabled, Seerr/ARR mapping is available, the
+need is revalidated, and the operator confirms the single request.
+
+## Scope of this proposal
+
+Included:
+
+- provider-neutral inventory and fingerprint model;
+- conservative identity resolution and manual identity overrides;
+- version profiles, language policies, hard rules, scoring, and ranking;
+- 1080p and 2160p comparison, fallback retention, and season-pack analysis;
+- Library, Missing, Review, and Delete projections;
+- persisted snapshots, policy hashes, audit records, and scan status;
+- guarded provider deletion and read-only migration/backup references;
+- focused API, UI, and regression tests.
+
+Not included:
+
+- a new torrent search/indexer implementation;
+- replacement of provider adapters;
+- creation or modification of Radarr/Sonarr profiles;
+- provider-specific credentials, mount paths, Compose files, or deployment
+  procedures;
+- automatic deletion or acquisition triggered by a background scan;
+- local media-server library replacement.
+
+## Compatibility and migration
+
+The feature uses existing provider contracts and does not require media bytes to
+be copied or renamed. Existing provider items remain the source of truth.
+Snapshots can be rebuilt from provider inventory, and migration manifests
+contain recovery metadata rather than video content.
+
+When the feature is disabled, existing provider and integration behavior is
+unchanged. When enabled, the Media Manager starts with a scan and publishes
+projections only after a valid snapshot is available.
+
+## Review guide for maintainers
+
+The most important invariants to review are:
+
+- identity uncertainty must fail closed;
+- a partial scan must not replace the last valid snapshot;
+- a logical candidate must retain a physical ProviderItem;
+- a season pack must be evaluated per episode;
+- lower-resolution duplicates must remain comparable;
+- required language must outrank size or resolution when configured;
+- a DELETE_CANDIDATE must never imply automatic deletion;
+- live deletion must be revalidated against current provider inventory;
+- provider credentials and deployment-specific paths must not enter the
+  generic implementation.
+
+The remainder of this document is the technical reference for the proposal:
+data model, lifecycle, policy semantics, API surface, persistence rules,
+failure behavior, and test expectations.
+
 
 ## Feature scope and upstream boundary
 
@@ -43,7 +198,7 @@ must preserve the existing provider and ARR contracts, avoid local deployment
 references, and include focused regression tests for every policy projection
 that changes.
 
-## Implementation specification
+## Technical reference
 
 ### 1. Purpose
 
@@ -400,7 +555,7 @@ It must exclude:
 - production Compose files and runtime overrides;
 - deployment-specific mount paths;
 - credentials, tokens, API keys, and real media filenames;
-- CineCircle-specific orchestration;
+- deployment-specific orchestration;
 - local Portainer or server procedures;
 - unrelated provider reconciliation or dashboard deployment changes.
 
@@ -424,159 +579,3 @@ The current production image is not a substitute for source validation. Any
 future PR must be tested from a clean branch based on the baseline and must
 not be considered deployed until source, built frontend, image, Compose
 reference, and runtime mounts have been compared.
-
-## Architecture
-
-The Media Manager is a read model over the existing provider and policy
-services. A configured `DebridProvider` produces `ProviderItem` records and
-their provider file trees. The canonical inventory turns real media files
-into `MediaFingerprint` records, `Version` records, and `VersionGroup`
-records. Identity enrichment and policy evaluation operate on that persisted
-snapshot; the Web UI does not create a second inventory engine.
-
-Library, Missing, Review, and Delete read from the valid canonical snapshot.
-Review is a deduplicated projection and may contain overlapping identity,
-policy, and recoverability reasons. Missing acquisition previews are only
-generated when the REMOTE policy is enabled.
-
-Settings keeps retention profiles in SchröDrive while acquisition remains
-owned by the configured ARR/Seerr integrations. The profile editor includes
-profile-scoped language and rule controls and a read-only `Preview impact`
-operation (`POST /api/version-manager/profiles/preview`) that evaluates
-unsaved configuration against the latest valid snapshot without persisting it
-or rescanning providers.
-
-When Seerr is configured, `GET /api/version-manager/acquisition/arr-profiles`
-discovers Radarr and Sonarr instances through Seerr's read-only settings
-gateway. It first consumes profiles returned by Seerr itself. If the installed
-Seerr version exposes an ARR instance but does not proxy that instance's
-profiles, the server-side adapter may perform a read-only fallback against the
-declared ARR connection and credentials returned by Seerr; no ARR address,
-port, credential, or container name is hardcoded. ARR credentials are never
-returned to the Web UI. The response preserves the ARR kind, provider/server
-identity, profile identity, and discovery source; the Media Manager stores only
-an explicit association on a retention profile. ARR profiles are never
-recreated locally. A missing, unavailable, or stale ARR profile is shown with
-its actual discovery/mapping state and does not trigger acquisition.
-The current acquisition adapter supports Seerr request/status flows, but does
-not claim a second physical version for a title when the gateway only exposes
-one movie or season request scope; such cases remain explicitly unsupported.
-
-Policy changes are evaluated against the latest valid snapshot immediately;
-they do not require another provider inventory scan. The status projection
-exposes whether that snapshot was evaluated with the current decision-config
-hash or is stale. Missing requirements are derived for every enabled retention
-profile; Seerr previews are separately marked unavailable when acquisition is
-disabled or the gateway is not configured.
-
-## Library
-
-Library supports movie and TV scopes, search, decision/profile filters,
-multiple-version and attention filters, title/version sorting, and a compact
-hierarchy for canonical TV identities:
-
-`series -> season -> episode -> versions`.
-
-Unresolved identities remain separate and are labelled unresolved. The
-projection does not change inventory cardinality or policy decisions. Version
-details come from the existing fingerprint and provider-file metadata; an
-unknown field is displayed as unavailable rather than inferred.
-
-## Delete
-
-The /api/version-manager/delete endpoint is the physical delete-unit impact
-projection. It groups versions by the provider item that an adapter can
-actually delete, reports affected content, only-copy status, recoverability
-blockers, and whether the item is partially redundant. The Delete Executor is
-enabled and is exposed through single-item and batch endpoints. The impact
-response also identifies physical size, alternative KEEP versions, profile
-ownership, and ProviderItems protected by a KEEP version; logical
-DELETE_CANDIDATE counts must still not be interpreted as an instruction to
-delete automatically. The /api/version-manager/delete-preview endpoint
-remains a compatibility read-only policy projection.
-
-Delete execution defaults to DRY_RUN through the persisted safety setting
-`deleteDryRun`. In DRY_RUN the selected ProviderItems are fully revalidated but
-the provider delete method is not called. LIVE execution requires explicitly
-disabling that safety setting and supplying the exact confirmation for the
-selected ProviderItem or batch. The executor then revalidates the snapshot,
-checks provider inventory drift, protects KEEP alternatives, and deletes only
-the confirmed provider torrent/item.
-
-The `preferCompletePack` setting is persisted as a policy preference for future pack-aware
-impact evaluation. Pack completeness must be checked per episode before it
-can authorize a physical deletion; incomplete or uncertain packs remain
-review-blocked even when live execution is enabled.
-
-## Backup & Migration
-
-The existing `MigrationManifest` is the canonical lightweight reference
-format. Export stores magnet/infohash evidence, provider metadata, file-tree
-metadata, identity associations, and version/profile associations without
-copying media bytes.
-
-Magnet Backup uses the same exporter through:
-
-- `GET /api/version-manager/magnet-backup`
-- `POST /api/version-manager/magnet-backup` with `FULL` or `INCREMENTAL`
-- `GET /api/version-manager/magnet-backup/:id`
-
-Backups are written atomically under the configured data directory, checksummed
-and retained historically. Incrementals are always compared with the latest
-verified FULL baseline, so their `baseBackupId` remains reconstructible even
-when another incremental backup was created in between. A removal never erases
-an older magnet. A magnet is recovery
-evidence, not a guarantee that the content remains available.
-
-The existing migration preview and importer are reused. Explicit migration
-execution is available only through a confirmed asynchronous job:
-
-- `POST /api/version-manager/migration/jobs` with `START_MIGRATION`
-- `GET /api/version-manager/migration/jobs`
-- `GET /api/version-manager/migration/jobs/:id`
-
-The job is persisted, single-flight for a source/target pair, survives browser
-disconnects, reuses per-item revalidation and audit records, and never deletes
-from the source provider. Provider credentials and runtime identifiers are
-not written to documentation.
-
-## UAT safeguards
-
-Scan progress is persisted through identity enrichment. Review clears a stale
-error after a successful retry. Migration dashboard values distinguish loading,
-unavailable/unconfigured provider state, not-calculated state, and an actual
-zero. Export remains source-only; migration state requires a configured target
-because it reconciles against target inventory.
-
-## Current limitations
-
-- LIVE delete execution is intentionally opt-in. DRY_RUN remains the default,
-  and every live operation requires final revalidation and explicit
-  confirmation.
-- Automatic backup scheduling is disabled by default. When enabled it uses the
-  existing process scheduler, the configured Europe/Rome timezone by default,
-  and configurable retention values; it never adds a cron container.
-- Pack preference is persisted and surfaced in Retention settings. Pack
-  completeness is evaluated per affected episode; uncertain or incomplete
-  coverage remains blocked from automatic deletion.
-- ARR quality profiles are presented as an integration concern when the
-  corresponding ARR capability is configured; SchröDrive does not recreate
-  ARR custom formats or direct-mode indexer search. Seerr remains the required
-  entry point in ARR mode; direct ARR access is only a server-side, read-only
-  compatibility fallback using an instance dynamically declared by Seerr.
-- Missing is a read-only projection by default. A real acquisition request
-  is available only when explicitly enabled, mapped through Seerr, revalidated,
-  and confirmed with REQUEST_ONE.
-- Browser and provider validation must use isolated fixtures before deployment;
-  production data is not modified by these read-only projections.
-
-## Safety contract
-
-Canonical snapshots are never replaced by an invalid or incomplete scan.
-Provider readiness is distinct from an empty inventory. Delete Preview,
-Review, Missing, Magnet Backup, and migration preview are read-only. Delete
-execution is a separate explicit operation, protected by the persisted
-DRY_RUN setting, exact ProviderItem confirmation, snapshot matching, provider
-inventory revalidation, and KEEP/only-copy safety checks. No delete is
-triggered by a scan, refresh, policy evaluation, or display of a
-DELETE_CANDIDATE.
