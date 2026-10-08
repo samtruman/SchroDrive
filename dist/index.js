@@ -101,6 +101,7 @@ program
         (0, mediaServerWatchlist_1.startWatchlistPoller)();
     }
     providerReconciliationWorker = (0, providerReconciliationRuntime_1.startProviderReconciliation)();
+    (0, providerReconciliationRuntime_1.registerProviderReconciliationWorker)(providerReconciliationWorker);
     // Start the main server
     (0, server_1.startServer)();
     // Start Stremio addon server (separate port)

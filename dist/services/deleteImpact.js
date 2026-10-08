@@ -48,6 +48,43 @@ function reasonMessages(version) {
 function itemKey(provider, providerItemId) {
     return `${provider}:${providerItemId}`;
 }
+function logicalKeys(item) {
+    return new Set(item.versions.map((version) => version.logicalKey));
+}
+function isEpisodePack(item) {
+    return item.versions.every((version) => version.identity.kind === "episode") && logicalKeys(item).size > 1;
+}
+function resolutionValue(version) {
+    const resolution = String(version.fingerprint?.video?.resolution || "").toLowerCase();
+    if (resolution === "4k")
+        return 2160;
+    const match = resolution.match(/(\d{3,4})p/);
+    return match ? Number(match[1]) : 0;
+}
+function episodeVersionPreference(packVersion, standaloneVersion) {
+    const packEvaluation = packVersion.evaluations?.find((evaluation) => evaluation.profileId === "primary")
+        || packVersion.evaluations?.find((evaluation) => evaluation.eligible);
+    const standaloneEvaluation = standaloneVersion.evaluations?.find((evaluation) => evaluation.profileId === "primary")
+        || standaloneVersion.evaluations?.find((evaluation) => evaluation.eligible);
+    if (packEvaluation?.eligible !== standaloneEvaluation?.eligible)
+        return packEvaluation?.eligible ? 1 : -1;
+    const packScore = Number(packEvaluation?.score ?? 0);
+    const standaloneScore = Number(standaloneEvaluation?.score ?? 0);
+    if (packScore !== standaloneScore)
+        return packScore - standaloneScore;
+    const packSize = Number(packVersion.fingerprint?.storage?.size || 0);
+    const standaloneSize = Number(standaloneVersion.fingerprint?.storage?.size || 0);
+    if (packSize !== standaloneSize)
+        return packSize - standaloneSize;
+    return resolutionValue(packVersion) - resolutionValue(standaloneVersion);
+}
+function sameEpisodeFamily(left, right) {
+    const a = left.identity;
+    const b = right.identity;
+    return (a.tmdbId || a.title || "") === (b.tmdbId || b.title || "")
+        && (a.year || "") === (b.year || "")
+        && (a.season ?? "") === (b.season ?? "");
+}
 function addReason(item, reason) {
     if (!item.reasons.includes(reason))
         item.reasons.push(reason);
@@ -55,6 +92,8 @@ function addReason(item, reason) {
 function matchesScope(item, scope) {
     const hasCandidate = item.versions.some((version) => version.decision === "DELETE_CANDIDATE");
     const hasReview = item.versions.some((version) => version.decision === "REVIEW");
+    // Policy Delete exposes only physical ProviderItems that are safe to remove.
+    // Blocked candidates remain available in the protected/attention views.
     if (scope === "candidates")
         return item.state === "READY" && hasCandidate;
     if (scope === "protected")
@@ -101,6 +140,7 @@ function buildDeleteImpact(groups, query = "", scope = "all") {
                 episode: group.identity.episode,
                 decision: version.decision,
                 profileIds: version.satisfiesProfiles || [],
+                evaluations: version.evaluations,
                 reasons: reasonMessages(version),
                 fingerprint: version.fingerprint,
                 files: [{ path: storage.path, size: storage.size }],
@@ -124,10 +164,86 @@ function buildDeleteImpact(groups, query = "", scope = "all") {
             result.set(key, item);
         }
     }
+    const physicalItems = [...result.values()];
+    const packItems = physicalItems.filter(isEpisodePack);
+    const forcedRetainedPacks = new Set();
+    // Coverage is a safety rule, not a profile preference. A pack only forces
+    // the overlapping singles out when the retained singles do not collectively
+    // cover the whole pack; otherwise the normal profile ranking decides.
+    for (const item of physicalItems) {
+        for (const version of item.versions) {
+            if (version.decision !== "KEEP")
+                continue;
+            const dominatingPack = packItems
+                .filter((pack) => pack.providerItemId !== item.providerItemId)
+                .map((pack) => {
+                const retainedCoverage = new Set();
+                for (const other of physicalItems) {
+                    if (other.providerItemId === pack.providerItemId)
+                        continue;
+                    for (const otherVersion of other.versions) {
+                        if (otherVersion.decision === "KEEP" && sameEpisodeFamily(otherVersion, version))
+                            retainedCoverage.add(otherVersion.logicalKey);
+                    }
+                }
+                return { pack, retainedCoverage, version: pack.versions.find((candidate) => candidate.logicalKey === version.logicalKey) };
+            })
+                .filter((candidate) => Boolean(candidate.version && sameEpisodeFamily(candidate.version, version) && candidate.retainedCoverage.size < logicalKeys(candidate.pack).size))
+                .sort((left, right) => logicalKeys(right.pack).size - logicalKeys(left.pack).size)[0];
+            if (!dominatingPack)
+                continue;
+            forcedRetainedPacks.add(dominatingPack.pack.providerItemId);
+            // Coverage protects a pack that contains unique episodes, but it must
+            // not make a non-compliant or lower-quality pack displace a compliant
+            // standalone episode. Compare the matching episode, never the physical
+            // size or resolution of the whole pack.
+            if (episodeVersionPreference(dominatingPack.version, version) < 0)
+                continue;
+            version.decision = "DELETE_CANDIDATE";
+            version.reasons = [...new Set([
+                    ...(version.reasons || []),
+                    "Duplicate episode covered by a larger retained pack",
+                ])];
+        }
+    }
+    // Rebuild KEEP indexes after applying the coverage rule. A version changed
+    // from KEEP to DELETE_CANDIDATE must not remain an alternative elsewhere.
+    logicalKeepers.clear();
+    for (const item of physicalItems) {
+        item.protectedByKeep = false;
+        for (const version of item.versions) {
+            if (version.decision !== "KEEP")
+                continue;
+            item.protectedByKeep = true;
+            const group = groups.find((candidate) => candidate.id === version.groupId);
+            if (!group)
+                continue;
+            logicalKeepers.set(version.logicalKey, [
+                ...(logicalKeepers.get(version.logicalKey) || []),
+                { group, version: version },
+            ]);
+        }
+    }
+    const packAlternatives = new Map();
+    for (const pack of packItems) {
+        for (const version of pack.versions) {
+            const group = groups.find((candidate) => candidate.id === version.groupId);
+            if (!group)
+                continue;
+            packAlternatives.set(version.logicalKey, [
+                ...(packAlternatives.get(version.logicalKey) || []),
+                { group, version: version, forcedRetained: forcedRetainedPacks.has(pack.providerItemId) },
+            ]);
+        }
+    }
     for (const item of result.values()) {
         const candidates = item.versions.filter((version) => version.decision === "DELETE_CANDIDATE");
         const reviews = item.versions.filter((version) => version.decision === "REVIEW");
-        item.alternativeVersions = candidates.flatMap((candidate) => (logicalKeepers.get(candidate.logicalKey) || [])
+        item.alternativeVersions = candidates.flatMap((candidate) => [
+            ...(logicalKeepers.get(candidate.logicalKey) || []),
+            ...((packAlternatives.get(candidate.logicalKey) || []).filter(({ version }) => item.providerItemId !== version.fingerprint.storage.torrentId
+                && resolutionValue(version) >= resolutionValue(candidate))),
+        ]
             .filter(({ version }) => itemKey(version.fingerprint.storage.provider, version.fingerprint.storage.torrentId) !== itemKey(item.provider, item.providerItemId))
             .map(({ group, version }) => ({
             id: version.id,
@@ -139,13 +255,19 @@ function buildDeleteImpact(groups, query = "", scope = "all") {
             episode: group.identity.episode,
             provider: version.fingerprint.storage.provider,
             providerItemId: version.fingerprint.storage.torrentId,
-            decision: version.decision,
+            decision: forcedRetainedPacks.has(version.fingerprint.storage.torrentId) ? "KEEP" : version.decision,
             profileIds: version.satisfiesProfiles || [],
-            reasons: reasonMessages(version),
+            reasons: forcedRetainedPacks.has(version.fingerprint.storage.torrentId)
+                ? [...reasonMessages(version), "Retained because the pack contains episodes not covered by the separate items"]
+                : reasonMessages(version),
             fingerprint: version.fingerprint,
         }))).filter((version, index, all) => all.findIndex((candidate) => candidate.id === version.id) === index);
-        const candidateWithoutAlternative = candidates.some((candidate) => !item.alternativeVersions.some((alternative) => alternative.logicalKey === candidate.logicalKey));
-        item.onlyCopy = candidates.length > 0 && candidateWithoutAlternative;
+        const nonKeepWithoutAlternative = item.versions.some((version) => version.decision !== "KEEP"
+            && !item.alternativeVersions.some((alternative) => alternative.logicalKey === version.logicalKey));
+        // A season pack is one physical delete unit. If any non-KEEP episode in
+        // that pack has no retained alternative, deleting the pack would orphan
+        // that episode even when another episode has a duplicate elsewhere.
+        item.onlyCopy = candidates.length > 0 && nonKeepWithoutAlternative;
         if (item.protectedByKeep) {
             item.state = "PARTIALLY_REDUNDANT";
             addReason(item, "PROTECTED — ProviderItem contains a KEEP version");

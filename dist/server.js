@@ -57,6 +57,7 @@ const deleteImpact_1 = require("./services/deleteImpact");
 const deleteExecutor_1 = require("./services/deleteExecutor");
 const migrationJob_1 = require("./services/migrationJob");
 const seerrArrProfiles_1 = require("./services/seerrArrProfiles");
+const providerReconciliationRuntime_1 = require("./services/providerReconciliationRuntime");
 // ===========================================================================
 // Server Initialisation
 // ===========================================================================
@@ -154,6 +155,17 @@ function startServer() {
     // ===========================================================================
     // Configuration API
     // ===========================================================================
+    /** POST /api/dashboard/refresh — Refreshes recent provider activity and organised links. */
+    app.post("/api/dashboard/refresh", async (_req, res) => {
+        try {
+            const result = await (0, providerReconciliationRuntime_1.refreshProviderActivity)();
+            res.json({ ok: true, ...result });
+        }
+        catch (error) {
+            console.error("[api/dashboard/refresh] Refresh failed:", error?.message || String(error));
+            res.status(503).json({ ok: false, error: error?.message || "Dashboard refresh failed" });
+        }
+    });
     /**
      * GET /api/config — Returns the current configuration with metadata.
      * Includes the env file path, Docker detection flag, and schema definition

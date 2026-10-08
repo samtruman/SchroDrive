@@ -62,8 +62,13 @@ function parseMediaFilename(filename, relativePath = filename) {
     const { base, extension } = baseWithoutExtension(sourceBasename);
     const normalized = base.replace(/[._]+/g, " ").replace(/\s+/g, " ").trim();
     const parentTitle = titleFromParent(relativePath);
+    // Some release names use S00E00 as a placeholder before a real marker,
+    // for example "S00E00 - Chernobyl 1x01 ...". Do not let the placeholder
+    // hide the actual season/episode token that follows it.
+    const placeholderPrefix = /^S00E00(?:\s*[-:]\s*)/i;
+    const episodeSearchText = normalized.replace(placeholderPrefix, "");
     // Standard season/episode notation, including multi-episode releases.
-    const seasonEpisode = normalized.match(/^(.*?)(?:\s+|-)?S(\d{1,2})E(\d{1,3})(?:(?:-?E?|[ .-])?(\d{1,3}))?\b/i);
+    const seasonEpisode = episodeSearchText.match(/^(.*?)(?:\s+|-)?S(\d{1,2})E(\d{1,3})(?:(?:-?E?|[ .-])?(\d{1,3}))?\b/i);
     if (seasonEpisode) {
         const title = cleanTitle(seasonEpisode[1]);
         const yearMatch = title.match(/\b((?:19|20|21)\d{2})\b/);
@@ -95,23 +100,9 @@ function parseMediaFilename(filename, relativePath = filename) {
             });
         }
     }
-    // Check parenthesized movie years only after episode notation. A release
-    // such as "The Westies (2026) - S01E01 ..." is an episode, not a movie.
-    const parenthesizedMovie = base.match(/^(.*?)\s*\(((?:19|20|21)\d{2})\)(?:\s+.*)?$/);
-    if (parenthesizedMovie) {
-        const title = cleanTitle(parenthesizedMovie[1]);
-        if (title) {
-            return result(sourceBasename, extension, {
-                status: "matched",
-                kind: "movie",
-                title,
-                year: Number(parenthesizedMovie[2]),
-                confidence: 0.98,
-                reason: "parenthesized movie year",
-            });
-        }
-    }
-    const altEpisode = normalized.match(/^(.*?)(?:\s+|-)?(\d{1,2})x(\d{1,3})(?:-?(\d{1,3}))?\b/i);
+    // Alternate season/episode notation. This must run before movie-year
+    // detection because series filenames may also contain a year.
+    const altEpisode = episodeSearchText.match(/^(.*?)(?:\s+|-)?(\d{1,2})x(\d{1,3})(?:-?(\d{1,3}))?\b/i);
     if (altEpisode) {
         const title = cleanTitle(altEpisode[1]) || parentTitle;
         if (title) {
@@ -124,6 +115,22 @@ function parseMediaFilename(filename, relativePath = filename) {
                 episodeEnd: altEpisode[4] ? Number(altEpisode[4]) : undefined,
                 confidence: 0.96,
                 reason: "x episode token",
+            });
+        }
+    }
+    // Check parenthesized movie years only after all episode notation. A release
+    // such as "The Westies (2026) - S01E01 ..." is an episode, not a movie.
+    const parenthesizedMovie = base.match(/^(.*?)\s*\(((?:19|20|21)\d{2})\)(?:\s+.*)?$/);
+    if (parenthesizedMovie) {
+        const title = cleanTitle(parenthesizedMovie[1]);
+        if (title) {
+            return result(sourceBasename, extension, {
+                status: "matched",
+                kind: "movie",
+                title,
+                year: Number(parenthesizedMovie[2]),
+                confidence: 0.98,
+                reason: "parenthesized movie year",
             });
         }
     }

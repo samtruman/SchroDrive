@@ -3,10 +3,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.providerReconciliationRoutes = providerReconciliationRoutes;
 exports.createProviderReconciliationWorker = createProviderReconciliationWorker;
 exports.startProviderReconciliation = startProviderReconciliation;
+exports.refreshProviderActivity = refreshProviderActivity;
+exports.registerProviderReconciliationWorker = registerProviderReconciliationWorker;
 const config_1 = require("../core/config");
 const providers_1 = require("../providers");
 const mediaParser_1 = require("./mediaParser");
 const organizerReview_1 = require("./organizerReview");
+const organizer_1 = require("./organizer");
 const providerReconciliation_1 = require("./providerReconciliation");
 function providerReconciliationRoutes(providerId = "alldebrid") {
     const sourcePathPrefix = `${config_1.config.providerReconciliationMountBase.replace(/\/$/, '')}/${providerId}`;
@@ -56,4 +59,24 @@ function startProviderReconciliation() {
     worker.start();
     console.log("[provider-reconciliation] started; provider intake is read-only and provider deletion/repair is not used");
     return worker;
+}
+/**
+ * Runs the lightweight provider refresh used by the Dashboard.
+ *
+ * This deliberately does not run the Version Manager inventory scan. The
+ * Dashboard only needs current provider activity and newly visible organised
+ * links; the full policy/profile inventory remains an explicit Media Manager
+ * operation.
+ */
+let activeProviderReconciliationWorker;
+async function refreshProviderActivity() {
+    const events = activeProviderReconciliationWorker
+        ? await activeProviderReconciliationWorker.runRecent()
+        : [];
+    await (0, organizer_1.organizeOnce)();
+    return { events: events.length, organizerCompleted: true };
+}
+/** Registers the worker created during application startup for on-demand refreshes. */
+function registerProviderReconciliationWorker(worker) {
+    activeProviderReconciliationWorker = worker;
 }

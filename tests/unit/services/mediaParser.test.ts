@@ -26,6 +26,17 @@ describe("structured media parser", () => {
     expect(parsed.episodeEnd).toBe(3);
   });
 
+  test("ignores an S00E00 placeholder before a real x episode marker", () => {
+    const parsed = parseMediaFilename(
+      "S00E00 - Chernobyl 1x01 1-23-45 (2019) AC3 5.1 ITA ENG 1080p H265.mkv",
+    );
+    expect(parsed.status).toBe("matched");
+    expect(parsed.kind).toBe("episode");
+    expect(parsed.title).toBe("Chernobyl");
+    expect(parsed.season).toBe(1);
+    expect(parsed.episode).toBe(1);
+  });
+
   test("prefers season/episode over a parenthesized series year", () => {
     const parsed = parseMediaFilename("The Westies (2026) - S01E01 - The Troubles (1080p).mkv");
     expect(parsed.status).toBe("matched");
