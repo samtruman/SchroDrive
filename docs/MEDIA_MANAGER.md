@@ -1,5 +1,48 @@
 # Media Manager
 
+## Feature scope and upstream boundary
+
+The Media Manager is a standalone library-policy and version-management
+feature. It consumes provider inventory and existing media-server metadata, but
+does not replace the provider clients, ARR bridge, Seerr request flow, or the
+media-server libraries. Its purpose is to turn the current provider/file
+state into an explainable, reviewable model of what is present, missing,
+preferred, redundant, or blocked.
+
+The current fork implementation covers:
+
+- canonical inventory and identity enrichment for movies, series, seasons,
+  episodes, season packs, and multiple releases;
+- profile-scoped hard requirements, language rules, retention rules, scoring,
+  and preference evaluation;
+- Library, Policy Missing, Review, and Policy Delete projections;
+- grouping of TV content as 'series -> season -> episode -> versions';
+- comparison of equivalent versions at the same resolution, including 1080p
+  and 2160p, without discarding lower-resolution duplicates before comparison;
+- provider-item-aware delete impact analysis, including season-pack
+  completeness, incomplete alternatives, protected content, and physical
+  delete units;
+- read-only previews, persisted snapshots, audit-safe migration references,
+  and explicit dry-run safety gates;
+- ARR profile discovery through the configured Seerr gateway without
+  recreating ARR profiles locally;
+- dashboard refresh of recent provider activity followed by organization,
+  while the full Version Manager scan remains an explicit, more expensive
+  operation.
+
+The feature is deliberately split into two boundaries:
+
+1. generic Media Manager behavior that can be proposed upstream;
+2. deployment-specific runtime wiring, provider paths, credentials, mount
+   layout, and production integration, which must never be included in an
+   upstream PR.
+
+The intended upstream PR for the Media Manager should be assembled from the
+current tested baseline as a series of independently reviewable commits. It
+must preserve the existing provider and ARR contracts, avoid local deployment
+references, and include focused regression tests for every policy projection
+that changes.
+
 ## Architecture
 
 The Media Manager is a read model over the existing provider and policy

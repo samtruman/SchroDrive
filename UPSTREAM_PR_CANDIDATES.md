@@ -8,6 +8,32 @@
   explicitly updated; open PRs are not treated as merged code.
 - Media Manager upstream PR splitting has not started.
 
+### Baseline update - 2026-10-08
+
+The known-good fork baseline is preserved as:
+
+- commit `7db43c5405c67e183c4735111d948e3a47498a37`;
+- branch `baseline/schrodrive-2026-10-08`;
+- tag `baseline-2026-10-08`.
+
+The baseline was created from the tested working state without including
+production configuration, credentials, temporary test output, or the stale
+qualification report. Typecheck and the repository suite passed with 340 tests
+and 0 failures. Future upstream extraction must start from this baseline or a
+new branch based on it, never from the old dirty integration checkout.
+
+The recent upstream attempts are tracked separately from the fork baseline:
+
+| PR | Scope | Upstream status | Follow-up |
+|---:|---|---|---|
+| #110 | Original release filenames | SUSPENDED, temporarily closed without merge | Reassess against current 'develop' when resumed |
+| #111 | Persisted TMDb key fallback | SUSPENDED, temporarily closed without merge | Reassess CI failure and current config semantics when resumed |
+| #112 | Stable Arr import symlinks | SUSPENDED, temporarily closed without merge | Reassess Docker path mapping when resumed |
+
+These PRs remain candidates for resumption. They are not assumed to be
+present in upstream. Any resumed or replacement PR must use a fresh branch
+from the current upstream 'develop' and contain only the isolated generic fix.
+
 Historical candidate details below are retained for review; they do not change
 the current status above.
 
