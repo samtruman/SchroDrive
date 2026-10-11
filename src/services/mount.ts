@@ -36,6 +36,37 @@ import { sleep } from "../core/utils";
 let tmpDir = path.join(os.tmpdir(), "schrodrive");
 const activeRcloneRcPorts = new Map<string, number>();
 
+/**
+ * Returns whether a provider has an actual filesystem mount.
+ *
+ * On Linux mountinfo is authoritative; checking only that the directory
+ * exists would incorrectly classify the empty mount directory created during
+ * startup as an available provider mount.
+ */
+export function isProviderMounted(provider: string): boolean {
+  const mountPath = path.resolve(path.join(config.mountBase, provider));
+
+  if (process.platform === "linux") {
+    try {
+      const mountpoints = fs.readFileSync("/proc/self/mountinfo", "utf8")
+        .split("\n")
+        .map(line => line.split(" - ")[0]?.split(" ")[4])
+        .filter(Boolean)
+        .map(value => value!.replace(/\\040/g, " ").replace(/\\011/g, "\t").replace(/\\134/g, "\\"));
+      return mountpoints.includes(mountPath);
+    } catch {
+      return false;
+    }
+  }
+
+  try {
+    fs.readdirSync(mountPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Invalidate one provider path in rclone's VFS directory cache. */
 export async function refreshRcloneMount(provider: string, relativePath: string): Promise<boolean> {
   const port = activeRcloneRcPorts.get(provider.replace(":", ""));
