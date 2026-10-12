@@ -255,17 +255,18 @@ export async function getConfiguredMountReadiness(providerIds?: string[]): Promi
  * Returns status information for all configured external WebDAV mounts.
  * Used by the /health endpoint.
  */
-export function getExternalWebdavStatus(): { name: string; url: string; mountPath: string; healthy: boolean; readOnly: boolean; skipOrganiser: boolean }[] {
+export async function getExternalWebdavStatus(): Promise<{ name: string; url: string; mountPath: string; healthy: boolean; readOnly: boolean; skipOrganiser: boolean }[]> {
   if (!config.webdavMountsEnabled) return [];
   const entries = loadWebdavMounts();
-  return entries.map((e) => {
+  return Promise.all(entries.map(async (e) => {
     const mountName = e.name.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
     const mountPath = path.join(config.mountBase, 'webdav', mountName);
-    let healthy = false;
-    try {
-      fs.readdirSync(mountPath);
-      healthy = true;
-    } catch {}
+    // Never use a synchronous FUSE read here: a stalled WebDAV mount would
+    // block the entire backend event loop, including /health and the GUI.
+    const healthy = await Promise.race([
+      fs.promises.readdir(mountPath).then(() => true).catch(() => false),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 2000)),
+    ]);
     return {
       name: e.name,
       url: e.url,
@@ -274,7 +275,7 @@ export function getExternalWebdavStatus(): { name: string; url: string; mountPat
       readOnly: e.readOnly !== false,
       skipOrganiser: e.skipOrganiser !== false,
     };
-  });
+  }));
 }
 
 // ===========================================================================
