@@ -28,10 +28,14 @@ Before copying or replacing runtime files:
 The contract check is read-only and is intended to prevent accidental
 replacement of a newer `server.ts` with an older local copy.
 
-## Current repository limitation
+## Current repository status
 
-The checked-out source in this repository is older than the production GUI
-build. The production runtime source must be imported into the repository (or
-the repository must be switched to the matching branch) before implementing
-Media Manager review UI changes. Until then, no production source file should
-be replaced from this checkout.
+The checkout used for the current runtime work is
+`/home/samtruman/projects/schrodrive`, on branch
+`pr/non-blocking-mount-status-20261012`. Its current work is committed and
+pushed at `b256e2d4cd66e030e79046f9698ec19e496158d3`.
+
+The contract remains required because a runtime image can still be older than a
+new source commit until the deployment script is run. Do not infer alignment
+from a healthy container alone: compare source commit, frontend build commit,
+image tag and runtime build endpoint after every deploy.

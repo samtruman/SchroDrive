@@ -27,6 +27,25 @@ The script fails closed if a required path or command is missing. It does not
 deploy other stack services. Environment variables can override the compose,
 runtime, frontend, backup, API-port, and web-port paths for other deployments.
 
+## Source, build and runtime identity
+
+The current refresh-library milestone is tracked on:
+
+- branch: `pr/non-blocking-mount-status-20261012`;
+- source commit: `b256e2d4cd66e030e79046f9698ec19e496158d3`;
+- deployed image: `schrodrive:deploy-5b8aeb39797b`.
+
+The branch is pushed to the fork and the working tree is clean. The image was
+built from the same validated source contents before the final Git commit was
+created, so a subsequent deploy is required if the runtime build label must
+report `b256e2d` exactly. Record this distinction instead of assuming that a
+successful image build proves source/runtime identity alignment.
+
+The deploy script uses the host Bun installation even for non-interactive SSH
+sessions. On the current server it is `/home/samtruman/.bun/bin/bun`; an
+explicit `SCHRODRIVE_BUN_BIN` may be supplied when another installation is
+required.
+
 ## Deployment verification and rollback
 
 The deployment script was validated on the baseline branch with the complete
@@ -46,12 +65,20 @@ backend health endpoint, status API, build identity, and relevant frontend
 routes respond after startup. A build completing successfully is not by itself
 proof that the runtime is ready.
 
+During a cold start the container can remain healthy while the provider
+inventory is still being populated. WebDAV `PROPFIND` and rate-limiter log
+messages indicate this phase. The dashboard/API may be slow until the first
+inventory pass completes; do not recreate unrelated containers in response to
+this temporary state.
+
 ## Startup inventory and persistent index
 
 The current implementation can perform a full AllDebrid inventory during a
-cold start. This is a known operational limitation: provider status and file
-trees are fetched through the WebDAV bridge, and a single provider timeout can
-delay the initial inventory.
+cold start. The directory/file-tree cache is persisted under application data
+and restored before the next provider refresh, reducing repeated cold-start
+work. A first run or an invalidated cache still fetches provider status and
+file trees through the WebDAV bridge, and a provider timeout can delay the
+initial inventory.
 
 The planned upstreamable improvement is a persistent, incremental inventory
 index:

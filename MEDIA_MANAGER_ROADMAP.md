@@ -1,5 +1,21 @@
 # Media Manager Roadmap
 
+## CURRENT RUNTIME FOLLOW-UP — 2026-10-12
+
+- Runtime source checkout: `/home/samtruman/projects/schrodrive`.
+- Branch: `pr/non-blocking-mount-status-20261012`.
+- Source commit: `b256e2d4cd66e030e79046f9698ec19e496158d3`.
+- Container image currently running: `schrodrive:deploy-5b8aeb39797b`.
+- Full suite: 352 tests passed; typecheck and frontend build passed.
+- WebDAV directory cache is persisted and restored across container restarts.
+- Mount/status checks are non-blocking during slow provider scans.
+- Build identity is visible in the sidebar during long startup scans.
+- Jellyfin and Plex refresh settings are independent and exposed under
+  Settings → Organizer; refresh occurs only after an actual organizer change.
+
+The image predates the final Git commit but contains the same validated source
+contents. Redeploy before treating the runtime build label as `b256e2d`.
+
 ## CURRENT STATUS
 
 - Develop alignment: `VALIDATED` against

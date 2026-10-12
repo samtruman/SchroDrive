@@ -49,3 +49,22 @@ when it is not configured or cannot expose a complete read-only snapshot.
 
 The Arr library contains symlinks only. Provider content remains on the mount;
 the reconciliation layer does not download or copy media to local storage.
+
+## Organizer and media-server refresh
+
+After reconciliation makes a provider item available, the Organizer creates or
+updates the corresponding symlink in the configured movie/series library. When
+the Organizer actually changes the library, it can request a library refresh
+for each configured media server independently:
+
+- `REFRESH_JELLYFIN_ON_ADD=true` refreshes Jellyfin;
+- `REFRESH_PLEX_ON_ADD=true` refreshes Plex.
+
+Both settings default to enabled and are editable in Settings → Organizer.
+They are evaluated only after a real symlink addition, replacement, or stale
+entry removal; an unchanged periodic scan does not repeatedly refresh servers.
+Missing credentials or an unreachable optional server do not block provider
+reconciliation.
+
+The older generic `REFRESH_LIBRARY_ON_ADD` setting is not the control for this
+path. It must not be used as a substitute for the server-specific settings.

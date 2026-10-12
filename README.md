@@ -898,7 +898,8 @@ All configuration is done via environment variables. Below is the complete refer
 | `RUN_DEAD_SCANNER_WATCH` | `false` | Enable continuous dead scanner |
 | `RUN_ORGANIZER_WATCH` | `false` | Enable media organiser |
 | `RUN_WATCHLIST_POLLER` | `false` | Enable watchlist polling |
-| `REFRESH_LIBRARY_ON_ADD` | `true` | Refresh media server library after adding content |
+| `REFRESH_JELLYFIN_ON_ADD` | `true` | Refresh Jellyfin libraries after the Organizer creates or removes symlinks |
+| `REFRESH_PLEX_ON_ADD` | `true` | Refresh Plex libraries after the Organizer creates or removes symlinks |
 | `ARR_BRIDGE_ENABLED` | `false` | Enable fake qBittorrent API for Radarr/Sonarr |
 | `PORT` | `8978` | HTTP server port |
 

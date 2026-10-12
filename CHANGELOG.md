@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on Keep a Changelog (https://keepachangelog.com/en/1.0.0/),
 and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased] - 2026-10-12
+
+### Added
+
+- **Configurable media-server refresh after organization**: Jellyfin and Plex
+  can be refreshed independently after the Organizer creates, replaces, or
+  removes symlinks. The settings are exposed in Settings → Organizer through
+  `REFRESH_JELLYFIN_ON_ADD` and `REFRESH_PLEX_ON_ADD`.
+- **Persisted WebDAV directory cache**: the last valid provider directory
+  inventory is restored after restart while a background refresh continues.
+- **Runtime build identity**: the sidebar and build endpoint expose the
+  deployed source/frontend identity during long startup scans.
+
+### Changed
+
+- Mount/status checks no longer block the HTTP API while a slow provider mount
+  is being probed.
+- The deployment script now uses canonical source/frontend artifacts, bounded
+  startup checks, non-blocking diagnostics, timestamped backups, and explicit
+  health/build verification.
+- The organizer refreshes configured media servers only when the library
+  actually changes; unchanged periodic scans do not trigger repeated refreshes.
+
+### Verification
+
+- Typecheck passed.
+- Full Bun suite passed: 352 tests, 0 failures.
+- Frontend build passed.
+
 ### Version [0.11.5] - 2026-09-23
 *Status: landing on schrodrive.org, Cloudflare Workers, contributors live page*
 
@@ -55,7 +84,7 @@ and this project adheres to Semantic Versioning (https://semver.org/spec/v2.0.0.
 ### Fixed 🐛
 - **Release Docker images were amd64-only** (`.github/workflows/release.yml`): the release workflow's Docker build step never set `platforms`, unlike the separate multi-platform workflow, so every version tag (`v0.11.1` and earlier) only had a `linux/amd64` manifest despite `:latest` being properly multi-arch. Added QEMU + `platforms: linux/amd64,linux/arm64` so version tags build both architectures going forward
 - **SSRF via `.torrent` URL fetch** (`src/providers/registry.ts`): `addTorrentFileFromUrl()` fetches URLs sourced from Prowlarr/Jackett search results (semi-trusted third-party content), reachable via the watchlist poller / dead scanner with no user interaction. Added `assertPublicHttpUrl()` to reject non-http(s) schemes and loopback/private/link-local IP literals before fetching
-- **Google Drive query injection** (`src/services/cloudLinks/gdriveAdapter.ts`): the Drive API query builder escaped `'` but not `\`, and backslashes must be escaped *before* quotes or a value ending in `\` can smuggle an unescaped quote past the sanitiser. Extracted `escapeDriveQueryValue()` with the correct escape order
+- **Google Drive query injection** (`src/services/cloudLinks/gdriveAdapter.ts`): the Drive API query builder escaped `'` but not ``, and backslashes must be escaped *before* quotes or a value ending in `` can smuggle an unescaped quote past the sanitiser. Extracted `escapeDriveQueryValue()` with the correct escape order
 - **Incomplete URL scheme check** (`src/services/cloudLinks/httpAdapter.ts`): link scraper blocked `javascript:` hrefs but not `data:`/`vbscript:`
 - **Tainted format strings** (`src/services/webdavBridge.ts`, `src/indexers/{torrentio,mediafusion,comet}.ts`): several `console.log()` calls folded a user-influenced value into the format-string argument itself; split into separate arguments
 - **Polynomial ReDoS** (`src/indexers/{prowlarr,jackett}.ts`): the TMDB-suffix-stripping regex does quadratic backtracking on a long run of non-matching whitespace; capped search query length to 200 chars first

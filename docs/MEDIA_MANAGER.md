@@ -22,6 +22,21 @@ destructive action. A scan can classify a release as DELETE_CANDIDATE, but
 only the explicit delete endpoint can request deletion, and safety checks run
 again immediately before the provider operation.
 
+### Runtime integration boundary
+
+The Media Manager remains independent from media-server refresh mechanics. The
+Organizer turns provider inventory changes into symlinks; after a real change
+it may request a refresh from Jellyfin and/or Plex. These are separate runtime
+settings in Settings → Organizer:
+
+- `REFRESH_JELLYFIN_ON_ADD`;
+- `REFRESH_PLEX_ON_ADD`.
+
+They default to enabled and are persisted through the configuration API. A
+scan with no new, replaced, or removed symlink does not trigger a refresh. A
+failed optional media-server refresh does not delete provider content or
+invalidate the Media Manager snapshot.
+
 ## Problem
 
 Provider-backed libraries commonly contain:
@@ -597,9 +612,15 @@ The PR should be split into reviewable commits where practical:
 
 ### 18. Validation status
 
-The consolidated baseline is branch baseline/schrodrive-2026-10-08 at commit d806fe9.
-The repository typecheck and the unit/e2e/regression suite passed with 343
-tests and 0 failures before this documentation-only follow-up.
+The historical consolidated baseline is branch
+`baseline/schrodrive-2026-10-08` at commit `d806fe9`.
+
+The current runtime-integration work is tracked separately on
+`pr/non-blocking-mount-status-20261012` at commit
+`b256e2d4cd66e030e79046f9698ec19e496158d3`. Typecheck, frontend build, and
+the full Bun suite passed with 352 tests and 0 failures before this
+documentation update. The exact runtime build label becomes `b256e2d` after
+the next redeploy.
 
 The current production image is not a substitute for source validation. Any
 future PR must be tested from a clean branch based on the baseline and must
