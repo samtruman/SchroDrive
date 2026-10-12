@@ -236,10 +236,12 @@ export const config = {
   plexUrl: resolveRuntimeOrPersistedValue(process.env.PLEX_URL || process.env.PLEX_ADDRESS, persistedPlexUrl),
   plexToken: resolveRuntimeOrPersistedValue(process.env.PLEX_TOKEN, persistedPlexToken),
   plexMountDir: resolveRuntimeOrPersistedValue(process.env.PLEX_MOUNT_DIR, persistedPlexMountDir),
+  refreshPlexOnAdd: asBool(process.env.REFRESH_PLEX_ON_ADD, true),
   // Jellyfin
   jellyfinUrl: resolveRuntimeOrPersistedValue(process.env.JELLYFIN_URL || process.env.JF_ADDRESS, persistedJellyfinUrl),
   jellyfinApiKey: resolveRuntimeOrPersistedValue(process.env.JELLYFIN_API_KEY || process.env.JF_API_KEY, persistedJellyfinApiKey),
   jellyfinUserId: resolveRuntimeOrPersistedValue(process.env.JELLYFIN_USER_ID, persistedJellyfinUserId),
+  refreshJellyfinOnAdd: asBool(process.env.REFRESH_JELLYFIN_ON_ADD, true),
   // Emby
   embyUrl: process.env.EMBY_URL || "",
   embyApiKey: process.env.EMBY_API_KEY || "",

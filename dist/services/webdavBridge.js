@@ -265,7 +265,7 @@ class BridgeCache {
      * @param listTtlS - Torrent listing cache TTL in seconds.
      * @param urlTtlS - Download URL cache TTL in seconds.
      */
-    constructor(listTtlS, urlTtlS) {
+    constructor(provider, listTtlS, urlTtlS) {
         /** Cached virtual directory listing (all torrents). */
         this.torrentListCache = null;
         /** Stale virtual directory listing fallback. */
@@ -285,8 +285,24 @@ class BridgeCache {
          * This is the "serve stale while locked" strategy.
          */
         this.staleDownloadUrls = new Map();
+        this.persistentListKey = `webdav-bridge:${provider}:directories`;
+        this.restorePersistentTorrentList();
         this.listTtlMs = listTtlS * 1000;
         this.urlTtlMs = urlTtlS * 1000;
+    }
+    restorePersistentTorrentList() {
+        try {
+            const raw = (0, db_1.getCacheEntry)(this.persistentListKey);
+            if (!raw)
+                return;
+            const parsed = JSON.parse(raw);
+            const data = Array.isArray(parsed) ? parsed : parsed.data;
+            if (Array.isArray(data) && data.length > 0)
+                this.staleTorrentList = data;
+        }
+        catch {
+            // A stale cache must never prevent the bridge from starting.
+        }
     }
     // -------------------------------------------------------------------------
     // Torrent List
@@ -318,6 +334,12 @@ class BridgeCache {
     setTorrentList(dirs) {
         if (dirs && dirs.length > 0) {
             this.staleTorrentList = dirs;
+            try {
+                (0, db_1.setCacheEntry)(this.persistentListKey, JSON.stringify({ cachedAt: new Date().toISOString(), data: dirs }), Date.now() + BridgeCache.PERSISTENT_LIST_TTL_MS);
+            }
+            catch {
+                // Persistent cache is an optimisation; keep the in-memory result.
+            }
         }
         this.torrentListCache = {
             data: dirs,
@@ -441,6 +463,8 @@ class BridgeCache {
         this.downloadUrlCache.clear();
     }
 }
+/** Persistent stale-list retention across container recreation. */
+BridgeCache.PERSISTENT_LIST_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // ===========================================================================
 // Provider-Specific API Methods
 // ===========================================================================
@@ -784,7 +808,7 @@ class WebDAVBridge {
         this.deadLogTimestamps = new Map();
         this.provider = options.provider;
         this.port = options.port;
-        this.cache = new BridgeCache(options.cacheTtlS ?? 30, options.downloadCacheTtlS ?? 300);
+        this.cache = new BridgeCache(this.provider, options.cacheTtlS ?? 30, options.downloadCacheTtlS ?? 300);
         // Restore dead torrent state from SQLite
         this.restoreDeadTorrentsFromDb();
     }
@@ -1292,6 +1316,19 @@ class WebDAVBridge {
         const cached = this.cache.getTorrentList();
         if (cached)
             return cached;
+        // Serve the last persisted inventory immediately after a restart and
+        // refresh it in the background. This prevents rclone/GUI startup from
+        // blocking on a complete provider/WebDAV traversal.
+        const stale = this.cache.getStaleTorrentList();
+        if (stale) {
+            if (!this.directoriesInFlight) {
+                this.directoriesInFlight = this.refreshDirectories().finally(() => {
+                    this.directoriesInFlight = null;
+                });
+                void this.directoriesInFlight;
+            }
+            return stale;
+        }
         if (this.directoriesInFlight)
             return this.directoriesInFlight;
         this.directoriesInFlight = this.refreshDirectories();

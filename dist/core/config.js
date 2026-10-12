@@ -4,11 +4,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.config = void 0;
+exports.isProviderReconciliationAutoEnabled = isProviderReconciliationAutoEnabled;
 exports.requireEnv = requireEnv;
 exports.providersSet = providersSet;
 const path_1 = __importDefault(require("path"));
 const utils_1 = require("./utils");
 const configApi_1 = require("./configApi");
+(0, configApi_1.loadPersistedConfigIntoRuntimeEnv)();
 const persistedTmdbApiKey = (0, configApi_1.getPersistedEnvValue)("TMDB_API_KEY");
 const persistedSeerrUrl = (0, configApi_1.getPersistedEnvValue)("SEERR_URL");
 const persistedSeerrApiKey = (0, configApi_1.getPersistedEnvValue)("SEERR_API_KEY");
@@ -19,6 +21,7 @@ const persistedPlexMountDir = (0, configApi_1.getPersistedEnvValue)("PLEX_MOUNT_
 const persistedJellyfinUrl = (0, configApi_1.getPersistedEnvValue)("JELLYFIN_URL");
 const persistedJellyfinApiKey = (0, configApi_1.getPersistedEnvValue)("JELLYFIN_API_KEY");
 const persistedJellyfinUserId = (0, configApi_1.getPersistedEnvValue)("JELLYFIN_USER_ID");
+const persistedOrganizerGroupVersions = (0, configApi_1.getPersistedEnvValue)("ORGANIZER_GROUP_VERSIONS");
 const persistedOrganizerFilenameMode = (0, configApi_1.getPersistedEnvValue)("ORGANIZER_FILENAME_MODE");
 const persistedRdAccessToken = (0, configApi_1.getPersistedEnvValue)("RD_ACCESS_TOKEN");
 const persistedRdWebdavUrl = (0, configApi_1.getPersistedEnvValue)("RD_WEBDAV_URL");
@@ -33,6 +36,17 @@ const persistedPremiumizeWebdavUrl = (0, configApi_1.getPersistedEnvValue)("PREM
 const persistedPremiumizeWebdavUsername = (0, configApi_1.getPersistedEnvValue)("PREMIUMIZE_WEBDAV_USERNAME");
 const persistedPremiumizeWebdavPassword = (0, configApi_1.getPersistedEnvValue)("PREMIUMIZE_WEBDAV_PASSWORD");
 const defaultMountBase = (process.env.MOUNT_BASE || (process.platform === 'darwin' ? "/Volumes/SchroDrive" : "/mnt/schrodrive"));
+function isProviderReconciliationAutoEnabled(env = process.env) {
+    const hasCompleteArrConfiguration = Boolean(env.PROVIDER_RECONCILIATION_RADARR_URL &&
+        env.PROVIDER_RECONCILIATION_RADARR_API_KEY &&
+        env.PROVIDER_RECONCILIATION_SONARR_URL &&
+        env.PROVIDER_RECONCILIATION_SONARR_API_KEY);
+    const explicitValue = env.PROVIDER_RECONCILIATION_ENABLED;
+    if (explicitValue !== undefined && explicitValue !== '') {
+        return String(explicitValue).toLowerCase() === 'true';
+    }
+    return hasCompleteArrConfiguration;
+}
 exports.config = {
     port: (0, utils_1.asNumber)(process.env.PORT, 8978),
     prowlarrUrl: process.env.PROWLARR_URL || "",
@@ -91,8 +105,9 @@ exports.config = {
     alldebridApiKey: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.ALLDEBRID_API_KEY || process.env.AD_API_KEY, persistedAllDebridApiKey),
     alldebridApiBase: process.env.ALLDEBRID_API_BASE || "https://api.alldebrid.com/v4",
     alldebridAgent: process.env.ALLDEBRID_AGENT || "schrodrive",
-    // Provider reconciliation is opt-in and disabled by default.
-    providerReconciliationEnabled: String(process.env.PROVIDER_RECONCILIATION_ENABLED ?? "false").toLowerCase() === "true",
+    // Provider reconciliation starts automatically when both Arr integrations
+    // are configured. An explicit true/false remains an override.
+    providerReconciliationEnabled: isProviderReconciliationAutoEnabled(),
     providerReconciliationRecentIntervalMs: Number(process.env.PROVIDER_RECONCILIATION_RECENT_INTERVAL_MS || 900000),
     providerReconciliationFullIntervalMs: Number(process.env.PROVIDER_RECONCILIATION_FULL_INTERVAL_MS || 21600000),
     providerReconciliationRecentLimit: Number(process.env.PROVIDER_RECONCILIATION_RECENT_LIMIT || 30),
@@ -212,6 +227,7 @@ exports.config = {
     tmdbApiKey: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.TMDB_API_KEY, persistedTmdbApiKey),
     organizedBase: process.env.ORGANIZED_BASE || `${defaultMountBase}/organized`,
     organizerMode: (process.env.ORGANIZER_MODE || "symlink"),
+    organizerGroupVersions: (0, utils_1.asBool)((0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.ORGANIZER_GROUP_VERSIONS, persistedOrganizerGroupVersions), true),
     organizerFilenameMode: ((0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.ORGANIZER_FILENAME_MODE, persistedOrganizerFilenameMode) || "canonical"),
     runOrganizerWatch: (0, utils_1.asBool)(process.env.RUN_ORGANIZER_WATCH),
     orgScanIntervalSeconds: (0, utils_1.asNumber)(process.env.ORG_SCAN_INTERVAL_S, 300),
@@ -220,10 +236,12 @@ exports.config = {
     plexUrl: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.PLEX_URL || process.env.PLEX_ADDRESS, persistedPlexUrl),
     plexToken: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.PLEX_TOKEN, persistedPlexToken),
     plexMountDir: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.PLEX_MOUNT_DIR, persistedPlexMountDir),
+    refreshPlexOnAdd: (0, utils_1.asBool)(process.env.REFRESH_PLEX_ON_ADD, true),
     // Jellyfin
     jellyfinUrl: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.JELLYFIN_URL || process.env.JF_ADDRESS, persistedJellyfinUrl),
     jellyfinApiKey: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.JELLYFIN_API_KEY || process.env.JF_API_KEY, persistedJellyfinApiKey),
     jellyfinUserId: (0, configApi_1.resolveRuntimeOrPersistedValue)(process.env.JELLYFIN_USER_ID, persistedJellyfinUserId),
+    refreshJellyfinOnAdd: (0, utils_1.asBool)(process.env.REFRESH_JELLYFIN_ON_ADD, true),
     // Emby
     embyUrl: process.env.EMBY_URL || "",
     embyApiKey: process.env.EMBY_API_KEY || "",

@@ -117,9 +117,11 @@ export const CONFIG_SCHEMA = {
   PLEX_URL: { type: "string", default: "", category: "media_servers", label: "Plex URL" },
   PLEX_TOKEN: { type: "password", default: "", category: "media_servers", label: "Plex Token" },
   PLEX_MOUNT_DIR: { type: "string", default: "", category: "media_servers", label: "Plex Mount Path" },
+  REFRESH_PLEX_ON_ADD: { type: "boolean", default: "true", category: "media_servers", label: "Refresh Plex after organization" },
   JELLYFIN_URL: { type: "string", default: "", category: "media_servers", label: "Jellyfin URL" },
   JELLYFIN_API_KEY: { type: "password", default: "", category: "media_servers", label: "Jellyfin API Key" },
   JELLYFIN_USER_ID: { type: "string", default: "", category: "media_servers", label: "Jellyfin User ID" },
+  REFRESH_JELLYFIN_ON_ADD: { type: "boolean", default: "true", category: "media_servers", label: "Refresh Jellyfin after organization" },
 
   // Auto-Update
   AUTO_UPDATE_ENABLED: { type: "boolean", default: "false", category: "updates", label: "Enable Auto-Update" },

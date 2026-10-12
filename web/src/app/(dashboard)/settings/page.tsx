@@ -716,6 +716,17 @@ export default function SettingsPage() {
               </div>
             </CardContent>
           </Card>
+          <Card>
+            <CardHeader>
+              <CardTitle>Library refresh</CardTitle>
+              <CardDescription>Refresh configured media-server libraries after the organizer creates or removes symlinks.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <SwitchField label="Refresh Jellyfin after organization" envVar="REFRESH_JELLYFIN_ON_ADD" description="Ask Jellyfin to rescan its libraries after an organizer change" value={getBoolValue("REFRESH_JELLYFIN_ON_ADD")} source={getSource("REFRESH_JELLYFIN_ON_ADD")} onChange={(v) => updateBoolValue("REFRESH_JELLYFIN_ON_ADD", v)} />
+              <Separator />
+              <SwitchField label="Refresh Plex after organization" envVar="REFRESH_PLEX_ON_ADD" description="Ask Plex to rescan its libraries after an organizer change" value={getBoolValue("REFRESH_PLEX_ON_ADD")} source={getSource("REFRESH_PLEX_ON_ADD")} onChange={(v) => updateBoolValue("REFRESH_PLEX_ON_ADD", v)} />
+            </CardContent>
+          </Card>
         </TabsContent>
 
         {/* Auto-Update Tab */}

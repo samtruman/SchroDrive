@@ -37,6 +37,7 @@ exports.CONFIG_SCHEMA = void 0;
 exports.getOriginalEnvironmentKeys = getOriginalEnvironmentKeys;
 exports.resolveRuntimeOrPersistedValue = resolveRuntimeOrPersistedValue;
 exports.getPersistedEnvValue = getPersistedEnvValue;
+exports.loadPersistedConfigIntoRuntimeEnv = loadPersistedConfigIntoRuntimeEnv;
 exports.getConfigWithSources = getConfigWithSources;
 exports.saveConfigToFile = saveConfigToFile;
 exports.isRunningInDocker = isRunningInDocker;
@@ -138,15 +139,18 @@ exports.CONFIG_SCHEMA = {
     TMDB_API_KEY: { type: "password", default: "", category: "organizer", label: "TMDB API Key" },
     ORGANIZED_BASE: { type: "string", default: "", category: "organizer", label: "Organized Base Path" },
     ORGANIZER_MODE: { type: "select", default: "symlink", options: ["symlink", "copy", "move"], category: "organizer", label: "Organizer Mode" },
+    ORGANIZER_GROUP_VERSIONS: { type: "boolean", default: "true", category: "organizer", label: "Group media versions" },
     ORGANIZER_FILENAME_MODE: { type: "select", default: "canonical", options: ["canonical", "original"], category: "organizer", label: "Organizer Filename Mode" },
     ORG_SCAN_INTERVAL_S: { type: "number", default: "300", category: "organizer", label: "Organizer Scan Interval (seconds)" },
     // Optional media-server metadata providers
     PLEX_URL: { type: "string", default: "", category: "media_servers", label: "Plex URL" },
     PLEX_TOKEN: { type: "password", default: "", category: "media_servers", label: "Plex Token" },
     PLEX_MOUNT_DIR: { type: "string", default: "", category: "media_servers", label: "Plex Mount Path" },
+    REFRESH_PLEX_ON_ADD: { type: "boolean", default: "true", category: "media_servers", label: "Refresh Plex after organization" },
     JELLYFIN_URL: { type: "string", default: "", category: "media_servers", label: "Jellyfin URL" },
     JELLYFIN_API_KEY: { type: "password", default: "", category: "media_servers", label: "Jellyfin API Key" },
     JELLYFIN_USER_ID: { type: "string", default: "", category: "media_servers", label: "Jellyfin User ID" },
+    REFRESH_JELLYFIN_ON_ADD: { type: "boolean", default: "true", category: "media_servers", label: "Refresh Jellyfin after organization" },
     // Auto-Update
     AUTO_UPDATE_ENABLED: { type: "boolean", default: "false", category: "updates", label: "Enable Auto-Update" },
     AUTO_UPDATE_INTERVAL_S: { type: "number", default: "3600", category: "updates", label: "Update Check Interval (seconds)" },
@@ -253,6 +257,25 @@ function getPersistedEnvValue(key, envPath = findEnvPath()) {
             return legacy;
     }
     return canonical || "";
+}
+/**
+ * Hydrate GUI-persisted settings for runtime modules at startup.
+ * Real container environment values retain precedence over the persisted file.
+ */
+function loadPersistedConfigIntoRuntimeEnv() {
+    const fileValues = parseEnvFile(findEnvPath());
+    for (const key of Object.keys(exports.CONFIG_SCHEMA)) {
+        const aliases = CONFIG_KEY_ALIASES[key] || [];
+        const runtimeKey = [key, ...aliases].find((candidate) => process.env[candidate] !== undefined && process.env[candidate] !== "");
+        if (runtimeKey)
+            continue;
+        const persistedValue = [key, ...aliases]
+            .map((candidate) => fileValues.get(candidate))
+            .find((value) => value !== undefined && value !== "");
+        if (persistedValue !== undefined && (process.env[key] === undefined || process.env[key] === "")) {
+            process.env[key] = persistedValue;
+        }
+    }
 }
 // Get all config values with their sources
 function getConfigWithSources(options = {}) {

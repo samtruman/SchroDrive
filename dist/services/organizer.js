@@ -71,6 +71,8 @@ const mount_1 = require("./mount");
 const mediaParser_1 = require("./mediaParser");
 const organizerReview_1 = require("./organizerReview");
 const tmdbService_1 = require("./tmdbService");
+const jellyfin_1 = require("../integrations/jellyfin");
+const plex_1 = require("../integrations/plex");
 // ===========================================================================
 // Types & Constants
 // ===========================================================================
@@ -559,12 +561,36 @@ async function itunesMovieSearch(title, year) {
 function selectOrganizerFilename(mode, canonicalFilename, sourceFilename) {
     return mode === "original" ? path.basename(sourceFilename) : canonicalFilename;
 }
+/**
+ * Returns the provider release directory used when version grouping is off.
+ * The organized tree still retains the canonical title, but each release gets
+ * its own sibling folder instead of sharing the media folder with alternatives.
+ */
+function sourceReleaseName(srcFullPath, srcBaseName) {
+    if (srcFullPath) {
+        const segments = srcFullPath.split(path.sep);
+        const allIdx = segments.lastIndexOf("__all__");
+        const linksIdx = segments.lastIndexOf("links");
+        const rootIdx = Math.max(allIdx, linksIdx);
+        const release = rootIdx >= 0 ? segments[rootIdx + 1] : undefined;
+        const cleaned = release ? sanitize(release) : "";
+        if (cleaned)
+            return cleaned;
+    }
+    return sanitize(path.parse(srcBaseName).name) || "release";
+}
+function organizedVersionFolder(canonicalFolder, srcFullPath, srcBaseName) {
+    if (config_1.config.organizerGroupVersions)
+        return canonicalFolder;
+    const release = sourceReleaseName(srcFullPath, srcBaseName);
+    return path.join(path.dirname(canonicalFolder), `${path.basename(canonicalFolder)} [${release}]`);
+}
 function computeTarget(p, srcBaseName, srcFullPath, filenameMode = config_1.config.organizerFilenameMode) {
     const orgBase = config_1.config.organizedBase;
     if (p.type === "movie") {
         const title = p.title ? sanitize(p.title) : sanitize(path.parse(srcBaseName).name);
         const folder = p.year ? `${title} (${p.year})` : title;
-        const dstDir = path.join(orgBase, "Movies", folder);
+        const dstDir = organizedVersionFolder(path.join(orgBase, "Movies", folder), srcFullPath, srcBaseName);
         const dstName = selectOrganizerFilename(filenameMode, `${folder}${p.ext}`, srcBaseName);
         return path.join(dstDir, dstName);
     }
@@ -585,31 +611,32 @@ function computeTarget(p, srcBaseName, srcFullPath, filenameMode = config_1.conf
         const mediaCategory = (0, mediaClassifier_1.classifyTorrent)(classifyInput);
         const show = p.show ? sanitize(p.show) : sanitize(path.parse(srcBaseName).name);
         const showDir = p.year ? `${show} (${p.year})` : show;
+        const organizedShowDir = organizedVersionFolder(showDir, srcFullPath, srcBaseName);
         if (mediaCategory === 'anime') {
             // Output to Anime/ instead of TV/
             if (typeof p.season === "number" && typeof p.episode === "number") {
                 const seasonDir = `Season ${pad2(p.season)}`;
                 const epStr = `${show} S${pad2(p.season)}E${pad2(p.episode)}`;
-                return path.join(orgBase, "Anime", showDir, seasonDir, selectOrganizerFilename(filenameMode, `${epStr}${p.ext}`, srcBaseName));
+                return path.join(orgBase, "Anime", organizedShowDir, seasonDir, selectOrganizerFilename(filenameMode, `${epStr}${p.ext}`, srcBaseName));
             }
             if (typeof p.absolute === "number") {
-                return path.join(orgBase, "Anime", showDir, selectOrganizerFilename(filenameMode, `${show} - ${pad4(p.absolute)}${p.ext}`, srcBaseName));
+                return path.join(orgBase, "Anime", organizedShowDir, selectOrganizerFilename(filenameMode, `${show} - ${pad4(p.absolute)}${p.ext}`, srcBaseName));
             }
-            return path.join(orgBase, "Anime", showDir, selectOrganizerFilename(filenameMode, `${show}${p.ext}`, srcBaseName));
+            return path.join(orgBase, "Anime", organizedShowDir, selectOrganizerFilename(filenameMode, `${show}${p.ext}`, srcBaseName));
         }
         if (typeof p.season === "number" && typeof p.episode === "number") {
             const seasonDir = `Season ${pad2(p.season)}`;
-            const dstDir = path.join(orgBase, "TV", showDir, seasonDir);
+            const dstDir = path.join(orgBase, "TV", organizedShowDir, seasonDir);
             const fileName = selectOrganizerFilename(filenameMode, `${show} S${pad2(p.season)}E${pad2(p.episode)}${p.ext}`, srcBaseName);
             return path.join(dstDir, fileName);
         }
         if (typeof p.absolute === "number") {
-            const dstDir = path.join(orgBase, "TV", showDir);
+            const dstDir = path.join(orgBase, "TV", organizedShowDir);
             const fileName = selectOrganizerFilename(filenameMode, `${show} - ${pad4(p.absolute)}${p.ext}`, srcBaseName);
             return path.join(dstDir, fileName);
         }
         // TV with no episode info — place directly in the show directory
-        const dstDir = path.join(orgBase, "TV", showDir);
+        const dstDir = path.join(orgBase, "TV", organizedShowDir);
         const fileName = selectOrganizerFilename(filenameMode, `${show}${p.ext}`, srcBaseName);
         return path.join(dstDir, fileName);
     }
@@ -646,23 +673,26 @@ async function makeSymlink(src, dst, dryRun, avoidCollision = false) {
                 const cur = await fsp.readlink(dst).catch(() => "");
                 const resolved = path.resolve(dstDir, cur);
                 if (resolved === src)
-                    return; // Already correct — skip
+                    return false; // Already correct — skip
                 if (avoidCollision)
-                    return;
+                    return false;
                 await fsp.unlink(dst);
             }
             else {
                 // Exists as a regular file/directory — leave it to avoid data loss
-                return;
+                return false;
             }
         }
         if (!dryRun) {
             await fsp.symlink(relTarget, dst);
+            return true;
         }
     }
     catch (e) {
         console.error(`[${new Date().toISOString()}][organize] symlink failed`, { src, dst, err: e?.message });
+        return false;
     }
+    return false;
 }
 /**
  * Allocates a stable alternate target when the canonical destination already
@@ -682,13 +712,30 @@ async function resolveCollisionTarget(src, dst) {
             return candidate;
         if (st.isSymbolicLink()) {
             const current = await fsp.readlink(candidate).catch(() => "");
-            if (path.resolve(path.dirname(candidate), current) === src)
+            const currentTarget = path.resolve(path.dirname(candidate), current);
+            if (await organizerSourcesMatch(src, currentTarget))
                 return candidate;
         }
         const suffix = index === 0 ? ` - ${fingerprint}` : ` - ${fingerprint}-${index}`;
         candidate = path.join(dstDir, `${stem}${suffix}${ext}`);
     }
     throw new Error(`unable to allocate collision-safe organizer target for ${dst}`);
+}
+/** Compare sources across symlinked/container mount aliases. */
+async function organizerSourcesMatch(left, right) {
+    const leftAbsolute = path.normalize(path.resolve(left));
+    const rightAbsolute = path.normalize(path.resolve(right));
+    if (leftAbsolute === rightAbsolute)
+        return true;
+    const [leftReal, rightReal] = await Promise.all([
+        fsp.realpath(leftAbsolute).catch(() => leftAbsolute),
+        fsp.realpath(rightAbsolute).catch(() => rightAbsolute),
+    ]);
+    return path.normalize(leftReal) === path.normalize(rightReal);
+}
+async function organizerSourceKey(source) {
+    const absolute = path.normalize(path.resolve(source));
+    return fsp.realpath(absolute).then((resolved) => path.normalize(resolved)).catch(() => absolute);
 }
 /**
  * Recursively walks a directory tree, collecting absolute paths of video files.
@@ -791,6 +838,49 @@ async function pruneStaleSymlinks(dir) {
                 }
             }
         }
+    }
+    return { removedLinks, removedDirs };
+}
+/** Remove valid links left behind when naming or classification changes. */
+async function reconcileObsoleteSymlinks(dir, desiredBySource) {
+    let removedLinks = 0;
+    let removedDirs = 0;
+    let entries;
+    try {
+        entries = await fsp.readdir(dir, { withFileTypes: true });
+    }
+    catch {
+        return { removedLinks, removedDirs };
+    }
+    for (const ent of entries) {
+        const full = path.join(dir, ent.name);
+        if (ent.isDirectory()) {
+            const sub = await reconcileObsoleteSymlinks(full, desiredBySource);
+            removedLinks += sub.removedLinks;
+            removedDirs += sub.removedDirs;
+            try {
+                if ((await fsp.readdir(full)).length === 0) {
+                    await fsp.rmdir(full);
+                    removedDirs++;
+                }
+            }
+            catch { /* directory may have disappeared */ }
+            continue;
+        }
+        if (!ent.isSymbolicLink())
+            continue;
+        const current = await fsp.readlink(full).catch(() => "");
+        const source = path.resolve(path.dirname(full), current);
+        const desired = desiredBySource.get(await organizerSourceKey(source));
+        if (!desired || path.normalize(desired) === path.normalize(full))
+            continue;
+        console.log(`[${new Date().toISOString()}][organize] obsolete organized symlink`, {
+            path: full,
+            target: source,
+            replacement: desired,
+        });
+        await fsp.unlink(full);
+        removedLinks++;
     }
     return { removedLinks, removedDirs };
 }
@@ -929,10 +1019,12 @@ async function organizeOnce(opts) {
         });
     }
     let processed = 0;
+    let changed = false;
     let movieCount = 0;
     let tvCount = 0;
     let unknownCount = 0;
     const unknownSamples = [];
+    const desiredBySource = new Map();
     for (const src of files) {
         const base = path.basename(src);
         const structuredIdentity = (0, mediaParser_1.parseMediaFilename)(base, src);
@@ -1029,8 +1121,33 @@ async function organizeOnce(opts) {
         if (dryRun && !(await fsp.stat(path.dirname(safeDst)).catch(() => null))) {
             console.log(`[${new Date().toISOString()}][organize] would create directory`, { path: path.dirname(safeDst) });
         }
-        await makeSymlink(src, safeDst, dryRun, true);
+        if (await makeSymlink(src, safeDst, dryRun, true))
+            changed = true;
+        if (!dryRun)
+            desiredBySource.set(await organizerSourceKey(src), safeDst);
         processed++;
+    }
+    if (!dryRun && desiredBySource.size > 0) {
+        let removedLinks = 0;
+        let removedDirs = 0;
+        for (const dir of [movieDir, tvDir, animeDir]) {
+            const result = await reconcileObsoleteSymlinks(dir, desiredBySource);
+            removedLinks += result.removedLinks;
+            removedDirs += result.removedDirs;
+        }
+        if (removedLinks || removedDirs) {
+            changed = true;
+            console.log(`[${new Date().toISOString()}][organize] reconciled obsolete content`, {
+                removedSymlinks: removedLinks,
+                removedEmptyDirs: removedDirs,
+            });
+        }
+    }
+    if (!dryRun && changed) {
+        if (config_1.config.refreshJellyfinOnAdd)
+            await (0, jellyfin_1.refreshJellyfinLibrary)();
+        if (config_1.config.refreshPlexOnAdd)
+            await (0, plex_1.refreshPlexLibrary)();
     }
     console.log(`[${new Date().toISOString()}][organize] complete`, { count: processed, movies: movieCount, tv: tvCount, unknown: unknownCount, dryRun, organizedBase: config_1.config.organizedBase, unknownSamples });
 }

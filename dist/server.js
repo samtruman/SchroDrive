@@ -221,7 +221,7 @@ function startServer() {
      * GET /api/status — Returns system status including active services
      * and indexer configuration.
      */
-    app.get("/api/status", (_req, res) => {
+    app.get("/api/status", async (_req, res) => {
         res.json({
             ok: true,
             build: (0, buildInfo_1.getBuildInfo)(),
@@ -250,7 +250,7 @@ function startServer() {
                 count: (0, blacklist_1.getBlacklistCount)(),
             },
             webdavBridges: (0, mount_1.getBridgeStatuses)(),
-            externalWebdavMounts: (0, mount_1.getExternalWebdavStatus)(),
+            externalWebdavMounts: await (0, mount_1.getExternalWebdavStatus)(),
             tokenRotation: (() => {
                 const status = tokenRotator_1.tokenRotator.getAllStatus();
                 const summary = {};

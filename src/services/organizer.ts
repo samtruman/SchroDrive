@@ -26,6 +26,8 @@ import { getConfiguredMountReadiness, getWebdavOrganiserRoots } from "./mount";
 import { parseMediaFilename, selectMediaCandidate } from "./mediaParser";
 import { getOrganizerReview, recordOrganizerReview, type ReviewDecision, type ReviewOverride } from "./organizerReview";
 import { searchTmdb } from "./tmdbService";
+import { refreshJellyfinLibrary } from "../integrations/jellyfin";
+import { refreshPlexLibrary } from "../integrations/plex";
 
 // ===========================================================================
 // Types & Constants
@@ -734,7 +736,7 @@ async function ensureDir(p: string) {
  * @param dst - The absolute path where the symlink should be created.
  * @param dryRun - If `true`, log but do not actually create the symlink.
  */
-export async function makeSymlink(src: string, dst: string, dryRun: boolean, avoidCollision = false) {
+export async function makeSymlink(src: string, dst: string, dryRun: boolean, avoidCollision = false): Promise<boolean> {
   const dstDir = path.dirname(dst);
   if (!dryRun) await ensureDir(dstDir);
   const relTarget = path.relative(dstDir, src);
@@ -745,20 +747,23 @@ export async function makeSymlink(src: string, dst: string, dryRun: boolean, avo
         // Check if existing symlink already points to the correct target
         const cur = await fsp.readlink(dst).catch(() => "");
         const resolved = path.resolve(dstDir, cur);
-        if (resolved === src) return; // Already correct — skip
-        if (avoidCollision) return;
+        if (resolved === src) return false; // Already correct — skip
+        if (avoidCollision) return false;
         await fsp.unlink(dst);
       } else {
         // Exists as a regular file/directory — leave it to avoid data loss
-        return;
+        return false;
       }
     }
     if (!dryRun) {
       await fsp.symlink(relTarget, dst);
+      return true;
     }
   } catch (e) {
     console.error(`[${new Date().toISOString()}][organize] symlink failed`, { src, dst, err: (e as any)?.message });
+    return false;
   }
+  return false;
 }
 
 /**
@@ -1098,6 +1103,7 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
   }
 
   let processed = 0;
+  let changed = false;
   let movieCount = 0;
   let tvCount = 0;
   let unknownCount = 0;
@@ -1191,7 +1197,7 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
     if (dryRun && !(await fsp.stat(path.dirname(safeDst)).catch(() => null))) {
       console.log(`[${new Date().toISOString()}][organize] would create directory`, { path: path.dirname(safeDst) });
     }
-    await makeSymlink(src, safeDst, dryRun, true);
+    if (await makeSymlink(src, safeDst, dryRun, true)) changed = true;
     if (!dryRun) desiredBySource.set(await organizerSourceKey(src), safeDst);
     processed++;
   }
@@ -1205,11 +1211,17 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
       removedDirs += result.removedDirs;
     }
     if (removedLinks || removedDirs) {
+      changed = true;
       console.log(`[${new Date().toISOString()}][organize] reconciled obsolete content`, {
         removedSymlinks: removedLinks,
         removedEmptyDirs: removedDirs,
       });
     }
+  }
+
+  if (!dryRun && changed) {
+    if (config.refreshJellyfinOnAdd) await refreshJellyfinLibrary();
+    if (config.refreshPlexOnAdd) await refreshPlexLibrary();
   }
 
   console.log(

@@ -228,19 +228,19 @@ async function getConfiguredMountReadiness(providerIds) {
  * Returns status information for all configured external WebDAV mounts.
  * Used by the /health endpoint.
  */
-function getExternalWebdavStatus() {
+async function getExternalWebdavStatus() {
     if (!config_1.config.webdavMountsEnabled)
         return [];
     const entries = loadWebdavMounts();
-    return entries.map((e) => {
+    return Promise.all(entries.map(async (e) => {
         const mountName = e.name.replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
         const mountPath = path.join(config_1.config.mountBase, 'webdav', mountName);
-        let healthy = false;
-        try {
-            fs.readdirSync(mountPath);
-            healthy = true;
-        }
-        catch { }
+        // Never use a synchronous FUSE read here: a stalled WebDAV mount would
+        // block the entire backend event loop, including /health and the GUI.
+        const healthy = await Promise.race([
+            fs.promises.readdir(mountPath).then(() => true).catch(() => false),
+            new Promise((resolve) => setTimeout(() => resolve(false), 2000)),
+        ]);
         return {
             name: e.name,
             url: e.url,
@@ -249,7 +249,7 @@ function getExternalWebdavStatus() {
             readOnly: e.readOnly !== false,
             skipOrganiser: e.skipOrganiser !== false,
         };
-    });
+    }));
 }
 // ===========================================================================
 // Mount Utilities
