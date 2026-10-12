@@ -67,9 +67,9 @@ export function AppSidebar() {
   const [build, setBuild] = useState<{ commit?: string; version?: string } | null>(null)
 
   useEffect(() => {
-    fetch("/api/status", { cache: "no-store" })
+    fetch("/api/build", { cache: "no-store" })
       .then((response) => response.json())
-      .then((data) => setBuild(data.build || null))
+      .then((data) => setBuild(data || null))
       .catch(() => setBuild(null))
   }, [])
 
