@@ -35,6 +35,8 @@ import {
   removeDeadTorrent as removeDeadTorrentFromDb,
   getAllDeadTorrents,
   getDeadTorrent,
+  getCacheEntry,
+  setCacheEntry,
 } from "../core/db";
 import { UnplayableTorrentError } from "../core/errors";
 import {
@@ -386,6 +388,10 @@ ${responses.join("\n")}
  * with independent TTLs to balance freshness against API rate limits.
  */
 class BridgeCache {
+  /** Persistent stale-list retention across container recreation. */
+  private static readonly PERSISTENT_LIST_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+  private readonly persistentListKey: string;
+
   /** Cached virtual directory listing (all torrents). */
   private torrentListCache: CacheEntry<VirtualDirectory[]> | null = null;
   /** Stale virtual directory listing fallback. */
@@ -421,9 +427,23 @@ class BridgeCache {
    * @param listTtlS - Torrent listing cache TTL in seconds.
    * @param urlTtlS - Download URL cache TTL in seconds.
    */
-  constructor(listTtlS: number, urlTtlS: number) {
+  constructor(provider: string, listTtlS: number, urlTtlS: number) {
+    this.persistentListKey = `webdav-bridge:${provider}:directories`;
+    this.restorePersistentTorrentList();
     this.listTtlMs = listTtlS * 1000;
     this.urlTtlMs = urlTtlS * 1000;
+  }
+
+  private restorePersistentTorrentList(): void {
+    try {
+      const raw = getCacheEntry(this.persistentListKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { data?: VirtualDirectory[] } | VirtualDirectory[];
+      const data = Array.isArray(parsed) ? parsed : parsed.data;
+      if (Array.isArray(data) && data.length > 0) this.staleTorrentList = data;
+    } catch {
+      // A stale cache must never prevent the bridge from starting.
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -458,6 +478,11 @@ class BridgeCache {
   setTorrentList(dirs: VirtualDirectory[]): void {
     if (dirs && dirs.length > 0) {
       this.staleTorrentList = dirs;
+      try {
+        setCacheEntry(this.persistentListKey, JSON.stringify({ cachedAt: new Date().toISOString(), data: dirs }), Date.now() + BridgeCache.PERSISTENT_LIST_TTL_MS);
+      } catch {
+        // Persistent cache is an optimisation; keep the in-memory result.
+      }
     }
     this.torrentListCache = {
       data: dirs,
@@ -994,6 +1019,7 @@ export class WebDAVBridge {
     this.provider = options.provider;
     this.port = options.port;
     this.cache = new BridgeCache(
+      this.provider,
       options.cacheTtlS ?? 30,
       options.downloadCacheTtlS ?? 300,
     );
@@ -1603,6 +1629,20 @@ export class WebDAVBridge {
   private async getDirectories(): Promise<VirtualDirectory[]> {
     const cached = this.cache.getTorrentList();
     if (cached) return cached;
+
+    // Serve the last persisted inventory immediately after a restart and
+    // refresh it in the background. This prevents rclone/GUI startup from
+    // blocking on a complete provider/WebDAV traversal.
+    const stale = this.cache.getStaleTorrentList();
+    if (stale) {
+      if (!this.directoriesInFlight) {
+        this.directoriesInFlight = this.refreshDirectories().finally(() => {
+          this.directoriesInFlight = null;
+        });
+        void this.directoriesInFlight;
+      }
+      return stale;
+    }
 
     if (this.directoriesInFlight) return this.directoriesInFlight;
 
