@@ -18,6 +18,10 @@ FRONTEND_ROOT="${SCHRODRIVE_FRONTEND_ROOT:-/home/samtruman/schrodrive-web-next}"
 BACKUP_ROOT="${SCHRODRIVE_BACKUP_ROOT:-/home/samtruman/docker/cinecircle/consolidation-backups}"
 API_PORT="${SCHRODRIVE_API_PORT:-8970}"
 WEB_PORT="${SCHRODRIVE_WEB_PORT:-8971}"
+CURL_CONNECT_TIMEOUT="${SCHRODRIVE_CURL_CONNECT_TIMEOUT:-2}"
+CURL_MAX_TIME="${SCHRODRIVE_CURL_MAX_TIME:-8}"
+STARTUP_ATTEMPTS="${SCHRODRIVE_STARTUP_ATTEMPTS:-30}"
+STARTUP_DELAY="${SCHRODRIVE_STARTUP_DELAY:-2}"
 SHORT_SHA="$(git -C "$ROOT" rev-parse --short=12 HEAD)"
 FULL_SHA="$(git -C "$ROOT" rev-parse HEAD)"
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -85,24 +89,36 @@ EOF
 
 docker compose -f "$COMPOSE_FILE" -f "$OVERRIDE" up -d --force-recreate schrodrive
 
-for attempt in $(seq 1 30); do
-  if curl -fsS "http://127.0.0.1:$API_PORT/health" >/dev/null; then break; fi
-  [[ "$attempt" -eq 30 ]] && { echo "healthcheck timeout; backup: $BACKUP" >&2; exit 1; }
-  sleep 2
+probe() {
+  curl -fsS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" "$1" >/dev/null
+}
+
+for attempt in $(seq 1 "$STARTUP_ATTEMPTS"); do
+  if probe "http://127.0.0.1:$API_PORT/health"; then
+    break
+  fi
+  if [[ "$attempt" -eq "$STARTUP_ATTEMPTS" ]]; then
+    echo "healthcheck timeout after $((STARTUP_ATTEMPTS * STARTUP_DELAY))s; backup: $BACKUP" >&2
+    docker compose -f "$COMPOSE_FILE" ps schrodrive >&2 || true
+    docker logs --tail 120 schrodrive >&2 || true
+    exit 1
+  fi
+  sleep "$STARTUP_DELAY"
 done
 
-python3 - "http://127.0.0.1:$API_PORT/api/status" "$FULL_SHA" <<'PY'
+python3 - "http://127.0.0.1:$API_PORT/api/status" "$FULL_SHA" "$CURL_MAX_TIME" <<'PY'
 import json
 import sys
 import urllib.request
-url, expected = sys.argv[1:]
-data = json.load(urllib.request.urlopen(url, timeout=10))
+url, expected, timeout = sys.argv[1:]
+data = json.load(urllib.request.urlopen(url, timeout=float(timeout)))
 actual = (data.get("build") or {}).get("commit")
 if actual != expected:
     raise SystemExit(f"deployed build mismatch: expected {expected}, got {actual}")
 PY
-curl -fsS "http://127.0.0.1:$API_PORT/api/organizer/audit-cleanup" >/dev/null
-curl -fsS "http://127.0.0.1:$WEB_PORT/media-manager/audit-cleanup" | grep -q "Audit Cleanup"
+probe "http://127.0.0.1:$API_PORT/api/organizer/audit-cleanup"
+curl -fsS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" \
+  "http://127.0.0.1:$WEB_PORT/media-manager/audit-cleanup" | grep -q "Audit Cleanup"
 
 echo "Deploy passed."
 echo "build:  $FULL_SHA"
