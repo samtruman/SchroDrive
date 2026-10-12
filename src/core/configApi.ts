@@ -109,6 +109,7 @@ export const CONFIG_SCHEMA = {
   TMDB_API_KEY: { type: "password", default: "", category: "organizer", label: "TMDB API Key" },
   ORGANIZED_BASE: { type: "string", default: "", category: "organizer", label: "Organized Base Path" },
   ORGANIZER_MODE: { type: "select", default: "symlink", options: ["symlink", "copy", "move"], category: "organizer", label: "Organizer Mode" },
+  ORGANIZER_GROUP_VERSIONS: { type: "boolean", default: "true", category: "organizer", label: "Group media versions" },
   ORGANIZER_FILENAME_MODE: { type: "select", default: "canonical", options: ["canonical", "original"], category: "organizer", label: "Organizer Filename Mode" },
   ORG_SCAN_INTERVAL_S: { type: "number", default: "300", category: "organizer", label: "Organizer Scan Interval (seconds)" },
 
@@ -263,6 +264,27 @@ export function getPersistedEnvValue(key: ConfigKey, envPath = findEnvPath()): s
     if (legacy !== undefined && legacy !== "") return legacy;
   }
   return canonical || "";
+}
+
+/**
+ * Hydrate GUI-persisted settings for runtime modules at startup.
+ * Real container environment values retain precedence over the persisted file.
+ */
+export function loadPersistedConfigIntoRuntimeEnv(): void {
+  const fileValues = parseEnvFile(findEnvPath());
+
+  for (const key of Object.keys(CONFIG_SCHEMA)) {
+    const aliases = CONFIG_KEY_ALIASES[key] || [];
+    const runtimeKey = [key, ...aliases].find((candidate) => process.env[candidate] !== undefined && process.env[candidate] !== "");
+    if (runtimeKey) continue;
+
+    const persistedValue = [key, ...aliases]
+      .map((candidate) => fileValues.get(candidate))
+      .find((value) => value !== undefined && value !== "");
+    if (persistedValue !== undefined && (process.env[key] === undefined || process.env[key] === "")) {
+      process.env[key] = persistedValue;
+    }
+  }
 }
 
 // Get all config values with their sources

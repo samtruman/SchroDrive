@@ -621,6 +621,34 @@ export function selectOrganizerFilename(
   return mode === "original" ? path.basename(sourceFilename) : canonicalFilename;
 }
 
+/**
+ * Returns the provider release directory used when version grouping is off.
+ * The organized tree still retains the canonical title, but each release gets
+ * its own sibling folder instead of sharing the media folder with alternatives.
+ */
+function sourceReleaseName(srcFullPath: string | undefined, srcBaseName: string): string {
+  if (srcFullPath) {
+    const segments = srcFullPath.split(path.sep);
+    const allIdx = segments.lastIndexOf("__all__");
+    const linksIdx = segments.lastIndexOf("links");
+    const rootIdx = Math.max(allIdx, linksIdx);
+    const release = rootIdx >= 0 ? segments[rootIdx + 1] : undefined;
+    const cleaned = release ? sanitize(release) : "";
+    if (cleaned) return cleaned;
+  }
+  return sanitize(path.parse(srcBaseName).name) || "release";
+}
+
+function organizedVersionFolder(
+  canonicalFolder: string,
+  srcFullPath: string | undefined,
+  srcBaseName: string,
+): string {
+  if (config.organizerGroupVersions) return canonicalFolder;
+  const release = sourceReleaseName(srcFullPath, srcBaseName);
+  return path.join(path.dirname(canonicalFolder), `${path.basename(canonicalFolder)} [${release}]`);
+}
+
 export function computeTarget(
   p: Parsed,
   srcBaseName: string,
@@ -631,7 +659,7 @@ export function computeTarget(
   if (p.type === "movie") {
     const title = p.title ? sanitize(p.title) : sanitize(path.parse(srcBaseName).name);
     const folder = p.year ? `${title} (${p.year})` : title;
-    const dstDir = path.join(orgBase, "Movies", folder);
+    const dstDir = organizedVersionFolder(path.join(orgBase, "Movies", folder), srcFullPath, srcBaseName);
     const dstName = selectOrganizerFilename(filenameMode, `${folder}${p.ext}`, srcBaseName);
     return path.join(dstDir, dstName);
   }
@@ -653,33 +681,34 @@ export function computeTarget(
 
     const show = p.show ? sanitize(p.show) : sanitize(path.parse(srcBaseName).name);
     const showDir = p.year ? `${show} (${p.year})` : show;
+    const organizedShowDir = organizedVersionFolder(showDir, srcFullPath, srcBaseName);
 
     if (mediaCategory === 'anime') {
       // Output to Anime/ instead of TV/
       if (typeof p.season === "number" && typeof p.episode === "number") {
         const seasonDir = `Season ${pad2(p.season)}`;
         const epStr = `${show} S${pad2(p.season)}E${pad2(p.episode)}`;
-        return path.join(orgBase, "Anime", showDir, seasonDir, selectOrganizerFilename(filenameMode, `${epStr}${p.ext}`, srcBaseName));
+        return path.join(orgBase, "Anime", organizedShowDir, seasonDir, selectOrganizerFilename(filenameMode, `${epStr}${p.ext}`, srcBaseName));
       }
       if (typeof p.absolute === "number") {
-        return path.join(orgBase, "Anime", showDir, selectOrganizerFilename(filenameMode, `${show} - ${pad4(p.absolute)}${p.ext}`, srcBaseName));
+        return path.join(orgBase, "Anime", organizedShowDir, selectOrganizerFilename(filenameMode, `${show} - ${pad4(p.absolute)}${p.ext}`, srcBaseName));
       }
-      return path.join(orgBase, "Anime", showDir, selectOrganizerFilename(filenameMode, `${show}${p.ext}`, srcBaseName));
+      return path.join(orgBase, "Anime", organizedShowDir, selectOrganizerFilename(filenameMode, `${show}${p.ext}`, srcBaseName));
     }
 
     if (typeof p.season === "number" && typeof p.episode === "number") {
       const seasonDir = `Season ${pad2(p.season)}`;
-      const dstDir = path.join(orgBase, "TV", showDir, seasonDir);
+      const dstDir = path.join(orgBase, "TV", organizedShowDir, seasonDir);
       const fileName = selectOrganizerFilename(filenameMode, `${show} S${pad2(p.season)}E${pad2(p.episode)}${p.ext}`, srcBaseName);
       return path.join(dstDir, fileName);
     }
     if (typeof p.absolute === "number") {
-      const dstDir = path.join(orgBase, "TV", showDir);
+      const dstDir = path.join(orgBase, "TV", organizedShowDir);
       const fileName = selectOrganizerFilename(filenameMode, `${show} - ${pad4(p.absolute)}${p.ext}`, srcBaseName);
       return path.join(dstDir, fileName);
     }
     // TV with no episode info — place directly in the show directory
-    const dstDir = path.join(orgBase, "TV", showDir);
+    const dstDir = path.join(orgBase, "TV", organizedShowDir);
     const fileName = selectOrganizerFilename(filenameMode, `${show}${p.ext}`, srcBaseName);
     return path.join(dstDir, fileName);
   }
@@ -750,13 +779,32 @@ export async function resolveCollisionTarget(src: string, dst: string): Promise<
     if (!st) return candidate;
     if (st.isSymbolicLink()) {
       const current = await fsp.readlink(candidate).catch(() => "");
-      if (path.resolve(path.dirname(candidate), current) === src) return candidate;
+      const currentTarget = path.resolve(path.dirname(candidate), current);
+      if (await organizerSourcesMatch(src, currentTarget)) return candidate;
     }
     const suffix = index === 0 ? ` - ${fingerprint}` : ` - ${fingerprint}-${index}`;
     candidate = path.join(dstDir, `${stem}${suffix}${ext}`);
   }
 
   throw new Error(`unable to allocate collision-safe organizer target for ${dst}`);
+}
+
+/** Compare sources across symlinked/container mount aliases. */
+async function organizerSourcesMatch(left: string, right: string): Promise<boolean> {
+  const leftAbsolute = path.normalize(path.resolve(left));
+  const rightAbsolute = path.normalize(path.resolve(right));
+  if (leftAbsolute === rightAbsolute) return true;
+
+  const [leftReal, rightReal] = await Promise.all([
+    fsp.realpath(leftAbsolute).catch(() => leftAbsolute),
+    fsp.realpath(rightAbsolute).catch(() => rightAbsolute),
+  ]);
+  return path.normalize(leftReal) === path.normalize(rightReal);
+}
+
+async function organizerSourceKey(source: string): Promise<string> {
+  const absolute = path.normalize(path.resolve(source));
+  return fsp.realpath(absolute).then((resolved) => path.normalize(resolved)).catch(() => absolute);
 }
 
 /**
@@ -858,6 +906,53 @@ async function pruneStaleSymlinks(dir: string): Promise<{ removedLinks: number; 
         }
       }
     }
+  }
+
+  return { removedLinks, removedDirs };
+}
+
+/** Remove valid links left behind when naming or classification changes. */
+async function reconcileObsoleteSymlinks(
+  dir: string,
+  desiredBySource: Map<string, string>,
+): Promise<{ removedLinks: number; removedDirs: number }> {
+  let removedLinks = 0;
+  let removedDirs = 0;
+  let entries: fs.Dirent[];
+  try {
+    entries = await fsp.readdir(dir, { withFileTypes: true });
+  } catch {
+    return { removedLinks, removedDirs };
+  }
+
+  for (const ent of entries) {
+    const full = path.join(dir, ent.name);
+    if (ent.isDirectory()) {
+      const sub = await reconcileObsoleteSymlinks(full, desiredBySource);
+      removedLinks += sub.removedLinks;
+      removedDirs += sub.removedDirs;
+      try {
+        if ((await fsp.readdir(full)).length === 0) {
+          await fsp.rmdir(full);
+          removedDirs++;
+        }
+      } catch { /* directory may have disappeared */ }
+      continue;
+    }
+    if (!ent.isSymbolicLink()) continue;
+
+    const current = await fsp.readlink(full).catch(() => "");
+    const source = path.resolve(path.dirname(full), current);
+    const desired = desiredBySource.get(await organizerSourceKey(source));
+    if (!desired || path.normalize(desired) === path.normalize(full)) continue;
+
+    console.log(`[${new Date().toISOString()}][organize] obsolete organized symlink`, {
+      path: full,
+      target: source,
+      replacement: desired,
+    });
+    await fsp.unlink(full);
+    removedLinks++;
   }
 
   return { removedLinks, removedDirs };
@@ -1007,6 +1102,7 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
   let tvCount = 0;
   let unknownCount = 0;
   const unknownSamples: string[] = [];
+  const desiredBySource = new Map<string, string>();
   for (const src of files) {
     const base = path.basename(src);
     const structuredIdentity = parseMediaFilename(base, src);
@@ -1096,7 +1192,24 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
       console.log(`[${new Date().toISOString()}][organize] would create directory`, { path: path.dirname(safeDst) });
     }
     await makeSymlink(src, safeDst, dryRun, true);
+    if (!dryRun) desiredBySource.set(await organizerSourceKey(src), safeDst);
     processed++;
+  }
+
+  if (!dryRun && desiredBySource.size > 0) {
+    let removedLinks = 0;
+    let removedDirs = 0;
+    for (const dir of [movieDir, tvDir, animeDir]) {
+      const result = await reconcileObsoleteSymlinks(dir, desiredBySource);
+      removedLinks += result.removedLinks;
+      removedDirs += result.removedDirs;
+    }
+    if (removedLinks || removedDirs) {
+      console.log(`[${new Date().toISOString()}][organize] reconciled obsolete content`, {
+        removedSymlinks: removedLinks,
+        removedEmptyDirs: removedDirs,
+      });
+    }
   }
 
   console.log(
