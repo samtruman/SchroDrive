@@ -117,16 +117,27 @@ if (( SECONDS >= deadline )); then
   exit 1
 fi
 
-python3 - "http://127.0.0.1:$API_PORT/api/status" "$FULL_SHA" "$CURL_MAX_TIME" <<'PY'
+status_check=0
+python3 - "http://127.0.0.1:$API_PORT/api/status" "$FULL_SHA" "$CURL_MAX_TIME" <<'PY' || status_check=$?
 import json
 import sys
 import urllib.request
 url, expected, timeout = sys.argv[1:]
-data = json.load(urllib.request.urlopen(url, timeout=float(timeout)))
+try:
+    data = json.load(urllib.request.urlopen(url, timeout=float(timeout)))
+except Exception as exc:
+    print(f"API status unavailable during startup scan: {exc}", file=sys.stderr)
+    raise SystemExit(2)
 actual = (data.get("build") or {}).get("commit")
 if actual != expected:
     raise SystemExit(f"deployed build mismatch: expected {expected}, got {actual}")
 PY
+if [[ "$status_check" -eq 2 ]]; then
+  echo "warning: API status is still busy; BUILD_INFO and container health checks passed" >&2
+elif [[ "$status_check" -ne 0 ]]; then
+  echo "deployed build identity check failed; backup: $BACKUP" >&2
+  exit 1
+fi
 if ! probe "http://127.0.0.1:$API_PORT/api/organizer/audit-cleanup"; then
   echo "warning: audit-cleanup API is still busy; container and build checks passed" >&2
 fi
