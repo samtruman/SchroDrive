@@ -46,6 +46,31 @@ sessions. On the current server it is `/home/samtruman/.bun/bin/bun`; an
 explicit `SCHRODRIVE_BUN_BIN` may be supplied when another installation is
 required.
 
+## Configuration precedence and Organizer naming
+
+Configuration has two sources:
+
+1. runtime/container environment variables, which take precedence and are
+   treated as locked values in the GUI;
+2. the persisted `/config/.env` values, used when the runtime value is absent
+   or an empty placeholder and exposed as editable settings.
+
+A non-empty runtime value always wins over the persisted value. Saving through
+the GUI updates the persisted configuration; it does not silently recreate or
+restart the container. Settings that require a new environment value expose a
+restart-required state and are applied only after an explicit deploy/container
+restart.
+
+Organizer naming and media grouping are separate concerns:
+
+- `ORGANIZER_FILENAME_MODE=canonical` gives versions of the same movie or
+  episode a shared canonical filename so Jellyfin can group them;
+- `ORGANIZER_FILENAME_MODE=original` preserves the source release basename;
+- the version/grouping policy decides which releases belong to the same logical
+  media item and does not rename provider files;
+- changing the mode affects generated symlinks and stale-link reconciliation;
+  it must not modify the provider source files.
+
 ## Deployment verification and rollback
 
 The deployment script was validated on the baseline branch with the complete

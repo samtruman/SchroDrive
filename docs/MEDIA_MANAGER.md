@@ -69,6 +69,20 @@ The feature introduces four cooperating concepts:
 The Web UI reads the same persisted snapshot as the API. It does not create a
 second inventory or make decisions that differ from the backend.
 
+### Configuration persistence and naming
+
+Runtime/container environment values have precedence over persisted `/config/.env`
+values. An empty runtime placeholder falls back to the persisted value; a
+non-empty runtime value remains authoritative and locked in the GUI. Saving a
+GUI setting changes persisted configuration and does not itself restart the
+container.
+
+Organizer filename mode is independent from Media Manager policy grouping.
+Canonical mode gives equivalent versions a shared filename for media-server
+grouping, while original mode preserves each release basename. Neither mode
+renames provider media: only the generated symlinks are affected, and stale
+symlinks are reconciled when the mode changes.
+
 ## User-visible behavior
 
 The feature exposes four complementary views:
