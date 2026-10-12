@@ -14,7 +14,7 @@ fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="${SCHRODRIVE_COMPOSE_FILE:-/home/samtruman/docker/cinecircle/compose-active.yml}"
 RUNTIME_ROOT="${SCHRODRIVE_RUNTIME_ROOT:-/home/samtruman/docker/cinecircle/schrodrive/config/validation-runtime}"
-FRONTEND_ROOT="${SCHRODRIVE_FRONTEND_ROOT:-/home/samtruman/schrodrive-web-next}"
+FRONTEND_ROOT="${SCHRODRIVE_FRONTEND_ROOT:-$ROOT/web/.next}"
 BACKUP_ROOT="${SCHRODRIVE_BACKUP_ROOT:-/home/samtruman/docker/cinecircle/consolidation-backups}"
 API_PORT="${SCHRODRIVE_API_PORT:-8970}"
 WEB_PORT="${SCHRODRIVE_WEB_PORT:-8971}"
@@ -22,6 +22,7 @@ CURL_CONNECT_TIMEOUT="${SCHRODRIVE_CURL_CONNECT_TIMEOUT:-2}"
 CURL_MAX_TIME="${SCHRODRIVE_CURL_MAX_TIME:-8}"
 STARTUP_ATTEMPTS="${SCHRODRIVE_STARTUP_ATTEMPTS:-30}"
 STARTUP_DELAY="${SCHRODRIVE_STARTUP_DELAY:-2}"
+STARTUP_TIMEOUT="${SCHRODRIVE_STARTUP_TIMEOUT:-180}"
 SHORT_SHA="$(git -C "$ROOT" rev-parse --short=12 HEAD)"
 FULL_SHA="$(git -C "$ROOT" rev-parse HEAD)"
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -93,18 +94,28 @@ probe() {
   curl -fsS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" "$1" >/dev/null
 }
 
-for attempt in $(seq 1 "$STARTUP_ATTEMPTS"); do
-  if probe "http://127.0.0.1:$API_PORT/health"; then
+deadline=$((SECONDS + STARTUP_TIMEOUT))
+while (( SECONDS < deadline )); do
+  state="$(docker inspect --format '{{.State.Status}}' schrodrive 2>/dev/null || true)"
+  health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' schrodrive 2>/dev/null || true)"
+  if [[ "$state" == "running" && ( "$health" == "healthy" || "$health" == "none" ) ]]; then
     break
   fi
-  if [[ "$attempt" -eq "$STARTUP_ATTEMPTS" ]]; then
-    echo "healthcheck timeout after $((STARTUP_ATTEMPTS * STARTUP_DELAY))s; backup: $BACKUP" >&2
+  if [[ "$state" == "exited" || "$state" == "dead" ]]; then
+    echo "container entered $state during startup; backup: $BACKUP" >&2
     docker compose -f "$COMPOSE_FILE" ps schrodrive >&2 || true
     docker logs --tail 120 schrodrive >&2 || true
     exit 1
   fi
   sleep "$STARTUP_DELAY"
 done
+
+if (( SECONDS >= deadline )); then
+  echo "container health timeout after ${STARTUP_TIMEOUT}s; backup: $BACKUP" >&2
+  docker compose -f "$COMPOSE_FILE" ps schrodrive >&2 || true
+  docker logs --tail 120 schrodrive >&2 || true
+  exit 1
+fi
 
 python3 - "http://127.0.0.1:$API_PORT/api/status" "$FULL_SHA" "$CURL_MAX_TIME" <<'PY'
 import json
