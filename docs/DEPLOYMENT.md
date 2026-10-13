@@ -63,13 +63,13 @@ restart.
 
 Organizer naming and media grouping are separate concerns:
 
-- `ORGANIZER_FILENAME_MODE=canonical` gives versions of the same movie or
-  episode a shared canonical filename so Jellyfin can group them;
-- `ORGANIZER_FILENAME_MODE=original` preserves the source release basename;
+- generated symlinks preserve the original provider release basename;
+- `ORGANIZER_GROUP_VERSIONS` controls whether equivalent releases share the
+  canonical media folder;
 - the version/grouping policy decides which releases belong to the same logical
   media item and does not rename provider files;
-- changing the mode affects generated symlinks and stale-link reconciliation;
-  it must not modify the provider source files.
+- organizer reconciliation may remove obsolete generated symlinks after a
+  naming or classification change, but it never modifies provider source files.
 
 ## Deployment verification and rollback
 

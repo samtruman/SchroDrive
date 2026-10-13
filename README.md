@@ -940,7 +940,7 @@ provider capability and live-validation status.
 | `TMDB_API_KEY` | — | TMDB API key for metadata lookup |
 | `ORGANIZED_BASE` | `<MOUNT_BASE>/organized` | Output directory for organised symlinks |
 | `ORGANIZER_MODE` | `symlink` | `symlink`, `copy`, or `move` |
-| `ORGANIZER_FILENAME_MODE` | `canonical` | `canonical` groups versions in one Jellyfin item; `original` preserves release basenames |
+| `ORGANIZER_GROUP_VERSIONS` | `false` | Keeps equivalent releases in one canonical media folder when enabled; generated symlinks always preserve original release basenames |
 | `ORG_SCAN_INTERVAL_S` | `300` | Organiser scan interval (seconds) |
 
 ### 🔍 Dead Scanner

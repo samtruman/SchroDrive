@@ -77,11 +77,13 @@ non-empty runtime value remains authoritative and locked in the GUI. Saving a
 GUI setting changes persisted configuration and does not itself restart the
 container.
 
-Organizer filename mode is independent from Media Manager policy grouping.
-Canonical mode gives equivalent versions a shared filename for media-server
-grouping, while original mode preserves each release basename. Neither mode
-renames provider media: only the generated symlinks are affected, and stale
-symlinks are reconciled when the mode changes.
+Organizer media grouping is independent from the filename used for each
+release. SchroDrive keeps the original provider release basename for generated
+symlinks, while the organizer still places equivalent versions in the same
+canonical movie, show, season, or episode folder when version grouping is
+enabled. This lets Jellyfin group and identify media through the folder
+structure without rewriting release names. Existing obsolete symlinks are
+reconciled during the normal organizer scan; provider media is never renamed.
 
 ## User-visible behavior
 
