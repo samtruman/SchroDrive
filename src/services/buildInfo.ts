@@ -9,7 +9,7 @@ type BuildManifest = {
 };
 
 function readManifest(): BuildManifest {
-  const file = process.env.SCHRODRIVE_BUILD_INFO_FILE || "/config/validation-runtime/BUILD_INFO.json";
+  const file = process.env.SCHRODRIVE_BUILD_INFO_FILE || "/app/BUILD_INFO.json";
   try { return JSON.parse(fs.readFileSync(file, "utf8")) as BuildManifest; } catch { return {}; }
 }
 

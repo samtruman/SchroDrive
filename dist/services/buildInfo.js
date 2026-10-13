@@ -6,7 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.getBuildInfo = getBuildInfo;
 const node_fs_1 = __importDefault(require("node:fs"));
 function readManifest() {
-    const file = process.env.SCHRODRIVE_BUILD_INFO_FILE || "/config/validation-runtime/BUILD_INFO.json";
+    const file = process.env.SCHRODRIVE_BUILD_INFO_FILE || "/app/BUILD_INFO.json";
     try {
         return JSON.parse(node_fs_1.default.readFileSync(file, "utf8"));
     }

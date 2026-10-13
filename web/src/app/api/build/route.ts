@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs"
 
 import { NextResponse } from "next/server"
 
-const BUILD_INFO_FILE = process.env.SCHRODRIVE_BUILD_INFO_FILE || "/config/validation-runtime/BUILD_INFO.json"
+const BUILD_INFO_FILE = process.env.SCHRODRIVE_BUILD_INFO_FILE || "/app/BUILD_INFO.json"
 
 export async function GET() {
   try {

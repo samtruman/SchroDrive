@@ -1,21 +1,28 @@
 # SchroDrive deployment
 
-The repository has three independently deployable artifacts:
+The repository produces one deployable application artifact: a complete Docker
+image containing the backend, frontend, entrypoint, and runtime dependencies.
 
-- the Docker image;
-- the backend source mounted through the runtime override;
-- the frontend .next directory mounted by the active stack.
+The production container must not mount application source, compiled backend
+files, or the frontend `.next` directory from the host. Runtime bind mounts are
+limited to persistent data and integration paths such as configuration,
+database, provider mounts, and download/staging directories. A container
+recreate therefore runs exactly the code that was built into the image.
 
-A container recreate alone is not sufficient when either mount is stale. Use the
-repository deployment pipeline:
+Do not use a `validation-runtime` source override, a validation entrypoint, or
+an ad-hoc overlay image as a production runtime. Validation tooling may build a
+temporary image or inspect a container, but it must be removed or disabled
+before the release image is deployed.
+
+Use the repository deployment pipeline:
 
     scripts/deploy-schrodrive.sh --check
     scripts/deploy-schrodrive.sh --deploy
 
 The default check mode runs diff validation, backend typecheck and tests, backend
 build, and frontend build without changing files, mounts, images, or services.
-Deploy mode then creates a timestamped backup, writes BUILD_INFO.json, syncs the
-backend and frontend mounts, builds a commit-tagged image, recreates only the
+Deploy mode then creates a timestamped backup, builds one complete
+commit-tagged image with its embedded BUILD_INFO.json, recreates only the
 SchroDrive service, and verifies:
 
 - health endpoint;
@@ -23,23 +30,17 @@ SchroDrive service, and verifies:
 - Audit Cleanup endpoint;
 - Audit Cleanup frontend route.
 
-The script fails closed if a required path or command is missing. It does not
-deploy other stack services. Environment variables can override the compose,
-runtime, frontend, backup, API-port, and web-port paths for other deployments.
+The script fails closed if a required path or command is missing and refuses a
+dirty checkout or a compose file containing application-source/build mounts.
+It does not deploy other stack services. Environment variables can override
+the compose, backup, API-port, and web-port settings for other deployments.
 
 ## Source, build and runtime identity
 
-The current refresh-library milestone is tracked on:
-
-- branch: `pr/non-blocking-mount-status-20261012`;
-- source commit: `b256e2d4cd66e030e79046f9698ec19e496158d3`;
-- deployed image: `schrodrive:deploy-5b8aeb39797b`.
-
-The branch is pushed to the fork and the working tree is clean. The image was
-built from the same validated source contents before the final Git commit was
-created, so a subsequent deploy is required if the runtime build label must
-report `b256e2d` exactly. Record this distinction instead of assuming that a
-successful image build proves source/runtime identity alignment.
+Every release record must name the exact source commit, image tag and image ID,
+and the running API build identity. Never keep a historical branch, commit or
+image tag here as if it were the current deployment. The image must be built
+after the final commit so its embedded BUILD_INFO.json reports that exact SHA.
 
 The deploy script uses the host Bun installation even for non-interactive SSH
 sessions. On the current server it is `/home/samtruman/.bun/bin/bun`; an
@@ -177,3 +178,70 @@ For an upstream fix:
 
 The final handoff must state the source commit, pushed branch, PR number/URL,
 tests, typecheck, builds, deployed identity, and any remaining limitation.
+
+## Canonical runtime alignment procedure
+
+Use this procedure whenever the running container may have been assembled from
+an old image, a validation checkout, or a host-mounted build.
+
+### 1. Freeze and inventory
+
+Record the current container image, image ID, entrypoint, command, mounts,
+environment, running build identity, and health status. Save a timestamped
+backup of persistent application data and the active compose definition. Do not
+remove the old image or data before the replacement has passed verification.
+
+The following runtime red flags must be absent from the release container:
+
+- `/config/validation-runtime/src` as application source;
+- a validation entrypoint replacing `/docker-entrypoint.sh`;
+- `/app/dist` or `/app/web/.next` mounted from the host;
+- an image assembled by copying selected files over an unrelated base image.
+
+### 2. Consolidate the source
+
+Start from the canonical checkout and a named branch. Reconcile all intended
+changes there, including backend, frontend, tests, deployment scripts, and
+documentation. Keep local configuration, credentials, production compose files,
+and temporary validation artifacts out of the repository.
+
+The working tree must be clean after the intended commit. Record the branch,
+commit SHA, dependency lockfile state, and all test/typecheck/build results.
+
+### 3. Build one complete image
+
+Build the image from the canonical commit using the repository Dockerfile. The
+Dockerfile must compile and copy the backend into `/app/dist`, build and copy
+the frontend into `/app/web`, and install the standard `/docker-entrypoint.sh`.
+Do not copy individual runtime files from another image and do not bind-mount
+build output into the container.
+
+Tag the image with the source SHA or an equivalent immutable build identifier,
+and expose that identifier through the health/status API and GUI.
+
+### 4. Validate before replacement
+
+Create a temporary container from the new complete image with the required data
+and provider mounts, but without production traffic. Verify that PID 1 is
+`/docker-entrypoint.sh`, the backend runs `/app/dist/index.js`, the frontend is
+served from the image’s `/app/web` tree, and no `/config/validation-runtime`
+source is referenced. Also verify health, status API, frontend, provider mount,
+organizer, symlinks, SQLite/config readability, and source/image identity.
+
+### 5. Deploy and verify
+
+After backup and preflight checks pass, recreate only the application service
+using the complete image and standard entrypoint. Do not manually edit files
+inside the container. Repeat the health, API, GUI, mount, organizer, symlink,
+persistence, and source-mount checks after startup.
+
+Keep the previous image and backup until startup inventory and the relevant
+API/UI workflows have been tested.
+
+### 6. Close the release
+
+Commit the documentation and deployment changes, push the canonical branch,
+and compare local HEAD, remote HEAD, image label, running image ID, and API
+build identity. A release is not complete while required code exists only in a
+container layer, validation directory, uncommitted worktree, or host-mounted
+build directory.

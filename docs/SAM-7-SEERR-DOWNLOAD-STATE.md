@@ -45,9 +45,9 @@ Do not log credentials or archive them into Git. Backup creation and any
 frontend synchronization are approval-time operations.
 
 Deploy the prebuilt full-checkout image only through the bridge. Preserve
-/data, /config, the identical absolute downloads bind, /mnt/schrodrive rshared,
-and the read-only /app/web/.next contract. If synchronizing the frontend bind,
-use the exact frontend from the approved image after backing up its predecessor.
+/data, /config, the identical absolute downloads bind, and /mnt/schrodrive
+rshared. The backend and frontend must both come from the same immutable image;
+there must be no host bind for /app/web/.next, /app/dist, or application source.
 No database migration is required. Do not invoke the historical deployment
 script: it rebuilds an image and synchronizes a obsolete source mount.
 

@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 # SchroDrive deployment pipeline.
-# Default mode is validation only. Use --deploy to sync runtime/frontend mounts
+# Default mode is validation only. Use --deploy to build one complete image
 # and recreate only the SchroDrive service.
 MODE="check"
 if [[ "${1:-}" == "--deploy" ]]; then MODE="deploy"; fi
@@ -12,12 +12,10 @@ if [[ "${1:-}" != "" && "${1:-}" != "--deploy" && "${1:-}" != "--check" ]]; then
 fi
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-COMPOSE_FILE="${SCHRODRIVE_COMPOSE_FILE:-/home/samtruman/docker/cinecircle/compose-active.yml}"
-RUNTIME_ROOT="${SCHRODRIVE_RUNTIME_ROOT:-/home/samtruman/docker/cinecircle/schrodrive/config/validation-runtime}"
-FRONTEND_ROOT="${SCHRODRIVE_FRONTEND_ROOT:-$ROOT/web/.next}"
-BACKUP_ROOT="${SCHRODRIVE_BACKUP_ROOT:-/home/samtruman/docker/cinecircle/consolidation-backups}"
-API_PORT="${SCHRODRIVE_API_PORT:-8970}"
-WEB_PORT="${SCHRODRIVE_WEB_PORT:-8971}"
+COMPOSE_FILE="${SCHRODRIVE_COMPOSE_FILE:-$ROOT/docker-compose.yml}"
+BACKUP_ROOT="${SCHRODRIVE_BACKUP_ROOT:-$ROOT/.deploy-backups}"
+API_PORT="${SCHRODRIVE_API_PORT:-8978}"
+WEB_PORT="${SCHRODRIVE_WEB_PORT:-3000}"
 CURL_CONNECT_TIMEOUT="${SCHRODRIVE_CURL_CONNECT_TIMEOUT:-2}"
 CURL_MAX_TIME="${SCHRODRIVE_CURL_MAX_TIME:-8}"
 STARTUP_ATTEMPTS="${SCHRODRIVE_STARTUP_ATTEMPTS:-30}"
@@ -31,13 +29,16 @@ IMAGE="schrodrive:deploy-${SHORT_SHA}"
 require_command() {
   command -v "$1" >/dev/null 2>&1 || { echo "missing command: $1" >&2; exit 1; }
 }
-for command in git docker curl python3 rsync; do require_command "$command"; done
+for command in git docker curl python3; do require_command "$command"; done
 BUN="${SCHRODRIVE_BUN_BIN:-$(command -v bun || true)}"
 [[ -x "$BUN" ]] || BUN="/home/samtruman/.bun/bin/bun"
 [[ -x "$BUN" ]] || { echo "missing Bun executable; set SCHRODRIVE_BUN_BIN" >&2; exit 1; }
 [[ -f "$COMPOSE_FILE" ]] || { echo "compose file not found: $COMPOSE_FILE" >&2; exit 1; }
-[[ -d "$RUNTIME_ROOT" ]] || { echo "runtime root not found: $RUNTIME_ROOT" >&2; exit 1; }
-[[ -d "$FRONTEND_ROOT" ]] || { echo "frontend mount not found: $FRONTEND_ROOT" >&2; exit 1; }
+if grep -qE 'validation-runtime|/app/web/\.next|/app/dist' "$COMPOSE_FILE"; then
+  echo "compose contains forbidden application source/build override" >&2
+  echo "remove validation-runtime and host build mounts before deploying" >&2
+  exit 1
+fi
 
 echo "== SchroDrive deployment validation =="
 echo "checkout: $FULL_SHA"
@@ -45,6 +46,11 @@ echo "image:    $IMAGE"
 echo "mode:     $MODE"
 
 git -C "$ROOT" diff --check
+if [[ -n "$(git -C "$ROOT" status --porcelain)" ]]; then
+  echo "checkout is not clean; commit or intentionally discard changes before deployment" >&2
+  git -C "$ROOT" status --short >&2
+  exit 1
+fi
 (cd "$ROOT" && "$BUN" run typecheck)
 (cd "$ROOT" && "$BUN" test tests/unit tests/e2e tests/regressions)
 (cd "$ROOT" && "$BUN" run build)
@@ -58,28 +64,9 @@ fi
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP="$BACKUP_ROOT/deploy-$STAMP-$SHORT_SHA"
 mkdir -p "$BACKUP"
-cp -a "$RUNTIME_ROOT" "$BACKUP/runtime"
-cp -a "$FRONTEND_ROOT" "$BACKUP/frontend"
 cp -a "$COMPOSE_FILE" "$BACKUP/compose-active.yml"
 
-python3 - "$RUNTIME_ROOT/BUILD_INFO.json" "$FULL_SHA" "$BUILD_TIME" "$IMAGE" <<'PY'
-import json
-import sys
-from pathlib import Path
-target, commit, built_at, image = sys.argv[1:]
-Path(target).write_text(json.dumps({
-    "commit": commit,
-    "builtAt": built_at,
-    "image": image,
-    "runtimeCommit": commit,
-    "frontendCommit": commit,
-}, indent=2) + "\n")
-PY
-
-rsync -a --delete "$ROOT/src/" "$RUNTIME_ROOT/src/"
-rsync -a --delete "$ROOT/web/.next/" "$FRONTEND_ROOT/"
-
-docker build -t "$IMAGE" "$ROOT"
+docker build   --build-arg SCHRODRIVE_BUILD_COMMIT="$FULL_SHA"   --build-arg SCHRODRIVE_BUILD_TIME="$BUILD_TIME"   --build-arg SCHRODRIVE_IMAGE="$IMAGE"   -t "$IMAGE" "$ROOT"
 OVERRIDE="$(mktemp)"
 trap 'rm -f "$OVERRIDE"' EXIT
 cat > "$OVERRIDE" <<EOF

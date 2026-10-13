@@ -32,6 +32,9 @@ RUN bun run build
 FROM oven/bun:latest AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+ARG SCHRODRIVE_BUILD_COMMIT=unknown
+ARG SCHRODRIVE_BUILD_TIME=unknown
+ARG SCHRODRIVE_IMAGE=unknown
 
 # Install system dependencies
 # Note: oven/bun is Debian-based, not Alpine — use apt instead of apk
@@ -51,6 +54,10 @@ COPY --from=web-build /app/web/node_modules ./web/node_modules
 
 # Keep the small, frequently changing backend artifact last.
 COPY --from=build /app/dist ./dist
+
+# Embed immutable build identity in the image. Runtime state is not required
+# to report which source revision produced this image.
+RUN printf '%s\n' "{\"version\":\"0.11.5\",\"commit\":\"$SCHRODRIVE_BUILD_COMMIT\",\"builtAt\":\"$SCHRODRIVE_BUILD_TIME\",\"image\":\"$SCHRODRIVE_IMAGE\",\"runtimeCommit\":\"$SCHRODRIVE_BUILD_COMMIT\",\"frontendCommit\":\"$SCHRODRIVE_BUILD_COMMIT\"}" > /app/BUILD_INFO.json
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /docker-entrypoint.sh
