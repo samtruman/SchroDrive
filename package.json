@@ -1,6 +1,6 @@
 {
   "name": "schrodrive",
-  "version": "0.11.5",
+  "version": "0.12.1",
   "private": true,
   "description": "Unified cloud debrid mount manager — integrates Overseerr, Prowlarr/Jackett, RealDebrid, TorBox, Plex, Jellyfin, and Emby",
   "main": "dist/index.js",
@@ -15,7 +15,7 @@
     "dev": "bun --watch src/index.ts serve",
     "typecheck": "tsc --noEmit",
     "prepare": "git rev-parse --git-dir > /dev/null 2>&1 && git config core.hooksPath .githooks || true",
-    "test": "bun test --path-ignore-patterns=archive/** tests/unit tests/e2e tests/regressions",
+    "test": "bun test tests/unit tests/e2e tests/regressions",
     "test:unit": "bun test tests/unit",
     "test:e2e": "bun test tests/e2e",
     "test:regressions": "bun test tests/regressions",
