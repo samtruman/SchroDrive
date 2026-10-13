@@ -706,7 +706,9 @@ async function preWarmCache() {
     const startTime = Date.now();
     const httpAdapters = adaptersByProvider.get('http');
     if (!httpAdapters || httpAdapters.size === 0) {
-        console.log(`[${new Date().toISOString()}]${LOG_PREFIX} Pre-warm: no HTTP adapters configured, skipping`);
+        _preWarmComplete = true;
+        _preWarmCompletedAt = new Date().toISOString();
+        console.log(`[${new Date().toISOString()}]${LOG_PREFIX} Pre-warm: no HTTP adapters configured, nothing to warm`);
         // Signal readiness even if nothing to warm
         if (bridgeDepth1Resolve) {
             bridgeDepth1Resolve();

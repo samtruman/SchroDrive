@@ -42,6 +42,13 @@ and the running API build identity. Never keep a historical branch, commit or
 image tag here as if it were the current deployment. The image must be built
 after the final commit so its embedded BUILD_INFO.json reports that exact SHA.
 
+The `cloudLinksPreWarm` health field refers only to HTTP cloud-link adapters.
+When no HTTP adapter is configured, the pre-warm phase is considered complete
+immediately because there is no HTTP directory tree to prefetch. AllDebrid's
+WebDAV bridge maintains its torrent-list fallback in persistent application
+data, while file details and short-lived download URLs are rebuilt lazily
+after a restart.
+
 The deploy script uses the host Bun installation even for non-interactive SSH
 sessions. On the current server it is `/home/samtruman/.bun/bin/bun`; an
 explicit `SCHRODRIVE_BUN_BIN` may be supplied when another installation is
