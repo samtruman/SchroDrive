@@ -64,3 +64,28 @@ restore is actually necessary; restore only from the verified consistent copy.
 Residual risks: provider availability/rate limits, cold-start inventory time,
 and the already-retained organizer changes. Real Seerr convergence remains
 unverified until the authorized rollout. No production state was modified.
+
+## Mandatory self-review, round 2
+
+Fresh canonical typecheck, backend build and complete suite pass: 363 tests,
+0 failures, 926 assertions across 55 files. Remote confirms application commit
+9c618aab32d2ff7ad6bd837f203906b7144773a9 on the dedicated issue branch.
+Live image, persistent source entrypoint and mounts remain unchanged; live db.ts
+and organizer.ts hashes match canonical source. Both health endpoints respond.
+
+The external bridge runner has changed since round 1: it now performs SQLite
+online backup with integrity checks and supports removing the stale entrypoint
+and frontend overlay. Those earlier blockers must not be reported as unchanged.
+Remaining release gates are outside the authorized stack repositories:
+
+- Runtime verification checks configured provider names and ARR health counters,
+  not fresh provider inventory or Backrooms/Radarr/Seerr convergence.
+- Symlink verification observes a link but does not resolve it, establish an
+  absolute readable target, or validate configured staging and persisted state.
+- Running image ID/revision is not compared against the approved manifest; mount
+  source paths, access modes and propagation are not checked against the backup.
+- Rollback recreates the old Compose contract but does not verify rollback health.
+
+The image was removed while no approval was pending. Rebuild and compare the
+complete image/backend/frontend after these external runner gates are corrected.
+Do not emit a PROD request or deploy using the present runner.
