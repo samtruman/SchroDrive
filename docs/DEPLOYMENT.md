@@ -120,3 +120,60 @@ index:
 
 The Media Manager must report inventory readiness explicitly. It must not present
 partial file-tree data as a complete policy evaluation.
+
+## Mandatory completion checklist
+
+Every substantive development cycle must complete this checklist before it is
+considered finished.
+
+1. Start from the canonical checkout and confirm the active branch, remote,
+   clean/intentional working tree, and the exact source revision. Do not build
+   or deploy from an ad-hoc worktree without recording its commit.
+2. Keep the runtime source, backend build, frontend build, container image, and
+   deployed build identity aligned. Compare the deployed commit/build identity
+   with the source revision after deployment; a successful image build alone is
+   not sufficient.
+3. Run the relevant Bun tests, the complete applicable unit/regression suite,
+   backend typecheck, backend build, frontend build, and git diff --check.
+   Use the host Bun installation explicitly for non-interactive sessions
+   (SCHRODRIVE_BUN_BIN or /home/samtruman/.bun/bin/bun on the reference host).
+4. Update documentation for every new feature, architectural choice, runtime
+   contract, configuration behavior, or operational workflow. Small isolated
+   bug fixes may use the change description only, but must still record any
+   deployment or rollback implication.
+5. Before deployment, create the timestamped backup. Use the deployment
+   script's check phase first, then its deploy phase. Do not substitute manual
+   container/image operations unless the script is being diagnosed and the
+   deviation is recorded.
+6. After deployment, verify health, API build identity, frontend build identity,
+   relevant routes, mount readiness, organizer/reconciliation progress, and
+   symlink counts/targets. Confirm that persistence and mounted paths survive a
+   restart. Do not declare success while the dashboard is only loading.
+7. After a successful cycle, commit the complete intended change, push the
+   canonical branch, and compare local HEAD, remote HEAD, image identity, and
+   running API identity. Never leave required changes only inside a container
+   layer or an uncommitted checkout.
+
+## Upstream pull-request workflow
+
+Upstream contributions use two separate repositories:
+
+- upstream target: moderniselife/SchroDrive;
+- PR staging fork: samtruman/SchroDrive-upstream-prs.
+
+For an upstream fix:
+
+1. create a focused branch from the current upstream target base;
+2. include only the generic fix, regression tests, and required upstream
+   documentation;
+3. run the validations listed above;
+4. push the branch to samtruman/SchroDrive-upstream-prs;
+5. open the PR against moderniselife/SchroDrive and record its number/URL;
+6. re-check the PR checks and diff after every push;
+7. do not close, reopen, rebase, or force-push an unrelated PR. If an earlier
+   PR is unsafe, leave it closed and supersede it with a focused replacement;
+8. keep deployment-only changes, local paths, provider credentials, production
+   compose files, and CineCircle-specific code out of the upstream branch.
+
+The final handoff must state the source commit, pushed branch, PR number/URL,
+tests, typecheck, builds, deployed identity, and any remaining limitation.
