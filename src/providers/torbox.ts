@@ -198,11 +198,18 @@ export class TorBoxProvider implements DebridProvider {
    *
    * @returns An array of normalised torrent info objects.
    */
-  async listTorrents(): Promise<TorrentInfo[]> {
-    if (apiDisabled) return [];
-    if (!this.isConfigured()) return [];
+  async listTorrents(requireFresh = false): Promise<TorrentInfo[]> {
+    if (apiDisabled) {
+      if (requireFresh) throw new Error('Provider API disabled');
+      return [];
+    }
+    if (!this.isConfigured()) {
+      if (requireFresh) throw new Error('Provider not configured');
+      return [];
+    }
 
     if (rateLimiter.isRateLimited(PROVIDER_NAME)) {
+      if (requireFresh) throw new Error('Provider inventory temporarily rate limited');
       const waitTime = rateLimiter.getWaitTimeSeconds(PROVIDER_NAME);
       const cached = rateLimiter.getCache<any[]>(TORRENT_LIST_CACHE_KEY);
       if (cached) {
@@ -225,6 +232,7 @@ export class TorBoxProvider implements DebridProvider {
       return this.normaliseTorrents(list);
     } catch (err: any) {
       this.handleError(err, 'list torrents');
+      if (requireFresh) throw err;
 
       const cached = rateLimiter.getCache<any[]>(TORRENT_LIST_CACHE_KEY);
       if (cached) {

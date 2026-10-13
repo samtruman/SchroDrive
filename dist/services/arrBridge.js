@@ -20,10 +20,13 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getDownloadsPath = getDownloadsPath;
 exports.createStableSymlink = createStableSymlink;
+exports.pollDebridStatus = pollDebridStatus;
+exports.scanMountsForCompleted = scanMountsForCompleted;
 exports.scanDirRecursive = scanDirRecursive;
 exports.clearTrackedForTests = clearTrackedForTests;
 exports.startArrBridge = startArrBridge;
 exports.stopArrBridge = stopArrBridge;
+const arrBridgeStatus_1 = require("./arrBridgeStatus");
 const express_1 = __importDefault(require("express"));
 const busboy_1 = __importDefault(require("busboy"));
 const promises_1 = __importDefault(require("fs/promises"));
@@ -88,7 +91,7 @@ function loadTrackedTorrents() {
     }
 }
 function stateFingerprint(torrent) {
-    return `${torrent.state}|${torrent.progress}|${torrent.size}|${torrent.completionOn}|${torrent.mountScanned}|${torrent.contentPath}`;
+    return `${torrent.state}|${torrent.progress}|${torrent.size}|${torrent.completionOn}|${torrent.mountScanned}|${torrent.contentPath}|${torrent.name}|${torrent.pollAttempts}`;
 }
 /** Express server instance (last started, for backwards compat). */
 let server = null;
@@ -164,19 +167,20 @@ async function createStableSymlink(sourcePath, symlinkPath) {
  * still downloading. Updates progress and state accordingly.
  */
 async function pollDebridStatus() {
-    const pending = [...tracked.values()].filter((t) => t.state === 'downloading' || t.state === 'stalledDL' || t.state === 'queuedDL');
+    const pending = [...tracked.values()].filter(arrBridgeStatus_1.shouldPollTorrent);
     if (pending.length === 0)
         return;
-    // Fetch torrent lists from all configured providers (cached, cheap)
+    // Request authoritative inventory; outages must not count as missing torrents.
     const providers = providers_1.registry.ordered();
-    const allTorrents = new Map();
+    const allTorrents = [];
+    const listedProviders = new Set();
     for (const p of providers) {
         try {
-            const torrents = await p.listTorrents();
+            const torrents = await p.listTorrents(true);
+            listedProviders.add(p.id);
             for (const t of torrents) {
-                // Try to match by info hash or name
-                const key = t.name?.toUpperCase() || t.id;
-                allTorrents.set(key, {
+                allTorrents.push({
+                    id: String(t.id),
                     provider: p.id,
                     status: t.status,
                     progress: t.progress,
@@ -191,42 +195,46 @@ async function pollDebridStatus() {
     }
     for (const torrent of pending) {
         const before = stateFingerprint(torrent);
-        torrent.pollAttempts++;
+        // A provider outage is not evidence that a submitted torrent is missing.
+        const submissions = torrent.providerResults.filter(r => r.success && r.id);
+        const inventoryComplete = submissions.length
+            ? submissions.every(r => listedProviders.has(r.provider))
+            : listedProviders.size > 0;
         // Try to find this torrent across providers
         let found = false;
-        for (const [, info] of allTorrents) {
-            // Match by name (fuzzy — torrent names might differ slightly)
-            if (info.name && torrent.name &&
-                (info.name.toLowerCase().includes(torrent.name.toLowerCase().slice(0, 30)) ||
-                    torrent.name.toLowerCase().includes(info.name.toLowerCase().slice(0, 30)))) {
-                found = true;
-                torrent.progress = info.progress / 100; // Normalise to 0.0–1.0
-                torrent.size = info.bytes || torrent.size;
-                torrent.name = info.name || torrent.name;
-                // Map debrid status to qBit state
-                const s = info.status.toLowerCase();
-                if (s === 'downloaded' || s === 'seeding' || s === 'finished' ||
-                    s === 'cached' || s === 'completed' || info.progress >= 100) {
-                    torrent.progress = 1.0;
-                    // Don't set to uploading yet — wait for mount scan to find files
-                    if (!torrent.mountScanned) {
-                        torrent.state = 'stalledDL'; // Signal: ready but waiting for mount
-                    }
+        const info = (0, arrBridgeStatus_1.findProviderTorrent)(torrent, allTorrents);
+        if (info) {
+            torrent.pollAttempts = 0;
+            found = true;
+            torrent.progress = info.progress / 100; // Normalise to 0.0–1.0
+            torrent.size = info.bytes || torrent.size;
+            torrent.name = info.name || torrent.name;
+            // Map debrid status to qBit state
+            const s = info.status.toLowerCase();
+            if (s === 'downloaded' || s === 'seeding' || s === 'finished' ||
+                s === 'cached' || s === 'completed' || info.progress >= 100) {
+                torrent.progress = 1.0;
+                // Don't set to uploading yet — wait for mount scan to find files
+                if (!torrent.mountScanned) {
+                    torrent.state = 'stalledDL'; // Signal: ready but waiting for mount
                 }
-                else if (s === 'error' || s === 'dead' || s === 'failed') {
-                    torrent.state = 'error';
-                }
-                else if (s === 'queued' || s === 'waiting') {
-                    torrent.state = 'queuedDL';
-                }
-                else {
-                    torrent.state = 'downloading';
-                }
-                break;
+            }
+            else if (s === 'error' || s === 'dead' || s === 'failed') {
+                torrent.state = 'error';
+            }
+            else if (s === 'queued' || s === 'waiting') {
+                torrent.state = 'queuedDL';
+            }
+            else {
+                torrent.state = 'downloading';
             }
         }
+        if (!found && !inventoryComplete)
+            continue;
+        if (!found)
+            torrent.pollAttempts++;
         // If torrent has been pending for ages with no match, mark as error
-        if (!found && torrent.pollAttempts > 60) { // ~15 minutes
+        if (!found && torrent.pollAttempts > 60 && torrent.state !== 'error') { // ~15 minutes
             console.warn(`${LOG_PREFIX} Torrent "${torrent.name}" not found on any provider after ${torrent.pollAttempts} polls — marking as error`);
             torrent.state = 'error';
         }

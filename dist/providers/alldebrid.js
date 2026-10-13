@@ -228,14 +228,17 @@ class AllDebridProvider {
     // -------------------------------------------------------------------------
     // Torrent Operations
     // -------------------------------------------------------------------------
-    async fetchMagnetStatus() {
+    async fetchMagnetStatus(requireFresh = false) {
         if (this.magnetStatusInFlight)
             return this.magnetStatusInFlight;
         const cached = rateLimiter_1.rateLimiter.getCache(this.torrentListCacheKey());
-        if (cached)
+        if (cached && !requireFresh)
             return cached;
-        if (rateLimiter_1.rateLimiter.isRateLimited(PROVIDER_NAME))
+        if (rateLimiter_1.rateLimiter.isRateLimited(PROVIDER_NAME)) {
+            if (requireFresh)
+                throw new Error('Provider inventory temporarily rate limited');
             return [];
+        }
         this.magnetStatusInFlight = (async () => {
             await rateLimiter_1.rateLimiter.throttle(PROVIDER_NAME);
             const url = buildUrl('/v4.1/magnet/status');
@@ -262,11 +265,16 @@ class AllDebridProvider {
      *
      * @returns An array of normalised torrent info objects.
      */
-    async listTorrents() {
-        if (!this.isConfigured())
+    async listTorrents(requireFresh = false) {
+        if (!this.isConfigured()) {
+            if (requireFresh)
+                throw new Error('Provider not configured');
             return [];
+        }
         // Return cached data if rate-limited
         if (rateLimiter_1.rateLimiter.isRateLimited(PROVIDER_NAME)) {
+            if (requireFresh)
+                throw new Error('Provider inventory temporarily rate limited');
             const waitTime = rateLimiter_1.rateLimiter.getWaitTimeSeconds(PROVIDER_NAME);
             const cached = rateLimiter_1.rateLimiter.getCache(this.torrentListCacheKey());
             if (cached) {
@@ -277,12 +285,14 @@ class AllDebridProvider {
             return [];
         }
         try {
-            const magnets = await this.fetchMagnetStatus();
+            const magnets = await this.fetchMagnetStatus(requireFresh);
             console.log(`[${new Date().toISOString()}][ad] fetched ${magnets.length} magnets`);
             return this.normaliseTorrents(magnets);
         }
         catch (err) {
             this.handleError(err, 'list torrents');
+            if (requireFresh)
+                throw err;
             const cached = rateLimiter_1.rateLimiter.getCache(this.torrentListCacheKey());
             if (cached) {
                 console.log(`[${new Date().toISOString()}][ad] returning cached list on error (${cached.length} items)`);

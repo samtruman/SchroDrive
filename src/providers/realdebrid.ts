@@ -126,11 +126,15 @@ export class RealDebridProvider implements DebridProvider {
    *
    * @returns An array of normalised torrent info objects.
    */
-  async listTorrents(): Promise<TorrentInfo[]> {
-    if (!this.isConfigured()) return [];
+  async listTorrents(requireFresh = false): Promise<TorrentInfo[]> {
+    if (!this.isConfigured()) {
+      if (requireFresh) throw new Error('Provider not configured');
+      return [];
+    }
 
     // Return cached data if rate-limited
     if (rateLimiter.isRateLimited(PROVIDER_NAME)) {
+      if (requireFresh) throw new Error('Provider inventory temporarily rate limited');
       const waitTime = rateLimiter.getWaitTimeSeconds(PROVIDER_NAME);
       const cached = rateLimiter.getCache<any[]>(TORRENT_LIST_CACHE_KEY);
       if (cached) {
@@ -167,6 +171,7 @@ export class RealDebridProvider implements DebridProvider {
       return this.normaliseTorrents(allTorrents);
     } catch (err: any) {
       this.handleError(err, 'list torrents');
+      if (requireFresh) throw err;
 
       const cached = rateLimiter.getCache<any[]>(TORRENT_LIST_CACHE_KEY);
       if (cached) {

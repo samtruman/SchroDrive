@@ -272,12 +272,15 @@ export class AllDebridProvider implements DebridProvider {
   // Torrent Operations
   // -------------------------------------------------------------------------
 
-  private async fetchMagnetStatus(): Promise<any[]> {
+  private async fetchMagnetStatus(requireFresh = false): Promise<any[]> {
     if (this.magnetStatusInFlight) return this.magnetStatusInFlight;
 
     const cached = rateLimiter.getCache<any[]>(this.torrentListCacheKey());
-    if (cached) return cached;
-    if (rateLimiter.isRateLimited(PROVIDER_NAME)) return [];
+    if (cached && !requireFresh) return cached;
+    if (rateLimiter.isRateLimited(PROVIDER_NAME)) {
+      if (requireFresh) throw new Error('Provider inventory temporarily rate limited');
+      return [];
+    }
 
     this.magnetStatusInFlight = (async () => {
       await rateLimiter.throttle(PROVIDER_NAME);
@@ -306,11 +309,15 @@ export class AllDebridProvider implements DebridProvider {
    *
    * @returns An array of normalised torrent info objects.
    */
-  async listTorrents(): Promise<TorrentInfo[]> {
-    if (!this.isConfigured()) return [];
+  async listTorrents(requireFresh = false): Promise<TorrentInfo[]> {
+    if (!this.isConfigured()) {
+      if (requireFresh) throw new Error('Provider not configured');
+      return [];
+    }
 
     // Return cached data if rate-limited
     if (rateLimiter.isRateLimited(PROVIDER_NAME)) {
+      if (requireFresh) throw new Error('Provider inventory temporarily rate limited');
       const waitTime = rateLimiter.getWaitTimeSeconds(PROVIDER_NAME);
       const cached = rateLimiter.getCache<any[]>(this.torrentListCacheKey());
       if (cached) {
@@ -322,11 +329,12 @@ export class AllDebridProvider implements DebridProvider {
     }
 
     try {
-      const magnets = await this.fetchMagnetStatus();
+      const magnets = await this.fetchMagnetStatus(requireFresh);
       console.log(`[${new Date().toISOString()}][ad] fetched ${magnets.length} magnets`);
       return this.normaliseTorrents(magnets);
     } catch (err: any) {
       this.handleError(err, 'list torrents');
+      if (requireFresh) throw err;
 
       const cached = rateLimiter.getCache<any[]>(this.torrentListCacheKey());
       if (cached) {

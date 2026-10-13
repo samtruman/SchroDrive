@@ -173,12 +173,20 @@ class TorBoxProvider {
      *
      * @returns An array of normalised torrent info objects.
      */
-    async listTorrents() {
-        if (apiDisabled)
+    async listTorrents(requireFresh = false) {
+        if (apiDisabled) {
+            if (requireFresh)
+                throw new Error('Provider API disabled');
             return [];
-        if (!this.isConfigured())
+        }
+        if (!this.isConfigured()) {
+            if (requireFresh)
+                throw new Error('Provider not configured');
             return [];
+        }
         if (rateLimiter_1.rateLimiter.isRateLimited(PROVIDER_NAME)) {
+            if (requireFresh)
+                throw new Error('Provider inventory temporarily rate limited');
             const waitTime = rateLimiter_1.rateLimiter.getWaitTimeSeconds(PROVIDER_NAME);
             const cached = rateLimiter_1.rateLimiter.getCache(TORRENT_LIST_CACHE_KEY);
             if (cached) {
@@ -200,6 +208,8 @@ class TorBoxProvider {
         }
         catch (err) {
             this.handleError(err, 'list torrents');
+            if (requireFresh)
+                throw err;
             const cached = rateLimiter_1.rateLimiter.getCache(TORRENT_LIST_CACHE_KEY);
             if (cached) {
                 console.log(`[${new Date().toISOString()}][torbox] returning cached list on error (${cached.length} items)`);
