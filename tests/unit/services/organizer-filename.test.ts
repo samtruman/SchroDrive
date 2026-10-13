@@ -5,6 +5,7 @@ import path from "path";
 import {
   computeTarget,
   makeSymlink,
+  resolveCollisionTarget,
   type Parsed,
 } from "../../../src/services/organizer";
 
@@ -38,6 +39,25 @@ describe("Organizer filenames", () => {
       await makeSymlink(first, destination, false, true);
       await makeSymlink(second, destination, false, true);
       expect(await fs.readlink(destination)).toBe(path.relative(path.dirname(destination), first));
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("recognizes the same source through a mount alias", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "schro-organizer-"));
+    try {
+      const sourceDir = path.join(root, "source");
+      const aliasDir = path.join(root, "alias");
+      const source = path.join(sourceDir, "release.mkv");
+      const aliasedSource = path.join(aliasDir, "release.mkv");
+      const destination = path.join(root, "organized", "Example Film (2024).mkv");
+      await fs.mkdir(sourceDir, { recursive: true });
+      await fs.writeFile(source, "test");
+      await fs.symlink(sourceDir, aliasDir, "dir");
+      await makeSymlink(source, destination, false, true);
+
+      expect(await resolveCollisionTarget(aliasedSource, destination)).toBe(destination);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }
