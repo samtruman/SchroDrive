@@ -53,6 +53,9 @@ let _preWarmCompletedAt: string | null = null;
  * so external tools (e.g. deploy scripts) can gate on cache readiness.
  */
 export function getPreWarmStatus(): { complete: boolean; completedAt: string | null } {
+  if (!config.cloudLinksEnabled) {
+    return { complete: true, completedAt: null };
+  }
   return { complete: _preWarmComplete, completedAt: _preWarmCompletedAt };
 }
 

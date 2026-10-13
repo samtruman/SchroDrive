@@ -53,6 +53,9 @@ let _preWarmCompletedAt = null;
  * so external tools (e.g. deploy scripts) can gate on cache readiness.
  */
 function getPreWarmStatus() {
+    if (!config_1.config.cloudLinksEnabled) {
+        return { complete: true, completedAt: null };
+    }
     return { complete: _preWarmComplete, completedAt: _preWarmCompletedAt };
 }
 /** Cache entry is considered fresh for 5 minutes — served without revalidation (dynamic providers). */
