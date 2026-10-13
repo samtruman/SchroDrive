@@ -46,9 +46,6 @@ describe("configuration loading", () => {
     expect(result.config.JELLYFIN_USER_ID.source).toBe("default");
     expect(result.config.JELLYFIN_USER_ID.provenance).toBe("DEFAULT");
     expect(result.config.JELLYFIN_USER_ID.locked).toBe(false);
-    expect(result.config.ORGANIZER_FILENAME_MODE.value).toBe("canonical");
-    expect(result.config.ORGANIZER_FILENAME_MODE.source).toBe("default");
-    expect(result.config.ORGANIZER_FILENAME_MODE.locked).toBe(false);
     expect(result.config.PROVIDER_RECONCILIATION_ENABLED.value).toBe("false");
     expect(result.config.PROVIDER_RECONCILIATION_RECENT_INTERVAL_MS.value).toBe("900000");
     expect(result.config.PROVIDER_RECONCILIATION_FULL_INTERVAL_MS.value).toBe("21600000");

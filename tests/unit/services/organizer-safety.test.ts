@@ -240,20 +240,15 @@ describe("Organizer safety", () => {
     expect(await lstat(path.join(root, "organized")).catch(() => null)).toBeNull();
   });
 
-  test("honors canonical and original filename modes", async () => {
+  test("uses the original basename while keeping the canonical folder", async () => {
     const root = await fixture();
     const previousBase = config.organizedBase;
-    const previousMode = config.organizerFilenameMode;
     const parsed = { type: "movie" as const, title: "Film", year: 2024, ext: ".mkv" };
     try {
       config.organizedBase = root;
-      config.organizerFilenameMode = "canonical";
-      expect(computeTarget(parsed, "Film.2160p.WEB-DL.mkv")).toEndWith("Film (2024).mkv");
-      config.organizerFilenameMode = "original";
-      expect(computeTarget(parsed, "Film.2160p.WEB-DL.mkv")).toEndWith("Film.2160p.WEB-DL.mkv");
+      expect(computeTarget(parsed, "Film.2160p.WEB-DL.mkv")).toEndWith("Film (2024)/Film.2160p.WEB-DL.mkv");
     } finally {
       config.organizedBase = previousBase;
-      config.organizerFilenameMode = previousMode;
     }
   });
 
@@ -262,27 +257,28 @@ describe("Organizer safety", () => {
     ["two movie releases", { type: "movie", title: "Film", year: 2024, ext: ".mkv" }, "Film.A.mkv", "Film.B.mkv"],
     ["episode 2160p + 1080p", { type: "tv", show: "Show", year: 2024, season: 1, episode: 2, ext: ".mkv" }, "Show.S01E02.2160p.mkv", "Show.S01E02.1080p.mkv"],
     ["two episode releases", { type: "tv", show: "Show", year: 2024, season: 1, episode: 2, ext: ".mkv" }, "Show.S01E02.A.mkv", "Show.S01E02.B.mkv"],
-  ] as const)("preserves %s as separate links", async (_label, parsed, sourceNameA, sourceNameB) => {
+  ] as const)("keeps distinct release names in the same media folder", async (_label, parsed, sourceNameA, sourceNameB) => {
     const root = await fixture();
     const previousBase = config.organizedBase;
-    const previousMode = config.organizerFilenameMode;
+    const previousGroupVersions = config.organizerGroupVersions;
     config.organizedBase = path.join(root, "organized");
-    config.organizerFilenameMode = "canonical";
+    config.organizerGroupVersions = true;
     try {
       const sourceA = path.join(root, sourceNameA);
       const sourceB = path.join(root, sourceNameB);
       await writeFile(sourceA, "a");
       await writeFile(sourceB, "b");
-      const canonical = computeTarget(parsed, sourceNameA, sourceA)!;
-      expect(computeTarget(parsed, sourceNameB, sourceB)).toBe(canonical);
-      await makeSymlink(sourceA, canonical, false, true);
-      const alternate = await resolveCollisionTarget(sourceB, canonical);
-      await makeSymlink(sourceB, alternate, false, true);
-      expect((await lstat(canonical)).isSymbolicLink()).toBe(true);
-      expect((await lstat(alternate)).isSymbolicLink()).toBe(true);
+      const targetA = computeTarget(parsed, sourceNameA, sourceA)!;
+      const targetB = computeTarget(parsed, sourceNameB, sourceB)!;
+      expect(targetA).not.toBe(targetB);
+      expect(path.dirname(targetA)).toBe(path.dirname(targetB));
+      await makeSymlink(sourceA, targetA, false, true);
+      await makeSymlink(sourceB, targetB, false, true);
+      expect((await lstat(targetA)).isSymbolicLink()).toBe(true);
+      expect((await lstat(targetB)).isSymbolicLink()).toBe(true);
     } finally {
       config.organizedBase = previousBase;
-      config.organizerFilenameMode = previousMode;
+      config.organizerGroupVersions = previousGroupVersions;
     }
   });
 

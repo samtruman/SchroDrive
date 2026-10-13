@@ -15,7 +15,6 @@ const persistedJellyfinUrl = getPersistedEnvValue("JELLYFIN_URL");
 const persistedJellyfinApiKey = getPersistedEnvValue("JELLYFIN_API_KEY");
 const persistedJellyfinUserId = getPersistedEnvValue("JELLYFIN_USER_ID");
 const persistedOrganizerGroupVersions = getPersistedEnvValue("ORGANIZER_GROUP_VERSIONS");
-const persistedOrganizerFilenameMode = getPersistedEnvValue("ORGANIZER_FILENAME_MODE");
 const persistedRdAccessToken = getPersistedEnvValue("RD_ACCESS_TOKEN");
 const persistedRdWebdavUrl = getPersistedEnvValue("RD_WEBDAV_URL");
 const persistedRdWebdavUsername = getPersistedEnvValue("RD_WEBDAV_USERNAME");
@@ -228,7 +227,6 @@ export const config = {
   organizedBase: process.env.ORGANIZED_BASE || `${defaultMountBase}/organized`,
   organizerMode: (process.env.ORGANIZER_MODE || "symlink") as "symlink" | "copy" | "move",
   organizerGroupVersions: asBool(resolveRuntimeOrPersistedValue(process.env.ORGANIZER_GROUP_VERSIONS, persistedOrganizerGroupVersions), true),
-  organizerFilenameMode: (resolveRuntimeOrPersistedValue(process.env.ORGANIZER_FILENAME_MODE, persistedOrganizerFilenameMode) || "canonical") as "canonical" | "original",
   runOrganizerWatch: asBool(process.env.RUN_ORGANIZER_WATCH),
   orgScanIntervalSeconds: asNumber(process.env.ORG_SCAN_INTERVAL_S, 300),
   // --- Media Server Integration ---

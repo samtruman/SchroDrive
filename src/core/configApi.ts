@@ -110,7 +110,6 @@ export const CONFIG_SCHEMA = {
   ORGANIZED_BASE: { type: "string", default: "", category: "organizer", label: "Organized Base Path" },
   ORGANIZER_MODE: { type: "select", default: "symlink", options: ["symlink", "copy", "move"], category: "organizer", label: "Organizer Mode" },
   ORGANIZER_GROUP_VERSIONS: { type: "boolean", default: "true", category: "organizer", label: "Group media versions" },
-  ORGANIZER_FILENAME_MODE: { type: "select", default: "canonical", options: ["canonical", "original"], category: "organizer", label: "Organizer Filename Mode" },
   ORG_SCAN_INTERVAL_S: { type: "number", default: "300", category: "organizer", label: "Organizer Scan Interval (seconds)" },
 
   // Optional media-server metadata providers

@@ -613,15 +613,6 @@ async function itunesMovieSearch(title: string, year?: number): Promise<{
  * @param srcFullPath - The full path to the source file (used for torrent dir classification).
  * @returns The absolute target path, or `null` if type is unknown.
  */
-export type OrganizerFilenameMode = "canonical" | "original";
-
-export function selectOrganizerFilename(
-  mode: OrganizerFilenameMode,
-  canonicalFilename: string,
-  sourceFilename: string,
-): string {
-  return mode === "original" ? path.basename(sourceFilename) : canonicalFilename;
-}
 
 /**
  * Returns the provider release directory used when version grouping is off.
@@ -655,15 +646,13 @@ export function computeTarget(
   p: Parsed,
   srcBaseName: string,
   srcFullPath?: string,
-  filenameMode: OrganizerFilenameMode = config.organizerFilenameMode,
 ): string | null {
   const orgBase = config.organizedBase;
   if (p.type === "movie") {
     const title = p.title ? sanitize(p.title) : sanitize(path.parse(srcBaseName).name);
     const folder = p.year ? `${title} (${p.year})` : title;
     const dstDir = organizedVersionFolder(path.join(orgBase, "Movies", folder), srcFullPath, srcBaseName);
-    const dstName = selectOrganizerFilename(filenameMode, `${folder}${p.ext}`, srcBaseName);
-    return path.join(dstDir, dstName);
+    return path.join(dstDir, path.basename(srcBaseName));
   }
   if (p.type === "tv") {
     // Check if the content is anime using the media classifier.
@@ -690,29 +679,26 @@ export function computeTarget(
       if (typeof p.season === "number" && typeof p.episode === "number") {
         const seasonDir = `Season ${pad2(p.season)}`;
         const epStr = `${show} S${pad2(p.season)}E${pad2(p.episode)}`;
-        return path.join(orgBase, "Anime", organizedShowDir, seasonDir, selectOrganizerFilename(filenameMode, `${epStr}${p.ext}`, srcBaseName));
+        return path.join(orgBase, "Anime", organizedShowDir, seasonDir, path.basename(srcBaseName));
       }
       if (typeof p.absolute === "number") {
-        return path.join(orgBase, "Anime", organizedShowDir, selectOrganizerFilename(filenameMode, `${show} - ${pad4(p.absolute)}${p.ext}`, srcBaseName));
+        return path.join(orgBase, "Anime", organizedShowDir, path.basename(srcBaseName));
       }
-      return path.join(orgBase, "Anime", organizedShowDir, selectOrganizerFilename(filenameMode, `${show}${p.ext}`, srcBaseName));
+      return path.join(orgBase, "Anime", organizedShowDir, path.basename(srcBaseName));
     }
 
     if (typeof p.season === "number" && typeof p.episode === "number") {
       const seasonDir = `Season ${pad2(p.season)}`;
       const dstDir = path.join(orgBase, "TV", organizedShowDir, seasonDir);
-      const fileName = selectOrganizerFilename(filenameMode, `${show} S${pad2(p.season)}E${pad2(p.episode)}${p.ext}`, srcBaseName);
-      return path.join(dstDir, fileName);
+      return path.join(dstDir, path.basename(srcBaseName));
     }
     if (typeof p.absolute === "number") {
       const dstDir = path.join(orgBase, "TV", organizedShowDir);
-      const fileName = selectOrganizerFilename(filenameMode, `${show} - ${pad4(p.absolute)}${p.ext}`, srcBaseName);
-      return path.join(dstDir, fileName);
+      return path.join(dstDir, path.basename(srcBaseName));
     }
     // TV with no episode info — place directly in the show directory
     const dstDir = path.join(orgBase, "TV", organizedShowDir);
-    const fileName = selectOrganizerFilename(filenameMode, `${show}${p.ext}`, srcBaseName);
-    return path.join(dstDir, fileName);
+    return path.join(dstDir, path.basename(srcBaseName));
   }
   return null;
 }
