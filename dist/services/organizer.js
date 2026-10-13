@@ -727,6 +727,14 @@ async function organizerSourcesMatch(left, right) {
     const rightAbsolute = path.normalize(path.resolve(right));
     if (leftAbsolute === rightAbsolute)
         return true;
+    // realpath() performs I/O against the target. For provider-backed FUSE
+    // mounts that I/O can block the event loop when the remote is degraded.
+    // Both paths are produced in the same mount namespace, so lexical
+    // comparison is sufficient for mounted sources.
+    const mountBase = path.normalize(path.resolve(config_1.config.mountBase));
+    const isMountedPath = (value) => value === mountBase || value.startsWith(`${mountBase}${path.sep}`);
+    if (isMountedPath(leftAbsolute) || isMountedPath(rightAbsolute))
+        return false;
     const [leftReal, rightReal] = await Promise.all([
         fsp.realpath(leftAbsolute).catch(() => leftAbsolute),
         fsp.realpath(rightAbsolute).catch(() => rightAbsolute),
@@ -735,6 +743,9 @@ async function organizerSourcesMatch(left, right) {
 }
 async function organizerSourceKey(source) {
     const absolute = path.normalize(path.resolve(source));
+    const mountBase = path.normalize(path.resolve(config_1.config.mountBase));
+    if (absolute === mountBase || absolute.startsWith(`${mountBase}${path.sep}`))
+        return absolute;
     return fsp.realpath(absolute).then((resolved) => path.normalize(resolved)).catch(() => absolute);
 }
 /**
