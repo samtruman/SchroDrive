@@ -19,3 +19,4 @@ data/*.db-journal
 *.db
 # Local legacy checkouts are archived for recovery but are not repository content.
 /archive/src-schrodrive-20261014/
+.deploy-backups/
