@@ -42,6 +42,33 @@ and the running API build identity. Never keep a historical branch, commit or
 image tag here as if it were the current deployment. The image must be built
 after the final commit so its embedded BUILD_INFO.json reports that exact SHA.
 
+### Important failure mode: source and `dist` drift
+
+The backend build always regenerates `/app/dist` from `src`. A checkout can
+look newer because its generated `dist` directory contains changes that are
+not present in the TypeScript source. Building that checkout silently removes
+those changes from the image. This previously caused persisted provider
+credentials to disappear from the rebuilt runtime: the container started with
+an empty provider configuration, the mount appeared empty, and the organizer
+treated existing generated symlinks as stale.
+
+Therefore `dist` is never an independent source of truth. Before a build:
+
+1. use the named consolidated checkout, not an ad-hoc worktree or validation
+   directory;
+2. verify that the source contains every behavior expected from the current
+   runtime, especially persisted configuration hydration and mount startup;
+3. require a clean working tree, including generated output and lockfiles;
+4. build backend and frontend from that same commit;
+5. inspect the image before replacement and confirm the compiled artifact
+   contains the persisted-config and mount paths;
+6. only then recreate SchroDrive and verify the provider mount before allowing
+   organizer reconciliation to run.
+
+If the source and generated output disagree, deployment must stop. Do not fix
+the mismatch by copying `dist` files manually; consolidate the missing source
+changes, commit them, and rebuild the complete image.
+
 The `cloudLinksPreWarm` health field refers only to HTTP cloud-link adapters.
 When no HTTP adapter is configured, the pre-warm phase is considered complete
 immediately because there is no HTTP directory tree to prefetch. AllDebrid's
