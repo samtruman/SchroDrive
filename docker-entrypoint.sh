@@ -1,13 +1,7 @@
 #!/bin/sh
 set -e
 
-# Default values
-RUN_WEB_GUI="${RUN_WEB_GUI:-false}"
-WEB_PORT="${WEB_PORT:-3000}"
-BACKEND_URL="${BACKEND_URL:-http://localhost:8978}"
-
 echo "[entrypoint] Starting SchröDrive (Bun runtime)..."
-echo "[entrypoint] RUN_WEB_GUI=${RUN_WEB_GUI}"
 
 # Keep settings written by the UI on the persistent configuration mount. A
 # legacy /app/.env is migrated once, atomically, without overwriting an
@@ -35,6 +29,26 @@ if [ -f "$PERSISTED_ENV_PATH" ]; then
     fi
     ln -sfn "$PERSISTED_ENV_PATH" "$LEGACY_ENV_PATH"
 fi
+
+# The backend loads the complete persisted dotenv file itself. The shell
+# supervisor only needs these three startup values; read them explicitly so
+# the compose file does not have to duplicate the GUI configuration. Do not
+# source the whole file: dotenv values may contain spaces or shell syntax.
+persisted_value() {
+    key="$1"
+    [ -f "$PERSISTED_ENV_PATH" ] || return 0
+    sed -n "s/^${key}=//p" "$PERSISTED_ENV_PATH" | tail -n 1
+}
+
+RUN_WEB_GUI="${RUN_WEB_GUI:-$(persisted_value RUN_WEB_GUI)}"
+WEB_PORT="${WEB_PORT:-$(persisted_value WEB_PORT)}"
+BACKEND_URL="${BACKEND_URL:-$(persisted_value BACKEND_URL)}"
+
+# Default values
+RUN_WEB_GUI="${RUN_WEB_GUI:-false}"
+WEB_PORT="${WEB_PORT:-3000}"
+BACKEND_URL="${BACKEND_URL:-http://localhost:8978}"
+echo "[entrypoint] RUN_WEB_GUI=${RUN_WEB_GUI}"
 
 stop_children() {
     kill "$BACKEND_PID" "$WEB_PID" 2>/dev/null || true
