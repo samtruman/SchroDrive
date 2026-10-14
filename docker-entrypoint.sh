@@ -40,9 +40,14 @@ persisted_value() {
     sed -n "s/^${key}=//p" "$PERSISTED_ENV_PATH" | tail -n 1
 }
 
-RUN_WEB_GUI="${RUN_WEB_GUI:-$(persisted_value RUN_WEB_GUI)}"
-WEB_PORT="${WEB_PORT:-$(persisted_value WEB_PORT)}"
-BACKEND_URL="${BACKEND_URL:-$(persisted_value BACKEND_URL)}"
+# Persisted GUI configuration is authoritative. The Docker image may carry
+# safe defaults, but those defaults must not mask values saved in /config.
+persisted_run_web_gui="$(persisted_value RUN_WEB_GUI)"
+persisted_web_port="$(persisted_value WEB_PORT)"
+persisted_backend_url="$(persisted_value BACKEND_URL)"
+[ -n "$persisted_run_web_gui" ] && RUN_WEB_GUI="$persisted_run_web_gui"
+[ -n "$persisted_web_port" ] && WEB_PORT="$persisted_web_port"
+[ -n "$persisted_backend_url" ] && BACKEND_URL="$persisted_backend_url"
 
 # Default values
 RUN_WEB_GUI="${RUN_WEB_GUI:-false}"
