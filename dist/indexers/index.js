@@ -36,6 +36,42 @@ const torrentio_1 = require("./torrentio");
 const comet_1 = require("./comet");
 const zilean_1 = require("./zilean");
 const mediafusion_1 = require("./mediafusion");
+const tmdbService_1 = require("../services/tmdbService");
+async function resolveScraperImdbId(query, opts) {
+    if (opts?.imdbId && !opts.tmdbId)
+        return opts.imdbId;
+    const kind = opts?.mediaType === "series" ? "tv" : "movie";
+    const metadata = opts?.tmdbId
+        ? await (0, tmdbService_1.getTmdbExternalIds)(opts.tmdbId, kind)
+        : (await (0, tmdbService_1.searchTmdb)(opts?.title?.trim() || query.trim(), kind, opts?.year)).metadata;
+    if (!metadata?.imdbId) {
+        console.warn(`[${new Date().toISOString()}][scrapers] skipped Stremio scrapers — TMDB identity has no IMDb id`, {
+            tmdbId: opts?.tmdbId,
+            query,
+            mediaType: opts?.mediaType || "movie",
+            title: opts?.title,
+            year: opts?.year,
+        });
+        return undefined;
+    }
+    if (opts?.imdbId && opts.imdbId !== metadata.imdbId) {
+        console.warn(`[${new Date().toISOString()}][scrapers] skipped Stremio scrapers — IMDb does not match TMDB identity`, {
+            tmdbId: opts?.tmdbId,
+            suppliedImdbId: opts.imdbId,
+            resolvedImdbId: metadata.imdbId,
+        });
+        return undefined;
+    }
+    if (opts?.year && metadata.year && opts.year !== metadata.year) {
+        console.warn(`[${new Date().toISOString()}][scrapers] skipped Stremio scrapers — year does not match TMDB identity`, {
+            tmdbId: opts?.tmdbId,
+            requestedYear: opts.year,
+            resolvedYear: metadata.year,
+        });
+        return undefined;
+    }
+    return metadata.imdbId;
+}
 let cachedProvider = null;
 function isJackettConfigured() {
     return !!(config_1.config.jackettUrl && config_1.config.jackettApiKey);
@@ -150,7 +186,7 @@ function isAnyScraperConfigured() {
  */
 async function searchScrapers(query, opts) {
     const promises = [];
-    const imdbId = opts?.imdbId;
+    const imdbId = await resolveScraperImdbId(query, opts);
     const mediaType = opts?.mediaType || "movie";
     const season = opts?.season;
     const episode = opts?.episode;

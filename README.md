@@ -976,6 +976,13 @@ provider capability and live-validation status.
 
 ### 🔎 Stremio Addon Scrapers
 
+When a scraper request includes a TMDB identity, SchröDrive resolves the
+corresponding IMDb id through the configured `TMDB_API_KEY` before querying
+Torrentio, Comet, or Mediafusion. If the identity cannot be resolved, or a
+supplied IMDb id conflicts with TMDB, those scrapers are skipped rather than
+reusing an id from another request. This keeps scraper results tied to the
+requested film or series; Zilean remains the text-search fallback.
+
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `SCRAPER_MODE` | `merge` | `merge` (combine with indexer) or `fallback` (scrapers when indexer returns 0) |

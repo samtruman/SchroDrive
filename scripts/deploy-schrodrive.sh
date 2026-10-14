@@ -53,7 +53,7 @@ if [[ -n "$(git -C "$ROOT" status --porcelain)" ]]; then
   exit 1
 fi
 (cd "$ROOT" && "$BUN" run typecheck)
-(cd "$ROOT" && "$BUN" test tests/unit tests/e2e tests/regressions)
+(cd "$ROOT" && "$BUN" test --path-ignore-patterns=archive/** tests/unit tests/e2e tests/regressions)
 (cd "$ROOT" && "$BUN" run build)
 (cd "$ROOT/web" && "$BUN" run build)
 

@@ -3,11 +3,59 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.getTmdbExternalIds = getTmdbExternalIds;
 exports.searchTmdbCandidates = searchTmdbCandidates;
 exports.searchTmdb = searchTmdb;
 const axios_1 = __importDefault(require("axios"));
 const config_1 = require("../core/config");
 const mediaParser_1 = require("./mediaParser");
+/**
+ * Resolve a known TMDb identity to its external identifiers.
+ *
+ * This is deliberately separate from title search: callers that already have
+ * a TMDb id must not guess an IMDb id from a free-text query (or accidentally
+ * reuse an IMDb id belonging to a previous request).
+ */
+async function getTmdbExternalIds(tmdbId, kind, options = {}) {
+    if (!config_1.config.tmdbApiKey)
+        return undefined;
+    const id = String(tmdbId).trim();
+    if (!id)
+        return undefined;
+    try {
+        const [external, details] = await Promise.all([
+            requestWithRetry(() => axios_1.default.get(`https://api.themoviedb.org/3/${kind}/${id}/external_ids`, {
+                params: { api_key: config_1.config.tmdbApiKey },
+                timeout: options.timeoutMs ?? 10000,
+            }), options),
+            requestWithRetry(() => axios_1.default.get(`https://api.themoviedb.org/3/${kind}/${id}`, {
+                params: { api_key: config_1.config.tmdbApiKey },
+                timeout: options.timeoutMs ?? 10000,
+            }), options),
+        ]);
+        const data = details.data || {};
+        const releaseDate = kind === "movie" ? data.release_date : data.first_air_date;
+        return {
+            tmdbId: id,
+            imdbId: external.data?.imdb_id || undefined,
+            tvdbId: external.data?.tvdb_id ? String(external.data.tvdb_id) : undefined,
+            title: String(kind === "movie"
+                ? data.title || data.original_title || ""
+                : data.name || data.original_name || ""),
+            year: Number(String(releaseDate || "").slice(0, 4)) || undefined,
+            kind,
+            originalLanguage: data.original_language || undefined,
+        };
+    }
+    catch (error) {
+        console.warn(`[${new Date().toISOString()}][tmdb] external-id lookup failed`, {
+            tmdbId: id,
+            kind,
+            error: error?.message || String(error),
+        });
+        return undefined;
+    }
+}
 async function requestWithRetry(request, options = {}) {
     const timeoutMs = Math.max(250, options.timeoutMs ?? 10000);
     const retries = Math.max(0, options.retries ?? 0);
@@ -80,11 +128,18 @@ async function searchTmdb(title, kind, year, options = {}) {
             year: Number(String(kind === "movie" ? item.release_date : item.first_air_date || "").slice(0, 4)) || undefined,
         }));
         const selection = (0, mediaParser_1.selectMediaCandidate)({ title, year, kind: kind === "movie" ? "movie" : "episode" }, candidates);
-        if (selection.status === "ambiguous")
+        // TMDb search also matches localized titles. When it returns one
+        // year-compatible result, the localized query is stronger evidence than
+        // comparing the filename title with TMDb's English display title.
+        const uniqueYearMatch = candidates.length === 1
+            && (!year || candidates[0].year === year)
+            && candidates[0].kind === (kind === "movie" ? "movie" : "show");
+        const selectedCandidate = selection.candidate || (uniqueYearMatch ? candidates[0] : undefined);
+        if (selection.status === "ambiguous" && !uniqueYearMatch)
             return { status: "ambiguous", reason: "TMDb candidates are too close" };
-        if (selection.status !== "matched" || !selection.candidate)
+        if (!selectedCandidate)
             return { status: "not_matched", reason: "TMDb returned no reliable candidate" };
-        const hit = results.find((item) => String(item.id) === String(selection.candidate?.id));
+        const hit = results.find((item) => String(item.id) === String(selectedCandidate.id));
         if (!hit)
             return { status: "not_matched", reason: "TMDb candidate disappeared before enrichment" };
         const [external, details] = await Promise.all([

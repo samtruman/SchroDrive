@@ -40,6 +40,66 @@ export interface TmdbRequestOptions {
   backoffMs?: number;
 }
 
+/**
+ * Resolve a known TMDb identity to its external identifiers.
+ *
+ * This is deliberately separate from title search: callers that already have
+ * a TMDb id must not guess an IMDb id from a free-text query (or accidentally
+ * reuse an IMDb id belonging to a previous request).
+ */
+export async function getTmdbExternalIds(
+  tmdbId: string,
+  kind: TmdbSearchKind,
+  options: TmdbRequestOptions = {},
+): Promise<TmdbMetadata | undefined> {
+  if (!config.tmdbApiKey) return undefined;
+
+  const id = String(tmdbId).trim();
+  if (!id) return undefined;
+
+  try {
+    const [external, details] = await Promise.all([
+      requestWithRetry(
+        () => axios.get(`https://api.themoviedb.org/3/${kind}/${id}/external_ids`, {
+          params: { api_key: config.tmdbApiKey },
+          timeout: options.timeoutMs ?? 10000,
+        }),
+        options,
+      ),
+      requestWithRetry(
+        () => axios.get(`https://api.themoviedb.org/3/${kind}/${id}`, {
+          params: { api_key: config.tmdbApiKey },
+          timeout: options.timeoutMs ?? 10000,
+        }),
+        options,
+      ),
+    ]);
+
+    const data = details.data || {};
+    const releaseDate = kind === "movie" ? data.release_date : data.first_air_date;
+    return {
+      tmdbId: id,
+      imdbId: external.data?.imdb_id || undefined,
+      tvdbId: external.data?.tvdb_id ? String(external.data.tvdb_id) : undefined,
+      title: String(
+        kind === "movie"
+          ? data.title || data.original_title || ""
+          : data.name || data.original_name || "",
+      ),
+      year: Number(String(releaseDate || "").slice(0, 4)) || undefined,
+      kind,
+      originalLanguage: data.original_language || undefined,
+    };
+  } catch (error: any) {
+    console.warn(`[${new Date().toISOString()}][tmdb] external-id lookup failed`, {
+      tmdbId: id,
+      kind,
+      error: error?.message || String(error),
+    });
+    return undefined;
+  }
+}
+
 async function requestWithRetry<T>(request: () => Promise<T>, options: TmdbRequestOptions = {}): Promise<T> {
   const timeoutMs = Math.max(250, options.timeoutMs ?? 10000);
   const retries = Math.max(0, options.retries ?? 0);

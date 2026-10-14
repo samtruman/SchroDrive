@@ -34,6 +34,7 @@ import { searchComet, isCometConfigured } from "./comet";
 import { searchZilean, isZileanConfigured } from "./zilean";
 import { searchMediafusion, isMediafusionConfigured } from "./mediafusion";
 import type { ScraperResult } from "./stremioScraper";
+import { getTmdbExternalIds, searchTmdb } from "../services/tmdbService";
 
 export type IndexerResult = ProwlarrResult | JackettResult;
 
@@ -50,12 +51,57 @@ export interface SearchOptions {
   limit?: number;
   /** IMDB ID for scraper searches (e.g. 'tt1234567'). */
   imdbId?: string;
+  /** TMDB id used to resolve and validate the IMDb id when needed. */
+  tmdbId?: string;
+  /** Original request title, retained for logging and future identity checks. */
+  title?: string;
+  /** Original request year, retained for logging and future identity checks. */
+  year?: number;
   /** Media type for scraper searches. */
   mediaType?: "movie" | "series";
   /** Season number for series scraper searches. */
   season?: number;
   /** Episode number for series scraper searches. */
   episode?: number;
+}
+
+async function resolveScraperImdbId(query: string, opts?: SearchOptions): Promise<string | undefined> {
+  if (opts?.imdbId && !opts.tmdbId) return opts.imdbId;
+
+  const kind = opts?.mediaType === "series" ? "tv" : "movie";
+  const metadata = opts?.tmdbId
+    ? await getTmdbExternalIds(opts.tmdbId, kind)
+    : (await searchTmdb(opts?.title?.trim() || query.trim(), kind, opts?.year)).metadata;
+  if (!metadata?.imdbId) {
+    console.warn(`[${new Date().toISOString()}][scrapers] skipped Stremio scrapers — TMDB identity has no IMDb id`, {
+      tmdbId: opts?.tmdbId,
+      query,
+      mediaType: opts?.mediaType || "movie",
+      title: opts?.title,
+      year: opts?.year,
+    });
+    return undefined;
+  }
+
+  if (opts?.imdbId && opts.imdbId !== metadata.imdbId) {
+    console.warn(`[${new Date().toISOString()}][scrapers] skipped Stremio scrapers — IMDb does not match TMDB identity`, {
+      tmdbId: opts?.tmdbId,
+      suppliedImdbId: opts.imdbId,
+      resolvedImdbId: metadata.imdbId,
+    });
+    return undefined;
+  }
+
+  if (opts?.year && metadata.year && opts.year !== metadata.year) {
+    console.warn(`[${new Date().toISOString()}][scrapers] skipped Stremio scrapers — year does not match TMDB identity`, {
+      tmdbId: opts?.tmdbId,
+      requestedYear: opts.year,
+      resolvedYear: metadata.year,
+    });
+    return undefined;
+  }
+
+  return metadata.imdbId;
 }
 
 let cachedProvider: IndexerProvider | null = null;
@@ -198,7 +244,7 @@ export function isAnyScraperConfigured(): boolean {
  */
 export async function searchScrapers(query: string, opts?: SearchOptions): Promise<ScraperResult[]> {
   const promises: Promise<ScraperResult[]>[] = [];
-  const imdbId = opts?.imdbId;
+  const imdbId = await resolveScraperImdbId(query, opts);
   const mediaType = opts?.mediaType || "movie";
   const season = opts?.season;
   const episode = opts?.episode;
