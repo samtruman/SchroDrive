@@ -17,3 +17,5 @@ data/*.db-journal
 *.db-journal
 # Also ignore any local schrodrive/tokens DBs at repo root (tests use tmpDir)
 *.db
+# Local legacy checkouts are archived for recovery but are not repository content.
+/archive/src-schrodrive-20261014/
