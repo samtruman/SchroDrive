@@ -95,6 +95,39 @@ describe("version manager", () => {
     expect(deriveAcquisitionNeeds(groups, [quality], { acquisitionEnabled: false })).toHaveLength(0);
   });
 
+  test("never lets an eligible 1080p fallback outrank an eligible 2160p target", () => {
+    const target = fingerprintTorrent(torrent("Example.Movie.2025.2160p.WEB-DL.ITA.ENG.HEVC.mkv", 8_000_000_000), "alldebrid")[0];
+    const fallback = fingerprintTorrent(torrent("Example.Movie.2025.1080p.WEB-DL.ITA.ENG.HEVC.mkv", 2_000_000_000), "alldebrid")[0];
+    target.fingerprint.identity = { ...target.fingerprint.identity, tmdbId: "123", resolutionStatus: "resolved", confidence: 1 };
+    fallback.fingerprint.identity = { ...fallback.fingerprint.identity, tmdbId: "123", resolutionStatus: "resolved", confidence: 1 };
+    target.fingerprint.storage.infoHash = "target-hash";
+    fallback.fingerprint.storage.infoHash = "fallback-hash";
+    target.fingerprint.storage.recoverability = { status: "RECOVERABLE", source: "INFOHASH", infoHash: "target-hash" };
+    fallback.fingerprint.storage.recoverability = { status: "RECOVERABLE", source: "INFOHASH", infoHash: "fallback-hash" };
+    // Give the fallback additional subtitle metadata so its secondary score
+    // is higher; resolution must still remain the primary decision.
+    fallback.fingerprint.subtitles = [{ language: "ita" }, { language: "eng" }];
+
+    const [group] = evaluateVersionGroups([target, fallback], [profile()]);
+    expect(group.versions.find((version) => version.id === target.id)?.decision).toBe("KEEP");
+    expect(group.versions.find((version) => version.id === fallback.id)?.decision).toBe("DELETE_CANDIDATE");
+  });
+
+  test("does not penalize an otherwise valid same-resolution release for an unknown source", () => {
+    const unknownSource = fingerprintTorrent(torrent("Example.Movie.2025.2160p.ITA.ENG.HEVC-MIRCrew.mkv", 8_000_000_000), "alldebrid")[0];
+    const knownSource = fingerprintTorrent(torrent("Example.Movie.2025.2160p.WEBRip.ITA.ENG.HEVC.mkv", 4_000_000_000), "alldebrid")[0];
+    unknownSource.fingerprint.identity = { ...unknownSource.fingerprint.identity, tmdbId: "123", resolutionStatus: "resolved", confidence: 1 };
+    knownSource.fingerprint.identity = { ...knownSource.fingerprint.identity, tmdbId: "123", resolutionStatus: "resolved", confidence: 1 };
+    unknownSource.fingerprint.storage.infoHash = "unknown-source-hash";
+    knownSource.fingerprint.storage.infoHash = "known-source-hash";
+    unknownSource.fingerprint.storage.recoverability = { status: "RECOVERABLE", source: "INFOHASH", infoHash: "unknown-source-hash" };
+    knownSource.fingerprint.storage.recoverability = { status: "RECOVERABLE", source: "INFOHASH", infoHash: "known-source-hash" };
+
+    const [group] = evaluateVersionGroups([unknownSource, knownSource], [profile({ sizePreference: "LARGER", minimumSizeDifferencePercent: 10 })]);
+    expect(group.versions.find((version) => version.id === unknownSource.id)?.decision).toBe("KEEP");
+    expect(group.versions.find((version) => version.id === knownSource.id)?.decision).toBe("DELETE_CANDIDATE");
+  });
+
   test("uses a single media file inside an extensionless provider item", () => {
     const item = torrent("Movie.Release", 10_000);
     item.files = [{ id: "movie", name: "Movie.Release.2025.2160p.WEB-DL.mkv", path: "Movie.Release/Movie.Release.2025.2160p.WEB-DL.mkv", size: 10_000, selected: true }];

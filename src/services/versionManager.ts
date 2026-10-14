@@ -561,13 +561,30 @@ function evaluateProfile(version: VersionRecord, profile: VersionProfile): Profi
 }
 
 function compareForProfile(left: VersionEvaluation, right: VersionEvaluation, profile: VersionProfile): number {
+  // QUALITY profiles have a hard target resolution. A valid fallback may be
+  // compared only when no version at the target resolution is eligible; a
+  // richer language/subtitle score must never make 1080p beat an eligible
+  // 2160p version.
+  if (profile.target === "QUALITY" && profile.preferredResolution) {
+    const target = profile.preferredResolution.toLowerCase();
+    const leftIsTarget = left.fingerprint.video.resolution?.toLowerCase() === target;
+    const rightIsTarget = right.fingerprint.video.resolution?.toLowerCase() === target;
+    if (leftIsTarget !== rightIsTarget) return rightIsTarget ? 1 : -1;
+  }
+  // An absent source marker is missing metadata, not evidence of a worse
+  // release. Ignore the source component for both sides when either source
+  // is unknown so the configured size tie-breaker can decide safely.
+  const sourceComparable = Boolean(left.fingerprint.release?.source && right.fingerprint.release?.source);
   const comparisonScore = (version: VersionEvaluation): number => {
     const evaluation = version.evaluations.find((candidate) => candidate.profileId === profile.id);
     if (!evaluation) return 0;
     // Ineligible versions intentionally have no final score. For fallback
     // retention, compare the already computed policy breakdown so a better
     // 1080p version can be selected while the target remains missing.
-    return evaluation.score ?? Object.values(evaluation.breakdown).reduce((sum, value) => sum + value, 0);
+    if (evaluation.score !== undefined && sourceComparable) return evaluation.score;
+    return Object.entries(evaluation.breakdown)
+      .filter(([criterion]) => sourceComparable || criterion !== "source")
+      .reduce((sum, [, value]) => sum + value, 0);
   };
   const leftScore = comparisonScore(left);
   const rightScore = comparisonScore(right);
