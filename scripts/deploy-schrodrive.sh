@@ -16,6 +16,7 @@ COMPOSE_FILE="${SCHRODRIVE_COMPOSE_FILE:-$ROOT/docker-compose.yml}"
 BACKUP_ROOT="${SCHRODRIVE_BACKUP_ROOT:-$ROOT/.deploy-backups}"
 API_PORT="${SCHRODRIVE_API_PORT:-8978}"
 WEB_PORT="${SCHRODRIVE_WEB_PORT:-3000}"
+REQUIRED_PROVIDER="${SCHRODRIVE_REQUIRED_PROVIDER:-alldebrid}"
 CURL_CONNECT_TIMEOUT="${SCHRODRIVE_CURL_CONNECT_TIMEOUT:-2}"
 CURL_MAX_TIME="${SCHRODRIVE_CURL_MAX_TIME:-8}"
 STARTUP_ATTEMPTS="${SCHRODRIVE_STARTUP_ATTEMPTS:-30}"
@@ -139,6 +140,56 @@ except Exception as exc:
     raise SystemExit(f"audit-cleanup API did not return JSON: {exc}")
 if payload.get("ok") is not True or not isinstance(payload.get("audit"), dict):
     raise SystemExit("audit-cleanup API returned an invalid payload")
+PY
+
+# A healthy container is not enough: verify the effective runtime provider and
+# mount. This catches Compose/runtime drift that leaves a stale FUSE endpoint.
+runtime_mounts="$(docker inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' schrodrive 2>/dev/null || true)"
+if grep -qE '^/(config/validation-runtime|app/(dist|web)(/|$))' <<<"$runtime_mounts"; then
+  echo "runtime contains a forbidden source/build override:" >&2
+  echo "$runtime_mounts" >&2
+  exit 1
+fi
+
+status_payload="$(curl -fsS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" "http://127.0.0.1:$API_PORT/api/status")"
+python3 - "$status_payload" "$FULL_SHA" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+expected = sys.argv[2]
+build = payload.get("build") or {}
+if any(build.get(key) != expected for key in ("commit", "runtimeCommit", "frontendCommit")):
+    raise SystemExit(f"runtime build identity mismatch: expected {expected}, got {build}")
+if (payload.get("services") or {}).get("mount") is not True:
+    raise SystemExit("runtime mount service is not active")
+PY
+
+provider_path="/$REQUIRED_PROVIDER"
+encoded_provider_path="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote(sys.argv[1]))' "$provider_path")"
+provider_payload="$(curl -fsS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" \
+  "http://127.0.0.1:$API_PORT/api/files?path=$encoded_provider_path")"
+python3 - "$provider_payload" "$REQUIRED_PROVIDER" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+provider = sys.argv[2]
+if payload.get("ok") is not True or payload.get("type") != "directory":
+    raise SystemExit(f"provider mount is not browseable: {provider}: {payload}")
+PY
+
+frontend_build="$(curl -fsS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" \
+  "http://127.0.0.1:$WEB_PORT/api/build")"
+python3 - "$frontend_build" "$FULL_SHA" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+expected = sys.argv[2]
+for key in ("commit", "runtimeCommit", "frontendCommit"):
+    if payload.get(key) != expected:
+        raise SystemExit(f"frontend build identity mismatch for {key}: expected {expected}, got {payload}")
 PY
 
 if ! curl -fsS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" \

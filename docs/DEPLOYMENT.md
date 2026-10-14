@@ -34,6 +34,13 @@ The script fails closed if a required path or command is missing and refuses a
 dirty checkout or a compose file containing application-source/build mounts.
 It does not deploy other stack services. Environment variables can override
 the compose, backup, API-port, and web-port settings for other deployments.
+The default post-deploy provider check targets `alldebrid`; set
+`SCHRODRIVE_REQUIRED_PROVIDER` when a deployment intentionally uses another
+provider. The post-deploy gate verifies the effective runtime, not only the
+Compose declaration: backend/runtime/frontend build identities must match the
+source commit, the mount service must be active, and the provider directory
+must be browseable through `/api/files`. A deployment is failed if any of
+these checks fails.
 
 ## Source, build and runtime identity
 

@@ -118,9 +118,16 @@ export async function searchTmdb(title: string, kind: TmdbSearchKind, year?: num
       year: Number(String(kind === "movie" ? item.release_date : item.first_air_date || "").slice(0, 4)) || undefined,
     }));
     const selection = selectMediaCandidate({ title, year, kind: kind === "movie" ? "movie" : "episode" }, candidates);
-    if (selection.status === "ambiguous") return { status: "ambiguous", reason: "TMDb candidates are too close" };
-    if (selection.status !== "matched" || !selection.candidate) return { status: "not_matched", reason: "TMDb returned no reliable candidate" };
-    const hit = results.find((item: any) => String(item.id) === String(selection.candidate?.id));
+    // TMDb search also matches localized titles. When it returns one
+    // year-compatible result, the localized query is stronger evidence than
+    // comparing the filename title with TMDb's English display title.
+    const uniqueYearMatch = candidates.length === 1
+      && (!year || candidates[0].year === year)
+      && candidates[0].kind === (kind === "movie" ? "movie" : "show");
+    const selectedCandidate = selection.candidate || (uniqueYearMatch ? candidates[0] : undefined);
+    if (selection.status === "ambiguous" && !uniqueYearMatch) return { status: "ambiguous", reason: "TMDb candidates are too close" };
+    if (!selectedCandidate) return { status: "not_matched", reason: "TMDb returned no reliable candidate" };
+    const hit = results.find((item: any) => String(item.id) === String(selectedCandidate.id));
     if (!hit) return { status: "not_matched", reason: "TMDb candidate disappeared before enrichment" };
     const [external, details] = await Promise.all([
       requestWithRetry(() => axios.get(`https://api.themoviedb.org/3/${kind === "movie" ? "movie" : "tv"}/${hit.id}/external_ids`, { params: { api_key: config.tmdbApiKey }, timeout: options.timeoutMs ?? 10000 }), options),
