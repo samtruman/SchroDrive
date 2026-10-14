@@ -13,6 +13,8 @@ export async function GET() {
       {
         version: process.env.SCHRODRIVE_VERSION || "0.11.5",
         commit: process.env.SCHRODRIVE_BUILD_COMMIT || "unknown",
+        runtimeCommit: process.env.SCHRODRIVE_RUNTIME_COMMIT || process.env.SCHRODRIVE_BUILD_COMMIT || "unknown",
+        frontendCommit: process.env.SCHRODRIVE_FRONTEND_COMMIT || process.env.SCHRODRIVE_BUILD_COMMIT || "unknown",
       },
       { headers: { "Cache-Control": "no-store" } },
     )

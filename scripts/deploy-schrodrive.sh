@@ -125,13 +125,26 @@ elif [[ "$status_check" -ne 0 ]]; then
   echo "deployed build identity check failed; backup: $BACKUP" >&2
   exit 1
 fi
-if ! probe "http://127.0.0.1:$API_PORT/api/organizer/audit-cleanup"; then
-  echo "warning: audit-cleanup API is still busy; container and build checks passed" >&2
+audit_api="http://127.0.0.1:$API_PORT/api/organizer/audit-cleanup"
+if ! audit_payload="$(curl -fsS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" "$audit_api")"; then
+  echo "audit-cleanup API check failed: $audit_api" >&2
+  exit 1
 fi
+python3 - "$audit_payload" <<'PY'
+import json
+import sys
+try:
+    payload = json.loads(sys.argv[1])
+except Exception as exc:
+    raise SystemExit(f"audit-cleanup API did not return JSON: {exc}")
+if payload.get("ok") is not True or not isinstance(payload.get("audit"), dict):
+    raise SystemExit("audit-cleanup API returned an invalid payload")
+PY
 
 if ! curl -fsS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" \
   "http://127.0.0.1:$WEB_PORT/media-manager/audit-cleanup" | grep -q "Audit Cleanup"; then
-  echo "warning: audit-cleanup GUI route is still busy; container and build checks passed" >&2
+  echo "audit-cleanup GUI route check failed" >&2
+  exit 1
 fi
 
 echo "Deploy passed."

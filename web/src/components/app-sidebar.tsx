@@ -64,7 +64,12 @@ const navigation = [
 
 export function AppSidebar() {
   const pathname = usePathname()
-  const [build, setBuild] = useState<{ commit?: string; version?: string } | null>(null)
+  const [build, setBuild] = useState<{
+    commit?: string
+    version?: string
+    runtimeCommit?: string
+    frontendCommit?: string
+  } | null>(null)
 
   useEffect(() => {
     fetch("/api/build", { cache: "no-store" })
@@ -106,7 +111,8 @@ export function AppSidebar() {
       </SidebarContent>
       <SidebarFooter>
         <div className="px-3 pb-2 text-[11px] text-muted-foreground">
-          Build {build?.commit && build.commit !== "unknown" ? build.commit.slice(0, 7) : build?.version || "unknown"}
+          <div>Frontend {build?.frontendCommit && build.frontendCommit !== "unknown" ? build.frontendCommit.slice(0, 7) : "unknown"}</div>
+          <div>Backend {build?.runtimeCommit && build.runtimeCommit !== "unknown" ? build.runtimeCommit.slice(0, 7) : build?.commit && build.commit !== "unknown" ? build.commit.slice(0, 7) : build?.version || "unknown"}</div>
         </div>
         <div className="rounded-lg border bg-muted/50 p-3 mx-2 mb-2">
           <div className="flex items-center gap-2">
