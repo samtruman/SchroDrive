@@ -57,8 +57,18 @@ export function auditOrganizedLibrary() {
     }
     for (const link of walkLinks(root)) {
       scannedLinks++;
+      // Do not resolve provider-backed symlinks with realpathSync here. The
+      // organized tree can point into a degraded WebDAV/FUSE mount, where
+      // resolving the target performs remote I/O and can block the request.
+      // Normalize the link target lexically instead; audit is read-only and
+      // duplicate detection must remain available even when the provider is
+      // temporarily unavailable.
       let target: string;
-      try { target = fs.realpathSync.native(link); } catch { target = fs.readlinkSync(link); }
+      try {
+        target = path.normalize(path.resolve(path.dirname(link), fs.readlinkSync(link)));
+      } catch {
+        target = link;
+      }
       const links = sourceLinks.get(target) || [];
       links.push(link);
       sourceLinks.set(target, links);
