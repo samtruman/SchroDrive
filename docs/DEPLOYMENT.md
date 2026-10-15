@@ -37,6 +37,7 @@ Raspberry Pi builds and incomplete runtime mounts.
 
 Do not use a `validation-runtime` source override, a validation entrypoint, or
 an ad-hoc overlay image as a production runtime. Validation tooling may build a
+The production container must be recreated through /home/samtruman/docker/cinecircle/compose-active.yml, not the repository standalone compose file. The active stack attaches SchroDrive, Radarr, and Sonarr to the external cinecircle_default network.
 temporary image or inspect a container, but it must be removed or disabled
 before the release image is deployed.
 
