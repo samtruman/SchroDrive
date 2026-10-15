@@ -351,6 +351,15 @@ function evaluateProfile(version, profile) {
     breakdown.source = Math.max(0, 20 - rank(version.fingerprint.release.source, profile.sourceOrder) * 4);
     breakdown.codec = Math.max(0, 15 - rank(version.fingerprint.video.codec, profile.codecOrder) * 3);
     breakdown.audio = Math.max(0, 15 - rank(version.fingerprint.audio[0]?.codec, profile.audioOrder) * 3) + (version.fingerprint.audio[0]?.atmos ? 3 : 0);
+    // Preserve video-master quality when comparing eligible releases. Dolby
+    // Vision/HDR must not lose to a small audio-only bonus such as Atmos.
+    breakdown.video = version.fingerprint.video.dolbyVision
+        ? 8
+        : version.fingerprint.video.hdr10Plus
+            ? 6
+            : version.fingerprint.video.hdr10 || /hdr/i.test(version.fingerprint.video.hdrFormat || "")
+                ? 4
+                : 0;
     breakdown.language = preferredLanguageScore(version, profile.languagePolicy);
     if (profile.target === "DIRECT_PLAY") {
         breakdown.bandwidth = version.fingerprint.storage.size > 0 ? Math.max(0, 20 - Math.log10(version.fingerprint.storage.size / 1000000000 + 1) * 8) : 0;
