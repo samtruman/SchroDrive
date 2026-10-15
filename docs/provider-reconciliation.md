@@ -17,6 +17,21 @@ provider listTorrents/fetchDirectories
   -> Radarr, Sonarr, Plex and Jellyfin see the same provider-backed file
 ```
 
+## Shared TMDb library paths
+
+The Organizer and the Arr reconciliation bridge use the same canonical path
+builder. After the release identity is resolved through TMDb, both consumers
+use the same title/year folder (`Movies/<TMDb title> (year)` or
+`TV/<TMDb title> (year)/Season NN`) and preserve the original release filename
+inside that folder. The TMDb title is a display/path convention; the TMDb ID
+remains the stable identity used for matching and future reconciliation.
+
+This prevents a localized Arr title such as `Wolfs - Lupi Solitari (2024)`
+from becoming a second library folder beside the Organizer's
+`Wolfs (2024)`. Existing folders are not renamed by the reconciliation worker;
+the migration of already-created legacy links must be run as a separate,
+backed-up maintenance operation.
+
 When both Radarr and Sonarr are configured with a URL and API key, the worker
 starts automatically. `PROVIDER_RECONCILIATION_ENABLED=true` can still be used
 to force it on, while an explicit `false` disables automatic activation.

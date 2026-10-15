@@ -28,6 +28,7 @@ import { getOrganizerReview, recordOrganizerReview, type ReviewDecision, type Re
 import { searchTmdb } from "./tmdbService";
 import { refreshJellyfinLibrary } from "../integrations/jellyfin";
 import { refreshPlexLibrary } from "../integrations/plex";
+import { canonicalLibraryPath } from "./canonicalLibraryPath";
 
 // ===========================================================================
 // Types & Constants
@@ -650,9 +651,11 @@ export function computeTarget(
   const orgBase = config.organizedBase;
   if (p.type === "movie") {
     const title = p.title ? sanitize(p.title) : sanitize(path.parse(srcBaseName).name);
-    const folder = p.year ? `${title} (${p.year})` : title;
-    const dstDir = organizedVersionFolder(path.join(orgBase, "Movies", folder), srcFullPath, srcBaseName);
-    return path.join(dstDir, path.basename(srcBaseName));
+    const canonical = canonicalLibraryPath(orgBase, {
+      category: "Movies", title, year: p.year, sourceFilename: srcBaseName,
+    });
+    const dstDir = organizedVersionFolder(path.dirname(canonical), srcFullPath, srcBaseName);
+    return path.join(dstDir, path.basename(canonical));
   }
   if (p.type === "tv") {
     // Check if the content is anime using the media classifier.
