@@ -37,6 +37,24 @@ from the current upstream 'develop' and contain only the isolated generic fix.
 Historical candidate details below are retained for review; they do not change
 the current status above.
 
+### Current PR update - 2026-10-15
+
+| PR | Scope | Branch | Status | Validation |
+|---:|---|---|---|---|
+| #138 | Shared TMDb path resolution for Organizer and Radarr/Sonarr reconciliation | `pr/tmdb-arr-path-reconciliation` | OPEN against `develop` | 15 targeted Bun tests passed; `git diff --check` passed |
+
+PR #138 is a generic SchroDrive fix, not a CineCircle-only deployment patch.
+It centralizes the Movies/TV path builder, resolves provider-backed Arr paths
+through TMDb metadata, and matches existing Arr entities by TMDb ID before the
+title fallback. It intentionally does not rename existing legacy folders or
+change Radarr/Sonarr source code; legacy-folder migration remains a separate,
+backed-up operation.
+
+Contribution branches in the PR fork use the `pr/` prefix consistently. The
+historical PR records may still display their original `fix/` head name because
+GitHub preserves merged PR metadata, but the corresponding remote branches
+were renamed to `pr/`.
+
 Internal tracking document for generic SchröDrive fixes that may be proposed
 as small, independently reviewable upstream changes. This document is not a
 PR and contains no credentials or provider secrets.

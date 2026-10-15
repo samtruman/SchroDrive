@@ -338,6 +338,28 @@ The provider reconciliation worker is separate from the Version Manager
 snapshot. It detects recent provider additions/changes and can route completed
 media to Radarr or Sonarr according to the configured movie/TV mapping.
 
+#### Shared library path contract
+
+The Organizer and the Radarr/Sonarr reconciliation bridge share one canonical
+path builder. After TMDb resolves the media identity, both flows use the same
+folder convention:
+
+```text
+Movies/<TMDb title> (<year>)/<original release filename>
+TV/<TMDb title> (<year>)/Season <NN>/<original release filename>
+```
+
+The TMDb ID is the stable identity used for matching; the TMDb title is the
+human-readable folder convention. This prevents localized Arr display titles
+from producing a second folder for the same media, such as `Wolfs - Lupi
+Solitari (2024)` beside `Wolfs (2024)`. Radarr and Sonarr source code is not
+modified: the reconciliation bridge resolves their existing entity by TMDb ID
+and submits the scan against the shared canonical path.
+
+Existing legacy folders are not renamed automatically by the worker. Any
+legacy-path migration must be a separate, backed-up maintenance operation so
+that symlink targets and Arr library state can be verified before cleanup.
+
 ### 6. Identity resolution
 
 Identity resolution is conservative. Strong canonical IDs and explicit manual
