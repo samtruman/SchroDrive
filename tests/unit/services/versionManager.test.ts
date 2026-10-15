@@ -345,6 +345,21 @@ describe("version manager", () => {
     expect(versions.find((version) => version.decision === "KEEP")?.id).toBe(large.id);
   });
 
+  test("keeps Dolby Vision over an Atmos-only bonus when the competing source is unknown", () => {
+    const cyber = fingerprintTorrent(torrent("Operazione.Vendetta.2025.iTA-ENG.Bluray.2160p.HEVC.HDR.x265-CYBER.mkv", 6_500_000_000), "alldebrid")[0];
+    const mircrew = fingerprintTorrent(torrent("The Amateur - Operazione Vendetta (2025) 2160p H265 HDR10 iTA EnG DDP.AC3 Sub iTA EnG-MIRCrew.mkv", 4_000_000_000), "alldebrid")[0];
+    for (const version of [cyber, mircrew]) version.fingerprint.identity = { ...version.fingerprint.identity, tmdbId: "1087891", resolutionStatus: "resolved", confidence: 1, title: "The Amateur", normalizedTitle: "theamateur", kind: "movie", year: 2025 };
+    cyber.fingerprint.video.dolbyVision = true;
+    cyber.fingerprint.audio[0].codec = "EAC3";
+    cyber.fingerprint.audio[0].atmos = false;
+    mircrew.fingerprint.video.dolbyVision = false;
+    mircrew.fingerprint.audio[0].codec = "EAC3";
+    mircrew.fingerprint.audio[0].atmos = true;
+    mircrew.fingerprint.release.source = undefined;
+    const versions = evaluateVersionGroups([cyber, mircrew], [profile()])[0].versions;
+    expect(versions.find((version) => version.decision === "KEEP")?.id).toBe(cyber.id);
+  });
+
   test("applies release-group preference consistently across a season", () => {
     const names = [
       ["S01E01", "Alpha", 20_000_000_000],
