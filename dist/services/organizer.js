@@ -72,6 +72,8 @@ const organizerReview_1 = require("./organizerReview");
 const tmdbService_1 = require("./tmdbService");
 const jellyfin_1 = require("../integrations/jellyfin");
 const plex_1 = require("../integrations/plex");
+const canonicalLibraryPath_1 = require("./canonicalLibraryPath");
+const arrLibraryReconciliation_1 = require("./arrLibraryReconciliation");
 // ===========================================================================
 // Types & Constants
 // ===========================================================================
@@ -604,9 +606,11 @@ function computeTarget(p, srcBaseName, srcFullPath) {
     const orgBase = config_1.config.organizedBase;
     if (p.type === "movie") {
         const title = p.title ? sanitize(p.title) : sanitize(path.parse(srcBaseName).name);
-        const folder = p.year ? `${title} (${p.year})` : title;
-        const dstDir = organizedVersionFolder(path.join(orgBase, "Movies", folder), srcFullPath, srcBaseName);
-        return path.join(dstDir, path.basename(srcBaseName));
+        const canonical = (0, canonicalLibraryPath_1.canonicalLibraryPath)(orgBase, {
+            category: "Movies", title, year: p.year, sourceFilename: srcBaseName,
+        });
+        const dstDir = organizedVersionFolder(path.dirname(canonical), srcFullPath, srcBaseName);
+        return path.join(dstDir, path.basename(canonical));
     }
     if (p.type === "tv") {
         // Check if the content is anime using the media classifier.
@@ -1162,6 +1166,27 @@ async function organizeOnce(opts) {
             console.log(`[${new Date().toISOString()}][organize] reconciled obsolete content`, {
                 removedSymlinks: removedLinks,
                 removedEmptyDirs: removedDirs,
+            });
+        }
+    }
+    // Arr integration is an optional second phase. The Organizer remains fully
+    // standalone, but when Radarr/Sonarr are configured, reconcile both the
+    // initial library bootstrap and later AllDebrid manifest additions against
+    // their authoritative library paths before refreshing media servers.
+    if (!dryRun) {
+        try {
+            const arrReconciliation = await (0, arrLibraryReconciliation_1.reconcileOrganizedLibraryWithArr)();
+            if (arrReconciliation.scanned > 0) {
+                console.log(`[${new Date().toISOString()}][organize] Arr path reconciliation`, arrReconciliation);
+            }
+            if (arrReconciliation.moved > 0)
+                changed = true;
+        }
+        catch (err) {
+            // Arr is optional: a temporary outage must not block standalone
+            // organization or cause source/provider links to be removed.
+            console.warn(`[${new Date().toISOString()}][organize] Arr path reconciliation deferred`, {
+                err: err?.message || String(err),
             });
         }
     }

@@ -19,6 +19,8 @@ const node_path_1 = __importDefault(require("node:path"));
 const db_1 = require("../core/db");
 const mediaClassifier_1 = require("../core/mediaClassifier");
 const mediaParser_1 = require("./mediaParser");
+const tmdbService_1 = require("./tmdbService");
+const canonicalLibraryPath_1 = require("./canonicalLibraryPath");
 class InMemoryIntakeStateStore {
     constructor() {
         this.items = new Map();
@@ -139,17 +141,34 @@ async function findArrEntityId(route, event) {
     const parsed = (0, mediaParser_1.parseMediaFilename)(filename, event.path);
     const title = normalizedTitle(parsed.title || event.path.split('/').filter(Boolean).slice(-2, -1)[0] || '');
     const endpoint = route.kind === 'radarr' ? 'movie' : 'series';
+    const kind = route.kind === 'radarr' ? 'movie' : 'tv';
+    const canonical = parsed.title ? await resolveCanonicalMetadata(parsed.title, kind, parsed.year) : undefined;
     const response = await fetch(`${route.baseUrl.replace(/\/$/, '')}/api/v3/${endpoint}`, {
         headers: { 'X-Api-Key': route.apiKey },
     });
     if (!response.ok)
         throw new Error(`Arr ${endpoint} lookup failed: HTTP ${response.status}`);
     const records = await response.json();
-    const match = records.find((record) => record.id && normalizedTitle(record.title || '') === title);
+    const matchByTmdb = canonical?.tmdbId
+        ? records.find((record) => record.id && String(record.tmdbId || '') === canonical.tmdbId)
+        : undefined;
+    const match = matchByTmdb || records.find((record) => record.id && normalizedTitle(record.title || '') === title);
     return match?.id;
 }
 function safeSegment(value) {
     return value.replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim() || 'Unknown';
+}
+const canonicalMetadataCache = new Map();
+async function resolveCanonicalMetadata(title, kind, year) {
+    const key = `${kind}:${title.toLocaleLowerCase()}:${year || ''}`;
+    if (canonicalMetadataCache.has(key))
+        return canonicalMetadataCache.get(key) || undefined;
+    const result = await (0, tmdbService_1.searchTmdb)(title, kind, year, { retries: 1, timeoutMs: 5000 });
+    const metadata = result.status === 'matched' && result.metadata
+        ? { tmdbId: result.metadata.tmdbId, title: result.metadata.title, year: result.metadata.year }
+        : null;
+    canonicalMetadataCache.set(key, metadata);
+    return metadata || undefined;
 }
 /**
  * Creates the Arr-facing library entry without copying provider data. The
@@ -160,11 +179,33 @@ async function exposeAsSymlink(route, event, providerPath) {
     const filename = node_path_1.default.basename(event.path);
     const parsed = (0, mediaParser_1.parseMediaFilename)(filename, event.path);
     const pathParts = event.path.split('/').filter(Boolean);
-    const title = safeSegment(parsed.title || pathParts[pathParts.length - 2] || node_path_1.default.parse(filename).name);
-    const directory = event.sourceCategory === 'Shows'
-        ? node_path_1.default.join(library, title, `Season ${parsed.season ?? 1}`)
-        : node_path_1.default.join(library, parsed.year ? `${title} (${parsed.year})` : title);
-    const destination = node_path_1.default.join(directory, filename);
+    const fallbackTitle = safeSegment(parsed.title || pathParts[pathParts.length - 2] || node_path_1.default.parse(filename).name);
+    const kind = event.sourceCategory === 'Shows' ? 'tv' : 'movie';
+    let title = fallbackTitle;
+    let year = parsed.year;
+    if (parsed.title) {
+        const metadata = await resolveCanonicalMetadata(parsed.title, kind, parsed.year);
+        if (metadata) {
+            title = metadata.title;
+            year = metadata.year ?? year;
+        }
+    }
+    // Arr deployments commonly configure the category directory itself
+    // (`.../Movies` or `.../TV`), while the Organizer receives the general
+    // organized root. Normalize both forms before using the shared resolver.
+    const configuredCategory = node_path_1.default.basename(node_path_1.default.normalize(library)).toLowerCase();
+    const organizedRoot = configuredCategory === 'movies' || configuredCategory === 'tv'
+        ? node_path_1.default.dirname(library)
+        : library;
+    const destination = (0, canonicalLibraryPath_1.canonicalLibraryPath)(organizedRoot, {
+        category: event.sourceCategory === 'Shows' ? 'TV' : 'Movies',
+        title,
+        year,
+        season: parsed.season,
+        episode: parsed.episode,
+        sourceFilename: filename,
+    });
+    const directory = node_path_1.default.dirname(destination);
     await node_fs_1.promises.mkdir(directory, { recursive: true });
     const existing = await node_fs_1.promises.lstat(destination).catch(() => undefined);
     if (existing?.isSymbolicLink()) {

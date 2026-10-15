@@ -16,6 +16,20 @@ The runtime root must point to the equivalent existing directory on another
 host; never replace it with an old user path or a named volume during a
 production recreation.
 
+## Canonical operational checkout
+
+For the SAM server deployment, the canonical operational checkout is always:
+
+    /home/samtruman/projects/schrodrive
+
+All source edits, generated `dist` output, validation, commits, image builds,
+and container deployments must be performed from that checkout over SSH on
+`samserver` (`x86_64`). A checkout in an agent workstation, temporary
+worktree, Raspberry Pi, or validation directory is not a deployment source.
+After every release, compare the checkout commit, generated `dist`, image
+build identity, and running API/frontend identities before considering the
+deployment complete.
+
 The deployment script also refuses to build on another hostname or on a
 non-`x86_64` host, and refuses to continue if the runtime `config`, `data`,
 `mount`, or `downloads` directory is missing. This prevents accidental
