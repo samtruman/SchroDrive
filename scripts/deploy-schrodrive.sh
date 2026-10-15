@@ -76,7 +76,11 @@ services:
     image: $IMAGE
 EOF
 
-docker compose -f "$COMPOSE_FILE" -f "$OVERRIDE" up -d --force-recreate schrodrive
+# The compose file declares other stack services as dependencies.  The
+# release pipeline owns only SchroDrive; recreating or creating Prowlarr,
+# Seerr, and the other integrations here can conflict with their independently
+# managed containers.  Keep the replacement scoped to this service.
+docker compose -f "$COMPOSE_FILE" -f "$OVERRIDE" up -d --no-deps --force-recreate schrodrive
 
 probe() {
   curl -fsS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" "$1" >/dev/null
