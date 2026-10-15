@@ -62,7 +62,7 @@ function candidateFor(link: string, organizedBase: string): Candidate | undefine
     source,
     currentLink: link,
     category: "series",
-    title: parsed.show || parts[1]?.replace(/\s*\(\d{4}\)$/, ""),
+    title: parsed.title || parts[1]?.replace(/\s*\(\d{4}\)$/, ""),
     year: parsed.year,
     season: parsed.season ?? (Number((parts.find((part) => /^Season\s+\d+$/i.test(part)) || "").replace(/\D/g, "")) || undefined),
   };
