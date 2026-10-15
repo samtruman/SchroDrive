@@ -4,10 +4,13 @@ SchröDrive's provider reconciliation layer is provider-agnostic. It consumes
 the existing `DebridProvider` contract and never calls provider delete, repair,
 or dead-scanner operations.
 
-The historical library import is a one-time operation performed through the
-Radarr/Sonarr library import flow. This worker handles the ongoing case where
-a new completed file is added directly to a provider after that library is
-already configured.
+The organizer performs an Arr path-reconciliation phase after every provider
+organization pass. This covers the initial AllDebrid library bootstrap and
+later AllDebrid manifest additions without requiring a manual migration. When
+Radarr/Sonarr are available, existing SchroDrive symlinks are moved to the
+authoritative Arr `path`, and the affected movie/series is rescanned. When Arr
+is unavailable or not configured, the standalone SchroDrive canonical path is
+kept and reconciliation is retried on a later pass.
 
 ```text
 provider listTorrents/fetchDirectories
@@ -17,20 +20,20 @@ provider listTorrents/fetchDirectories
   -> Radarr, Sonarr, Plex and Jellyfin see the same provider-backed file
 ```
 
-## Shared TMDb library paths
+## Shared TMDb identity and Arr library paths
 
-The Organizer and the Arr reconciliation bridge use the same canonical path
-builder. After the release identity is resolved through TMDb, both consumers
-use the same title/year folder (`Movies/<TMDb title> (year)` or
-`TV/<TMDb title> (year)/Season NN`) and preserve the original release filename
-inside that folder. The TMDb title is a display/path convention; the TMDb ID
-remains the stable identity used for matching and future reconciliation.
+The Organizer uses a canonical TMDb-derived path as its standalone fallback
+(`Movies/<TMDb title> (year)` or `TV/<TMDb title> (year)/Season NN`) and
+preserves the original release filename. When an Arr record is found by TMDb
+ID, its existing library `path` is authoritative instead; SchroDrive creates
+the symlink there and asks the relevant Arr service to rescan it. The TMDb ID
+remains the stable identity, while the folder name remains an Arr-owned
+presentation detail when Arr integration is enabled.
 
 This prevents a localized Arr title such as `Wolfs - Lupi Solitari (2024)`
 from becoming a second library folder beside the Organizer's
-`Wolfs (2024)`. Existing folders are not renamed by the reconciliation worker;
-the migration of already-created legacy links must be run as a separate,
-backed-up maintenance operation.
+`Wolfs (2024)`. Existing links are reconciled automatically and only the
+symlink is moved; provider-backed media is never copied or deleted.
 
 When both Radarr and Sonarr are configured with a URL and API key, the worker
 starts automatically. `PROVIDER_RECONCILIATION_ENABLED=true` can still be used

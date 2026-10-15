@@ -29,6 +29,7 @@ import { searchTmdb } from "./tmdbService";
 import { refreshJellyfinLibrary } from "../integrations/jellyfin";
 import { refreshPlexLibrary } from "../integrations/plex";
 import { canonicalLibraryPath } from "./canonicalLibraryPath";
+import { reconcileOrganizedLibraryWithArr } from "./arrLibraryReconciliation";
 
 // ===========================================================================
 // Types & Constants
@@ -1214,6 +1215,26 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
       console.log(`[${new Date().toISOString()}][organize] reconciled obsolete content`, {
         removedSymlinks: removedLinks,
         removedEmptyDirs: removedDirs,
+      });
+    }
+  }
+
+  // Arr integration is an optional second phase. The Organizer remains fully
+  // standalone, but when Radarr/Sonarr are configured, reconcile both the
+  // initial library bootstrap and later AllDebrid manifest additions against
+  // their authoritative library paths before refreshing media servers.
+  if (!dryRun) {
+    try {
+      const arrReconciliation = await reconcileOrganizedLibraryWithArr();
+      if (arrReconciliation.scanned > 0) {
+        console.log(`[${new Date().toISOString()}][organize] Arr path reconciliation`, arrReconciliation);
+      }
+      if (arrReconciliation.moved > 0) changed = true;
+    } catch (err) {
+      // Arr is optional: a temporary outage must not block standalone
+      // organization or cause source/provider links to be removed.
+      console.warn(`[${new Date().toISOString()}][organize] Arr path reconciliation deferred`, {
+        err: (err as Error)?.message || String(err),
       });
     }
   }
