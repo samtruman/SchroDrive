@@ -22,6 +22,7 @@ exports.getDownloadsPath = getDownloadsPath;
 exports.createStableSymlink = createStableSymlink;
 exports.pollDebridStatus = pollDebridStatus;
 exports.scanMountsForCompleted = scanMountsForCompleted;
+exports.findBestMountMatch = findBestMountMatch;
 exports.scanDirRecursive = scanDirRecursive;
 exports.clearTrackedForTests = clearTrackedForTests;
 exports.startArrBridge = startArrBridge;
@@ -267,33 +268,10 @@ async function scanMountsForCompleted() {
                 const searchDirs = [allDir, providerRoot];
                 for (const searchDir of searchDirs) {
                     try {
-                        const entries = await promises_1.default.readdir(searchDir);
-                        // Look for a directory matching the torrent name
-                        for (const entry of entries) {
-                            const entryLower = entry.toLowerCase();
-                            const nameLower = torrent.name.toLowerCase();
-                            // Fuzzy match: entry contains significant portion of torrent name or vice versa
-                            if (entryLower.includes(nameLower.slice(0, 20)) ||
-                                nameLower.includes(entryLower.slice(0, 20)) ||
-                                entryLower.replace(/[.\-_]/g, ' ') === nameLower.replace(/[.\-_]/g, ' ')) {
-                                const fullPath = path_1.default.join(searchDir, entry);
-                                const stat = await promises_1.default.stat(fullPath);
-                                if (stat.isDirectory()) {
-                                    // Scan files inside the torrent directory
-                                    const files = await scanDirRecursive(fullPath);
-                                    if (files.length > 0) {
-                                        foundPath = fullPath;
-                                        foundFiles = files;
-                                        break;
-                                    }
-                                }
-                                else if (stat.isFile() && isVideoFile(entry)) {
-                                    // Single file torrent
-                                    foundPath = searchDir;
-                                    foundFiles = [{ name: entry, size: stat.size, path: fullPath }];
-                                    break;
-                                }
-                            }
+                        const match = await findBestMountMatch(searchDir, torrent.name);
+                        if (match) {
+                            foundPath = match.path;
+                            foundFiles = match.files;
                         }
                         if (foundPath)
                             break;
@@ -335,6 +313,41 @@ async function scanMountsForCompleted() {
             console.error(`${LOG_PREFIX} Mount scan error for "${torrent.name}": ${err?.message}`);
         }
     }
+}
+function normaliseMountName(value) {
+    return value
+        .replace(/\.[^.]+$/, '')
+        .toLowerCase()
+        .replace(/[._-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+/** Resolve a completed torrent to its best mount entry. */
+async function findBestMountMatch(searchDir, torrentName) {
+    const entries = await promises_1.default.readdir(searchDir, { withFileTypes: true });
+    const target = normaliseMountName(torrentName);
+    const targetPrefix = target.slice(0, 20);
+    const directories = [];
+    const files = [];
+    for (const entry of entries) {
+        const fullPath = path_1.default.join(searchDir, entry.name);
+        const candidate = normaliseMountName(entry.name);
+        const exact = candidate === target;
+        const prefix = candidate.startsWith(targetPrefix) || target.startsWith(candidate.slice(0, 20));
+        if (!exact && !prefix && !candidate.includes(target) && !target.includes(candidate))
+            continue;
+        if (entry.isDirectory()) {
+            const discovered = await scanDirRecursive(fullPath);
+            if (!discovered.length)
+                continue;
+            directories.push({ path: fullPath, files: discovered, score: (exact ? 100000 : 1000) + discovered.length });
+        }
+        else if (entry.isFile() && isVideoFile(entry.name)) {
+            const stat = await promises_1.default.stat(fullPath);
+            files.push({ path: searchDir, files: [{ name: entry.name, size: stat.size, path: fullPath }], score: exact ? 100 : 1 });
+        }
+    }
+    return [...directories, ...files].sort((a, b) => b.score - a.score)[0] || null;
 }
 /** Recursively scans a directory for video files. */
 async function scanDirRecursive(dir, rootDir = dir) {
