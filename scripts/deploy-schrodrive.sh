@@ -76,6 +76,23 @@ services:
     image: $IMAGE
 EOF
 
+# The production container may have been created by the historical CineCircle
+# compose project rather than by this checkout.  Compose cannot replace a
+# same-named container owned by another project, so fail-safe replacement must
+# be explicit and limited to this exact service container.  Do not touch any
+# dependency containers or volumes.
+if docker inspect schrodrive >/dev/null 2>&1; then
+  existing_image="$(docker inspect --format '{{.Config.Image}}' schrodrive)"
+  existing_service="$(docker inspect --format '{{index .Config.Labels \"com.docker.compose.service\"}}' schrodrive 2>/dev/null || true)"
+  if [[ "$existing_service" == "schrodrive" || "$existing_image" == schrodrive:* || "$existing_image" == ghcr.io/moderniselife/schrodrive:* ]]; then
+    echo "Replacing existing SchroDrive container: image=$existing_image"
+    docker rm -f schrodrive >/dev/null
+  else
+    echo "refusing to replace unrelated container named schrodrive: image=$existing_image service=$existing_service" >&2
+    exit 1
+  fi
+fi
+
 # The compose file declares other stack services as dependencies.  The
 # release pipeline owns only SchroDrive; recreating or creating Prowlarr,
 # Seerr, and the other integrations here can conflict with their independently
