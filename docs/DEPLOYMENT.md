@@ -313,3 +313,14 @@ and compare local HEAD, remote HEAD, image label, running image ID, and API
 build identity. A release is not complete while required code exists only in a
 container layer, validation directory, uncommitted worktree, or host-mounted
 build directory.
+
+
+## Integration test target
+
+The SchroDrive container listens on port `8978` internally. In the active CineCircle stack on the SAM server, Docker publishes that port as host port `8970`. Run the live integration suite against the published host port:
+
+```bash
+SCHRODRIVE_URL=http://127.0.0.1:8970 bun run test:integration
+```
+
+The test keeps `SCHRODRIVE_URL` overrideable for standalone deployments. Do not assume `localhost:8978` unless the local Docker mapping explicitly publishes that port. The search check also accepts the documented 503 response when no native SchroDrive indexer is configured; this is expected when searches are delegated to Prowlarr/Arr.

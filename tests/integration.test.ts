@@ -6,10 +6,10 @@
  * test framework dependencies required.
  *
  * Usage:
- *   SCHRODRIVE_URL=http://localhost:8978 bun tests/integration.test.ts
+ *   SCHRODRIVE_URL=http://127.0.0.1:8970 bun tests/integration.test.ts
  *
  * Environment variables:
- *   SCHRODRIVE_URL  – Base URL of the SchroDrive instance (default: http://localhost:8978)
+ *   SCHRODRIVE_URL  – Base URL of the SchroDrive instance (default: http://127.0.0.1:8970)
  *   TEST_TIMEOUT    – Per-test timeout in milliseconds (default: 10000)
  */
 
@@ -29,7 +29,7 @@ interface TestResult {
 // Configuration
 // ---------------------------------------------------------------------------
 
-const BASE_URL = (process.env.SCHRODRIVE_URL ?? "http://localhost:8978").replace(
+const BASE_URL = (process.env.SCHRODRIVE_URL ?? "http://127.0.0.1:8970").replace(
   /\/$/,
   ""
 );
@@ -243,7 +243,19 @@ const tests: Array<{ name: string; fn: () => Promise<string | void>; timeoutMs?:
   {
     name: "Search endpoint",
     fn: async () => {
-      const { body } = await fetchJson("/api/search?q=test");
+      const { status, body } = await fetchJson("/api/search?q=test");
+      // Indexer configuration is optional in SchroDrive itself: production may
+      // route searches through an external Prowlarr/Arr integration instead.
+      if (
+        status === 503 &&
+        body.ok === false &&
+        typeof body.error === "string" &&
+        body.error.includes("No indexer configured")
+      ) {
+        assertType(body.results, "array", "results");
+        return;
+      }
+      assert(status >= 200 && status < 300, `Unexpected search status: ${status}`);
       assert(body.ok === true, "Expected ok: true");
       assertType(body.results, "array", "results");
     },
