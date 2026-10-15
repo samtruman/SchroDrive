@@ -9,6 +9,13 @@ limited to persistent data and integration paths such as configuration,
 database, provider mounts, and download/staging directories. A container
 recreate therefore runs exactly the code that was built into the image.
 
+The canonical `docker-compose.yml` uses `SCHRODRIVE_RUNTIME_ROOT` for the
+four persistent host paths: `config`, `data`, `mount`, and `downloads`. On
+`samserver` its value is `/home/samtruman/docker/cinecircle/schrodrive`.
+The runtime root must point to the equivalent existing directory on another
+host; never replace it with an old user path or a named volume during a
+production recreation.
+
 Do not use a `validation-runtime` source override, a validation entrypoint, or
 an ad-hoc overlay image as a production runtime. Validation tooling may build a
 temporary image or inspect a container, but it must be removed or disabled

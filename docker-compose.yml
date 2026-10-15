@@ -15,14 +15,24 @@ services:
     # FUSE mount — propagate to host so Plex/Jellyfin/Emby can see the files
     volumes:
       - type: bind
-        source: /home/joseph/schrodrive
+        source: ${SCHRODRIVE_RUNTIME_ROOT:-/home/samtruman/docker/cinecircle/schrodrive}/mount
         target: /mnt/schrodrive
         bind:
           propagation: rshared
       # Persistent data directory (SQLite DB, blacklist, rate limit store)
-      - schrodrive_data:/data
+      - type: bind
+        source: ${SCHRODRIVE_RUNTIME_ROOT:-/home/samtruman/docker/cinecircle/schrodrive}/data
+        target: /data
       # Config directory (cloud_links.json, etc.)
-      - /config:/config:rw
+      - type: bind
+        source: ${SCHRODRIVE_RUNTIME_ROOT:-/home/samtruman/docker/cinecircle/schrodrive}/config
+        target: /config
+        read_only: false
+      # Arr staging/download path used by the bridge and reconciliation layer.
+      - type: bind
+        source: ${SCHRODRIVE_RUNTIME_ROOT:-/home/samtruman/docker/cinecircle/schrodrive}/downloads
+        target: ${SCHRODRIVE_RUNTIME_ROOT:-/home/samtruman/docker/cinecircle/schrodrive}/downloads
+        read_only: false
     devices:
       - /dev/fuse:/dev/fuse:rwm
     cap_add:
@@ -31,10 +41,10 @@ services:
       - apparmor:unconfined
       - no-new-privileges
     environment:
-      - TZ=Australia/Sydney
+      - TZ=${TZ:-Europe/Rome}
       
       # ===== Active Providers =====
-      - PROVIDERS=torbox,realdebrid
+      - PROVIDERS=${PROVIDERS:-alldebrid}
       
       # ===== TorBox Config =====
       - TORBOX_API_KEY=${TORBOX_API_KEY}
@@ -62,6 +72,7 @@ services:
       # ===== FUSE Mount Settings =====
       - RUN_MOUNT=${RUN_MOUNT:-true}
       - MOUNT_BASE=/mnt/schrodrive
+      - ARR_DOWNLOADS_PATH=${SCHRODRIVE_RUNTIME_ROOT:-/home/samtruman/docker/cinecircle/schrodrive}/downloads
       - RCLONE_PATH=/usr/bin/rclone
       - MOUNT_VFS_CACHE_MODE=${MOUNT_VFS_CACHE_MODE:-minimal}
       - MOUNT_DIR_CACHE_TIME=${MOUNT_DIR_CACHE_TIME:-10s}
@@ -83,10 +94,10 @@ services:
       - OVERSEERR_URL=${OVERSEERR_URL}
       - POLL_INTERVAL_S=${POLL_INTERVAL_S:-30}
       - RUN_WEBHOOK=${RUN_WEBHOOK:-false}
-      - RUN_POLLER=${RUN_POLLER:-true}
+      - RUN_POLLER=${RUN_POLLER:-false}
       
       # ===== Dead Torrent Scanner =====
-      - RUN_DEAD_SCANNER_WATCH=true
+      - RUN_DEAD_SCANNER_WATCH=${RUN_DEAD_SCANNER_WATCH:-false}
       - DEAD_SCAN_INTERVAL_S=${DEAD_SCAN_INTERVAL_S:-1800}
       
       # ===== Media Server Integrations (Active Stream Detection Cooldowns) =====
@@ -103,12 +114,12 @@ services:
       # - EMBY_USER_ID=${EMBY_USER_ID:-}
       
       # ===== Watchlist Poller =====
-      - RUN_WATCHLIST_POLLER=${RUN_WATCHLIST_POLLER:-true}
+      - RUN_WATCHLIST_POLLER=${RUN_WATCHLIST_POLLER:-false}
       - WATCHLIST_POLL_INTERVAL_S=${WATCHLIST_POLL_INTERVAL_S:-60}
-      - REFRESH_LIBRARY_ON_ADD=${REFRESH_LIBRARY_ON_ADD:-true}
+      - REFRESH_LIBRARY_ON_ADD=${REFRESH_LIBRARY_ON_ADD:-false}
       
       # ===== Media Organiser (symlinked views with metadata) =====
-      - RUN_ORGANIZER_WATCH=${RUN_ORGANIZER_WATCH:-false}
+      - RUN_ORGANIZER_WATCH=${RUN_ORGANIZER_WATCH:-true}
       - ORGANIZED_BASE=${ORGANIZED_BASE:-/mnt/schrodrive/organized}
       - ORGANIZER_MODE=${ORGANIZER_MODE:-symlink}
       - ORG_SCAN_INTERVAL_S=${ORG_SCAN_INTERVAL_S:-300}
@@ -116,7 +127,7 @@ services:
       - TMDB_API_KEY=${TMDB_API_KEY:-}
       
       # ===== Auto-Update Config =====
-      - AUTO_UPDATE_ENABLED=${AUTO_UPDATE_ENABLED:-true}
+      - AUTO_UPDATE_ENABLED=${AUTO_UPDATE_ENABLED:-false}
       - AUTO_UPDATE_INTERVAL_S=${AUTO_UPDATE_INTERVAL_S:-3600}
       - AUTO_UPDATE_STRATEGY=${AUTO_UPDATE_STRATEGY:-exit}
       - REPO_OWNER=${REPO_OWNER:-moderniselife}
@@ -138,9 +149,9 @@ services:
       - STREMIO_ADDON_PORT=7000
       
       # ===== Torrent Repair =====
-      - ENABLE_REPAIR=true
+      - ENABLE_REPAIR=${ENABLE_REPAIR:-false}
       - REPAIR_MAX_ATTEMPTS=3
-      - PREEMPTIVE_REPAIR=true
+      - PREEMPTIVE_REPAIR=${PREEMPTIVE_REPAIR:-false}
       - PREEMPTIVE_REPAIR_STALL_MIN=30
       
       # ===== Stremio Scrapers (enable as desired) =====
@@ -155,7 +166,7 @@ services:
       # - TRAKT_USERNAME=${TRAKT_USERNAME:-}
       
       # ===== Web GUI =====
-      - RUN_WEB_GUI=${RUN_WEB_GUI:-false}
+      - RUN_WEB_GUI=${RUN_WEB_GUI:-true}
       - WEB_PORT=${WEB_PORT:-3000}
       - BACKEND_URL=http://localhost:8978
     depends_on:
@@ -182,5 +193,3 @@ services:
 
 volumes:
   prowlarr_config:
-  schrodrive_data:
-    name: schrodrive_data
