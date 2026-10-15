@@ -79,7 +79,7 @@ describe('provider reconciliation fixture E2E', () => {
     let body: any;
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       if (init?.body) body = JSON.parse(String(init.body));
-      if (!init?.body) return new Response(JSON.stringify([{ id: 1, title: 'Lanterns' }]), { status: 200 });
+      if (!init?.body) return new Response(JSON.stringify([{ id: 1, title: 'Lanterns', path: path.join(root, 'TV', 'Lanterns') }]), { status: 200 });
       return new Response(JSON.stringify({ id: 1, status: 'queued' }), { status: 201, headers: { 'content-type': 'application/json' } });
     }) as typeof fetch;
     const root = await mkdtemp(path.join(tmpdir(), 'provider-reconciliation-symlink-'));
@@ -97,21 +97,17 @@ describe('provider reconciliation fixture E2E', () => {
     }
   });
 
-  test('B4: falls back to the ARR first-import parser when local identity lookup misses', async () => {
+  test('B4: defers instead of creating a canonical fallback when ARR has no matching path', async () => {
     let body: any;
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
-      if (init?.method === 'POST') {
-        body = JSON.parse(String(init.body));
-        return new Response(JSON.stringify({ id: 7, status: 'queued' }), { status: 201, headers: { 'content-type': 'application/json' } });
-      }
+      if (init?.method === 'POST') body = JSON.parse(String(init.body));
       return new Response(JSON.stringify([{ id: 1, title: 'A different series' }]), { status: 200 });
     }) as typeof fetch;
     const root = await mkdtemp(path.join(tmpdir(), 'provider-reconciliation-arr-parser-'));
     try {
       const routeWithLibrary = { ...route('sonarr', '/mnt/schrodrive/alldebrid'), symlinkLibraryPath: root };
-      await new HttpArrClient().submitScan(routeWithLibrary, event('Shows', 'shows/Unknown.Release.S01E03.mkv'));
-      expect(body).toMatchObject({ name: 'DownloadedEpisodesScan', importMode: 'Copy' });
-      expect(body.path).toContain('Unknown Release');
+      await expect(new HttpArrClient().submitScan(routeWithLibrary, event('Shows', 'shows/Unknown.Release.S01E03.mkv'))).rejects.toThrow('path is unavailable');
+      expect(body).toBeUndefined();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

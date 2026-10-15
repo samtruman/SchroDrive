@@ -15,7 +15,6 @@ import type { DebridProvider, TorrentInfo, VirtualDirectory } from '../providers
 import { classifyTorrent } from '../core/mediaClassifier';
 import { parseMediaFilename } from './mediaParser';
 import { searchTmdb } from './tmdbService';
-import { canonicalLibraryPath } from './canonicalLibraryPath';
 
 export type DirectFileAction = 'added' | 'changed' | 'deleted';
 export type SourceCategory = 'Movies' | 'Shows';
@@ -158,19 +157,20 @@ export class HttpArrClient implements ArrClient {
     const providerPath = route.sourcePathPrefix
       ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${event.path.replace(/^\/+/, '')}`
       : event.path;
+    const arrEntity = route.symlinkLibraryPath ? await findArrEntity(route, event) : undefined;
+    const arrPath = arrEntity?.path;
+    if (route.symlinkLibraryPath && !arrPath) {
+      throw new Error(`Arr ${route.kind} path is unavailable for this item; deferring provider reconciliation instead of creating a canonical fallback`);
+    }
     const scanPath = route.symlinkLibraryPath
-      ? await exposeAsSymlink(route, event, providerPath)
+      ? await exposeAsSymlink(route, event, providerPath, arrPath!)
       : providerPath;
     let commandBody: Record<string, unknown> = { name: commandName, path: scanPath, importMode: route.importMode || 'Copy' };
     if (route.symlinkLibraryPath) {
-      const entityId = await findArrEntityId(route, event);
-      if (entityId !== undefined) {
+      if (arrEntity?.id !== undefined) {
         commandName = route.kind === 'radarr' ? 'RescanMovie' : 'RescanSeries';
-        commandBody = { name: commandName, [route.kind === 'radarr' ? 'movieId' : 'seriesId']: entityId };
+        commandBody = { name: commandName, [route.kind === 'radarr' ? 'movieId' : 'seriesId']: arrEntity.id };
       }
-      // If the local parser cannot identify the parent entity, let ARR run
-      // its first-import parser against the visible file instead of failing
-      // before the scan is submitted.
     }
     const response = await fetch(`${route.baseUrl.replace(/\/$/, '')}/api/v3/command`, {
       method: 'POST',
@@ -197,7 +197,9 @@ function normalizedTitle(value: string): string {
   return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
-async function findArrEntityId(route: ArrRoute, event: DirectFileEvent): Promise<number | undefined> {
+type ArrEntity = { id?: number; title?: string; tmdbId?: number | string; year?: number; path?: string };
+
+async function findArrEntity(route: ArrRoute, event: DirectFileEvent): Promise<ArrEntity | undefined> {
   const filename = path.basename(event.path);
   const parsed = parseMediaFilename(filename, event.path);
   const title = normalizedTitle(parsed.title || event.path.split('/').filter(Boolean).slice(-2, -1)[0] || '');
@@ -208,12 +210,12 @@ async function findArrEntityId(route: ArrRoute, event: DirectFileEvent): Promise
     headers: { 'X-Api-Key': route.apiKey },
   });
   if (!response.ok) throw new Error(`Arr ${endpoint} lookup failed: HTTP ${response.status}`);
-  const records = await response.json() as Array<{ id?: number; title?: string; tmdbId?: number | string; year?: number }>;
+  const records = await response.json() as ArrEntity[];
   const matchByTmdb = canonical?.tmdbId
     ? records.find((record) => record.id && String(record.tmdbId || '') === canonical.tmdbId)
     : undefined;
   const match = matchByTmdb || records.find((record) => record.id && normalizedTitle(record.title || '') === title);
-  return match?.id;
+  return match;
 }
 
 function safeSegment(value: string): string {
@@ -237,37 +239,12 @@ async function resolveCanonicalMetadata(title: string, kind: 'movie' | 'tv', yea
  * Creates the Arr-facing library entry without copying provider data. The
  * target is deliberately a symlink into the shared SchröDrive mount.
  */
-async function exposeAsSymlink(route: ArrRoute, event: DirectFileEvent, providerPath: string): Promise<string> {
-  const library = route.symlinkLibraryPath!;
+async function exposeAsSymlink(route: ArrRoute, event: DirectFileEvent, providerPath: string, arrPath: string): Promise<string> {
   const filename = path.basename(event.path);
   const parsed = parseMediaFilename(filename, event.path);
-  const pathParts = event.path.split('/').filter(Boolean);
-  const fallbackTitle = safeSegment(parsed.title || pathParts[pathParts.length - 2] || path.parse(filename).name);
-  const kind = event.sourceCategory === 'Shows' ? 'tv' : 'movie';
-  let title = fallbackTitle;
-  let year = parsed.year;
-  if (parsed.title) {
-    const metadata = await resolveCanonicalMetadata(parsed.title, kind, parsed.year);
-    if (metadata) {
-      title = metadata.title;
-      year = metadata.year ?? year;
-    }
-  }
-  // Arr deployments commonly configure the category directory itself
-  // (`.../Movies` or `.../TV`), while the Organizer receives the general
-  // organized root. Normalize both forms before using the shared resolver.
-  const configuredCategory = path.basename(path.normalize(library)).toLowerCase();
-  const organizedRoot = configuredCategory === 'movies' || configuredCategory === 'tv'
-    ? path.dirname(library)
-    : library;
-  const destination = canonicalLibraryPath(organizedRoot, {
-    category: event.sourceCategory === 'Shows' ? 'TV' : 'Movies',
-    title,
-    year,
-    season: parsed.season,
-    episode: parsed.episode,
-    sourceFilename: filename,
-  });
+  const destination = event.sourceCategory === 'Shows' && parsed.season
+    ? path.join(arrPath, `Season ${String(parsed.season).padStart(2, '0')}`, filename)
+    : path.join(arrPath, filename);
   const directory = path.dirname(destination);
   await fsp.mkdir(directory, { recursive: true });
   const existing = await fsp.lstat(destination).catch(() => undefined);

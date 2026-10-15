@@ -360,7 +360,7 @@ describe("version manager", () => {
     expect(versions.find((version) => version.decision === "KEEP")?.id).toBe(cyber.id);
   });
 
-  test("applies release-group preference consistently across a season", () => {
+  test("uses release-group preference only when it does not lose to a better episode", () => {
     const names = [
       ["S01E01", "Alpha", 20_000_000_000],
       ["S01E02", "Alpha", 20_000_000_000],
@@ -371,10 +371,10 @@ describe("version manager", () => {
       fingerprintTorrent(torrent(`Show.2025.${episode}.2160p.WEB-DL.ITA.HEVC-${group === "Alpha" ? "Beta" : "Alpha"}.mkv`, size - 1_000_000_000), "alldebrid")[0],
     ]);
     versions.forEach((version) => { version.fingerprint.identity = { ...version.fingerprint.identity, tmdbId: "show-123", resolutionStatus: "resolved", confidence: 1, kind: "episode" }; });
-    const configured = profile({ sizePreference: "LARGER", minimumSizeDifferencePercent: 0, releaseGroupConsistency: "SEASON" });
+    const configured = profile({ sizePreference: "LARGER", minimumSizeDifferencePercent: 10, releaseGroupConsistency: "SEASON" });
     const groups = evaluateVersionGroups(versions, [configured]);
     const episode3 = groups.find((group) => group.identity.episode === 3);
-    expect(episode3?.versions.find((version) => version.decision === "KEEP")?.fingerprint.release.group).toBe("Alpha");
+    expect(episode3?.versions.find((version) => version.decision === "KEEP")?.fingerprint.release.group).toBe("Beta");
   });
 
   test("applies the exact manual TMDb identity before grouping and preserves safety blockers", () => {

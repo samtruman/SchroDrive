@@ -42,6 +42,36 @@ const tmdbService_1 = require("./tmdbService");
 function normalize(value) {
     return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 }
+function looksLikeReleasePath(value) {
+    const base = path.basename(value).toLocaleLowerCase();
+    return /(?:^|[. _-])(mkv|mp4|m4v|avi|mov)$/.test(base) ||
+        /(?:2160p|1080p|720p|bluray|web[- .]?dl|webrip|hevc|x265|h[.]?264|mirc?rew|subs?)/i.test(base);
+}
+function inferredLibraryDirectory(link, candidate, organizedBase, record) {
+    const relative = path.relative(organizedBase, link);
+    const category = relative.split(path.sep)[0]?.toLowerCase();
+    const expectedCategory = candidate.category === "movie" ? "movies" : "tv";
+    if (category !== expectedCategory)
+        return undefined;
+    const directory = candidate.category === "movie"
+        ? path.dirname(link)
+        : path.dirname(path.dirname(link));
+    const folderName = path.basename(directory);
+    const folder = folderName.replace(/\s*\(\d{4}\)$/, "");
+    const title = normalize(candidate.title || "");
+    if (title && normalize(folder) === title)
+        return directory;
+    // A bootstrap scan can place a release-like folder under organized (for
+    // example "2019 4K HDR ... (1917)"). Once ARR has identified the item,
+    // derive the canonical library directory from ARR's title.
+    if (!record.title)
+        return undefined;
+    const libraryRoot = path.join(organizedBase, candidate.category === "movie" ? "Movies" : "TV");
+    const canonicalFolder = candidate.category === "movie" && (record.year || candidate.year)
+        ? `${record.title} (${record.year || candidate.year})`
+        : record.title;
+    return path.join(libraryRoot, canonicalFolder);
+}
 function configured() {
     return Boolean(config_1.config.providerReconciliationRadarrUrl && config_1.config.providerReconciliationRadarrApiKey ||
         config_1.config.providerReconciliationSonarrUrl && config_1.config.providerReconciliationSonarrApiKey);
@@ -77,15 +107,22 @@ function candidateFor(link, organizedBase) {
     if (category !== "movies" && category !== "tv" && category !== "anime")
         return undefined;
     const parsed = (0, mediaParser_1.parseMediaFilename)(path.basename(link), link);
+    const rawFolderTitle = parts[1] || "";
+    const folderTitle = rawFolderTitle.replace(/\s*\(\d{4}\)$/, "");
+    const folderYear = rawFolderTitle.match(/\((\d{4})\)$/)?.[1];
+    const releaseLikeFolder = looksLikeReleasePath(rawFolderTitle) || /^\d{4}\b/.test(rawFolderTitle);
+    const numericMovie = path.basename(link).match(/^(\d{1,4})[._\s-]+(?:\(((?:19|20|21)\d{2})\)|((?:19|20|21)\d{2}))(?:[._\s-]|$)/i);
+    const resolvedTitle = numericMovie?.[1] || (releaseLikeFolder && parsed.title ? parsed.title : (folderTitle || parsed.title));
+    const resolvedYear = numericMovie ? Number(numericMovie[2] || numericMovie[3]) : (parsed.year || (folderYear ? Number(folderYear) : undefined));
     if (category === "movies") {
-        return { source, currentLink: link, category: "movie", title: parsed.title || parts[1]?.replace(/\s*\(\d{4}\)$/, ""), year: parsed.year };
+        return { source, currentLink: link, category: "movie", title: resolvedTitle, year: resolvedYear };
     }
     return {
         source,
         currentLink: link,
         category: "series",
-        title: parsed.title || parts[1]?.replace(/\s*\(\d{4}\)$/, ""),
-        year: parsed.year,
+        title: resolvedTitle,
+        year: parsed.year || (folderYear ? Number(folderYear) : undefined),
         season: parsed.season ?? (Number((parts.find((part) => /^Season\s+\d+$/i.test(part)) || "").replace(/\D/g, "")) || undefined),
     };
 }
@@ -143,6 +180,28 @@ async function requestArrRescan(category, recordId) {
     if (!response.ok)
         throw new Error(`Arr rescan failed: HTTP ${response.status}`);
 }
+async function repairArrPath(category, record, destination) {
+    if (!record.id || !record.path || path.normalize(record.path) === path.normalize(destination))
+        return;
+    const baseUrl = category === "movie" ? config_1.config.providerReconciliationRadarrUrl : config_1.config.providerReconciliationSonarrUrl;
+    const apiKey = category === "movie" ? config_1.config.providerReconciliationRadarrApiKey : config_1.config.providerReconciliationSonarrApiKey;
+    if (!baseUrl || !apiKey)
+        return;
+    const endpoint = category === "movie" ? "movie" : "series";
+    const url = `${baseUrl.replace(/\/$/, "")}/api/v3/${endpoint}/${record.id}`;
+    const current = await fetch(url, { headers: { "X-Api-Key": apiKey, Accept: "application/json" } });
+    if (!current.ok)
+        throw new Error(`Arr ${endpoint} ${record.id} lookup failed: HTTP ${current.status}`);
+    const body = await current.json();
+    body.path = destination;
+    const response = await fetch(`${url}?moveFiles=false&moveMovie=false&moveSeries=false&sendUpdatesToClient=false`, {
+        method: "PUT",
+        headers: { "X-Api-Key": apiKey, "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify(body),
+    });
+    if (!response.ok)
+        throw new Error(`Arr ${endpoint} ${record.id} path update failed: HTTP ${response.status}`);
+}
 /**
  * Reconciles links created by both the bootstrap organizer and later
  * AllDebrid manifest scans with the authoritative Radarr/Sonarr library path.
@@ -176,6 +235,7 @@ async function reconcileOrganizedLibraryWithArr() {
     }
     let moved = 0;
     let unresolved = 0;
+    const rescannedRecords = new Set();
     for (const link of links) {
         const candidate = candidateFor(link, organizedBase);
         if (!candidate)
@@ -188,12 +248,44 @@ async function reconcileOrganizedLibraryWithArr() {
             unresolved++;
             continue;
         }
+        let authoritativePath = record.path;
+        let pathRepaired = false;
+        if (authoritativePath && looksLikeReleasePath(authoritativePath)) {
+            const inferred = inferredLibraryDirectory(link, candidate, organizedBase, record);
+            if (!inferred) {
+                unresolved++;
+                console.warn(`[${new Date().toISOString()}][organize] ARR path looks like a release path; no safe library directory`, {
+                    title: record.title,
+                    path: authoritativePath,
+                });
+                continue;
+            }
+            try {
+                await repairArrPath(candidate.category, record, inferred);
+                authoritativePath = inferred;
+                pathRepaired = true;
+            }
+            catch (error) {
+                unresolved++;
+                console.warn(`[${new Date().toISOString()}][organize] ARR path repair deferred`, {
+                    title: record.title,
+                    path: authoritativePath,
+                    inferred,
+                    err: error?.message || String(error),
+                });
+                continue;
+            }
+        }
         const destination = candidate.category === "series" && candidate.season
-            ? path.join(record.path, `Season ${String(candidate.season).padStart(2, "0")}`, path.basename(link))
-            : path.join(record.path, path.basename(link));
-        if (await moveSymlink(link, destination)) {
+            ? path.join(authoritativePath, `Season ${String(candidate.season).padStart(2, "0")}`, path.basename(link))
+            : path.join(authoritativePath, path.basename(link));
+        const movedThisLink = await moveSymlink(link, destination);
+        if (movedThisLink)
             moved++;
-            if (record.id) {
+        if (record.id) {
+            const rescanKey = `${candidate.category}:${record.id}`;
+            if (!rescannedRecords.has(rescanKey)) {
+                rescannedRecords.add(rescanKey);
                 try {
                     await requestArrRescan(candidate.category, record.id);
                 }

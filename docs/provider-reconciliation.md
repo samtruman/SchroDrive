@@ -39,6 +39,33 @@ When both Radarr and Sonarr are configured with a URL and API key, the worker
 starts automatically. `PROVIDER_RECONCILIATION_ENABLED=true` can still be used
 to force it on, while an explicit `false` disables automatic activation.
 
+## Bootstrap reconciliation edge cases
+
+The initial organizer pass also reconciles links that were created before
+Radarr/Sonarr integration was available. Release-like directory names are not
+treated as authoritative identities: the file basename and TMDb/ARR identity
+are used to resolve the record, then the symlink is moved to the ARR-owned
+library path.
+
+This includes numeric movie titles whose release name uses a form such as
+`1917.(2019).2160p...`. The numeric title and the parenthesized year must be
+parsed separately; otherwise the release tokens can be mistaken for the media
+title or year.
+
+A rescan is requested once per matched movie or series during each organizer
+pass, even when the symlink is already under the correct path. This allows
+Sonarr/Radarr to register files that existed before the reconciliation pass.
+The operation remains symlink-only: provider-backed files are never copied or
+deleted. If an ARR path is unavailable, the item is deferred and the
+standalone organizer does not create a competing fallback path.
+
+Live validation on 2026-10-15 confirmed the behavior with:
+
+- Radarr: `1917` moved from a release-like folder into
+  `Movies/1917 (2019)` and became associated;
+- Sonarr: Widow's Bay increased from 2 to 10 registered episode files;
+- 241 existing symlinks were reconciled without physical media copies.
+
 ## Contract coverage
 
 Every provider registered by SchröDrive implements the common provider

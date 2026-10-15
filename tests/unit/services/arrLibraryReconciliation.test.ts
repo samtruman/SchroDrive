@@ -62,4 +62,85 @@ describe("Arr library path reconciliation", () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  test("repairs a release-like Radarr path from the verified library directory", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "arr-path-repair-"));
+    try {
+      const source = path.join(root, "provider", "Gunner.2024.1080p.mkv");
+      const libraryDir = path.join(root, "organized", "Movies", "Gunner (2024)");
+      const link = path.join(libraryDir, path.basename(source));
+      const badArrPath = path.join(root, "organized", "Movies", "Gunner H265 iTA ENG 1080p mkv");
+      await mkdir(path.dirname(source), { recursive: true });
+      await mkdir(libraryDir, { recursive: true });
+      await writeFile(source, "fixture");
+      await symlink(path.relative(libraryDir, source), link);
+
+      config.organizedBase = path.join(root, "organized");
+      config.providerReconciliationRadarrUrl = "http://radarr.fixture";
+      config.providerReconciliationRadarrApiKey = "fixture-key";
+      config.providerReconciliationSonarrUrl = "";
+      config.providerReconciliationSonarrApiKey = "";
+
+      const requests: Array<{ url: string; method?: string; body?: any }> = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        requests.push({ url, method: init?.method, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        if (url.endsWith("/api/v3/movie")) {
+          return new Response(JSON.stringify([{ id: 157, title: "Gunner", tmdbId: 123, path: badArrPath }]), { status: 200 });
+        }
+        if (url.endsWith("/api/v3/movie/157")) {
+          if (init?.method === "PUT") return new Response(JSON.stringify({ id: 157, path: libraryDir }), { status: 200 });
+          return new Response(JSON.stringify({ id: 157, title: "Gunner", tmdbId: 123, path: badArrPath }), { status: 200 });
+        }
+        return new Response(JSON.stringify({ id: 1, status: "queued" }), { status: 201 });
+      }) as typeof fetch;
+
+      const result = await reconcileOrganizedLibraryWithArr();
+      expect(result.unresolved).toBe(0);
+      expect(requests.some((request) => request.method === "PUT" && request.body?.path === libraryDir)).toBe(true);
+      expect(requests.some((request) => request.body?.name === "RescanMovie" && request.body?.movieId === 157)).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test("reconciles a numeric movie release folder using the filename identity", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "arr-numeric-movie-"));
+    try {
+      const source = path.join(root, "provider", "1917.(2019).2160p.mkv");
+      const badDir = path.join(root, "organized", "Movies", "2019 4K HDR 2160p mkv (1917)");
+      const arrDir = path.join(root, "organized", "Movies", "1917 (2019)");
+      const link = path.join(badDir, path.basename(source));
+      const newLink = path.join(arrDir, path.basename(source));
+      await mkdir(path.dirname(source), { recursive: true });
+      await mkdir(badDir, { recursive: true });
+      await writeFile(source, "fixture");
+      await symlink(path.relative(badDir, source), link);
+
+      config.organizedBase = path.join(root, "organized");
+      config.providerReconciliationRadarrUrl = "http://radarr.fixture";
+      config.providerReconciliationRadarrApiKey = "fixture-key";
+      config.providerReconciliationSonarrUrl = "";
+      config.providerReconciliationSonarrApiKey = "";
+
+      const requests: Array<{ url: string; body?: any }> = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        requests.push({ url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        if (url.endsWith("/api/v3/movie")) {
+          return new Response(JSON.stringify([{ id: 1917, title: "1917", year: 2019, tmdbId: 143, path: arrDir }]), { status: 200 });
+        }
+        return new Response(JSON.stringify({ id: 1, status: "queued" }), { status: 201 });
+      }) as typeof fetch;
+
+      const result = await reconcileOrganizedLibraryWithArr();
+      expect(result.moved).toBe(1);
+      expect((await lstat(newLink)).isSymbolicLink()).toBe(true);
+      await expect(lstat(link)).rejects.toThrow();
+      expect(requests.some((request) => request.body?.name === "RescanMovie" && request.body?.movieId === 1917)).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
 });

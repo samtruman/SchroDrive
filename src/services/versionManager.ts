@@ -608,6 +608,23 @@ function compareForProfile(left: VersionEvaluation, right: VersionEvaluation, pr
   return preference === "LARGER" ? rightSize - leftSize : leftSize - rightSize;
 }
 
+function compareForSeasonConsistency(preferred: VersionEvaluation, current: VersionEvaluation, profile: VersionProfile): number {
+  const ranked = compareForProfile(preferred, current, profile);
+  if (ranked !== 0) return ranked;
+  // Season consistency may treat small size differences as a tie for normal
+  // duplicate ranking. For pack-vs-single selection, however, any larger
+  // complete episode is meaningful: pack preference applies only on equal
+  // size, or when the preferred pack version is larger.
+  if (profile.sizePreference !== "IGNORE" && preferred.fingerprint.video.resolution === current.fingerprint.video.resolution) {
+    const preferredSize = Number(preferred.fingerprint.storage.size || 0);
+    const currentSize = Number(current.fingerprint.storage.size || 0);
+    if (preferredSize && currentSize && preferredSize !== currentSize) {
+      return profile.sizePreference === "LARGER" ? currentSize - preferredSize : preferredSize - currentSize;
+    }
+  }
+  return 0;
+}
+
 export function versionSatisfiesProfileTarget(version: VersionEvaluation, profile: VersionProfile): boolean {
   const evaluation = version.evaluations.find((item) => item.profileId === profile.id);
   if (!evaluation?.eligible || version.fingerprint.identity.confidence < 0.65) return false;
@@ -649,6 +666,12 @@ function applyReleaseGroupConsistency(groups: VersionGroup[], profiles: VersionP
       const winner = [...eligible].sort((left, right) => compareForProfile(left, right, profile))[0];
       const current = group.versions.find((version) => version.decision === "KEEP" && version.satisfiesProfiles?.includes(profile.id));
       if (current?.id === winner.id) continue;
+      // Season consistency is a tie-breaker, not an unconditional override.
+      // Keep the preferred release group when it is equal or better, but do
+      // not replace a larger/better individual episode merely to homogenize
+      // the season. Complete-pack coverage is handled separately by the
+      // deletion-impact safety layer.
+      if (current && compareForSeasonConsistency(winner, current, profile) > 0) continue;
       if (current) {
         current.decision = "DELETE_CANDIDATE";
         current.reasons.push({ code: "season_release_group_replaced", message: `Release group ${preferredGroup} is preferred for this season`, facts: { preferredReleaseGroup: preferredGroup, season: group.identity.season } });
