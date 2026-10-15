@@ -84,10 +84,10 @@ describe('provider reconciliation fixture E2E', () => {
     }) as typeof fetch;
     const root = await mkdtemp(path.join(tmpdir(), 'provider-reconciliation-symlink-'));
     try {
-      const routeWithLibrary = { ...route('sonarr', '/mnt/schrodrive/alldebrid'), symlinkLibraryPath: root };
+      const routeWithLibrary = { ...route('sonarr', '/mnt/schrodrive/alldebrid'), symlinkLibraryPath: path.join(root, 'TV') };
       const item = event('Shows', 'shows/Lanterns/Lanterns.S01E06.Bad.Optics.mkv');
       await new HttpArrClient().submitScan(routeWithLibrary, item);
-      const link = path.join(root, 'Lanterns', 'Season 1', 'Lanterns.S01E06.Bad.Optics.mkv');
+      const link = path.join(root, 'TV', 'Lanterns', 'Season 01', 'Lanterns.S01E06.Bad.Optics.mkv');
       expect((await lstat(link)).isSymbolicLink()).toBe(true);
       expect(await readlink(link)).toBe('/mnt/schrodrive/alldebrid/shows/Lanterns/Lanterns.S01E06.Bad.Optics.mkv');
       expect(body.name).toBe('RescanSeries');
