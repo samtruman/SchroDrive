@@ -16,6 +16,11 @@ The runtime root must point to the equivalent existing directory on another
 host; never replace it with an old user path or a named volume during a
 production recreation.
 
+The deployment script also refuses to build on another hostname or on a
+non-`x86_64` host, and refuses to continue if the runtime `config`, `data`,
+`mount`, or `downloads` directory is missing. This prevents accidental
+Raspberry Pi builds and incomplete runtime mounts.
+
 Do not use a `validation-runtime` source override, a validation entrypoint, or
 an ad-hoc overlay image as a production runtime. Validation tooling may build a
 temporary image or inspect a container, but it must be removed or disabled

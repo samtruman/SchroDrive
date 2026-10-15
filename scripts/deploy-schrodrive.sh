@@ -14,6 +14,9 @@ fi
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="${SCHRODRIVE_COMPOSE_FILE:-$ROOT/docker-compose.yml}"
 BACKUP_ROOT="${SCHRODRIVE_BACKUP_ROOT:-$ROOT/.deploy-backups}"
+EXPECTED_HOSTNAME="${SCHRODRIVE_DEPLOY_HOSTNAME:-samserver}"
+EXPECTED_ARCH="${SCHRODRIVE_DEPLOY_ARCH:-x86_64}"
+RUNTIME_ROOT="${SCHRODRIVE_RUNTIME_ROOT:-/home/samtruman/docker/cinecircle/schrodrive}"
 API_PORT="${SCHRODRIVE_API_PORT:-8978}"
 WEB_PORT="${SCHRODRIVE_WEB_PORT:-3000}"
 REQUIRED_PROVIDER="${SCHRODRIVE_REQUIRED_PROVIDER:-alldebrid}"
@@ -35,6 +38,22 @@ BUN="${SCHRODRIVE_BUN_BIN:-$(command -v bun || true)}"
 [[ -x "$BUN" ]] || BUN="/home/samtruman/.bun/bin/bun"
 [[ -x "$BUN" ]] || { echo "missing Bun executable; set SCHRODRIVE_BUN_BIN" >&2; exit 1; }
 [[ -f "$COMPOSE_FILE" ]] || { echo "compose file not found: $COMPOSE_FILE" >&2; exit 1; }
+actual_hostname="$(hostname -s)"
+actual_arch="$(uname -m)"
+if [[ "$actual_hostname" != "$EXPECTED_HOSTNAME" ]]; then
+  echo "refusing deployment from host $actual_hostname; run this on $EXPECTED_HOSTNAME" >&2
+  exit 1
+fi
+if [[ "$actual_arch" != "$EXPECTED_ARCH" ]]; then
+  echo "refusing deployment from architecture $actual_arch; expected $EXPECTED_ARCH" >&2
+  exit 1
+fi
+for runtime_dir in config data mount downloads; do
+  [[ -d "$RUNTIME_ROOT/$runtime_dir" ]] || {
+    echo "runtime directory is missing: $RUNTIME_ROOT/$runtime_dir" >&2
+    exit 1
+  }
+done
 if grep -qE 'validation-runtime|/app/web/\.next|/app/dist' "$COMPOSE_FILE"; then
   echo "compose contains forbidden application source/build override" >&2
   echo "remove validation-runtime and host build mounts before deploying" >&2
