@@ -4,6 +4,7 @@ exports.startVersionManagerScan = startVersionManagerScan;
 exports.getVersionManagerScanStatus = getVersionManagerScanStatus;
 exports.getVersionManagerScanRuntimeStatus = getVersionManagerScanRuntimeStatus;
 const providers_1 = require("../providers");
+const config_1 = require("../core/config");
 const mount_1 = require("./mount");
 const mediaManagerInventory_1 = require("./mediaManagerInventory");
 const manualIdentity_1 = require("./manualIdentity");
@@ -22,6 +23,10 @@ function ensureRecovery() {
 function readinessError(statuses) {
     const unavailable = statuses.find((status) => !status.ready);
     return unavailable ? `Provider mount is not ready (${unavailable.reason})` : undefined;
+}
+function arrIdentityResolutionAvailable() {
+    return Boolean(config_1.config.providerReconciliationRadarrUrl && config_1.config.providerReconciliationRadarrApiKey
+        || config_1.config.providerReconciliationSonarrUrl && config_1.config.providerReconciliationSonarrApiKey);
 }
 async function execute(job) {
     const stats = {
@@ -50,7 +55,10 @@ async function execute(job) {
         await (0, versionManagerProbe_1.probeVersionRecords)(evaluatedVersions);
         const policy = (0, versionManagerStore_1.getVersionManagerPolicy)();
         await (0, versionManagerMetadata_1.enrichVersionMetadata)(evaluatedVersions, {
-            useArrIdentityResolution: policy.useArrIdentityResolution === true,
+            // ARR identity parsing is automatic whenever the corresponding ARR
+            // endpoints are configured. The persisted toggle remains a supported
+            // explicit opt-in, but users should not have to discover it manually.
+            useArrIdentityResolution: policy.useArrIdentityResolution === true || arrIdentityResolutionAvailable(),
             onProgress: (progress) => (0, versionManagerStore_1.updateVersionManagerScanJob)(job.id, {
                 status: "ENRICHING",
                 phase: "identity",

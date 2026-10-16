@@ -567,10 +567,11 @@ function evaluateVersionGroups(versions, profiles = exports.defaultVersionProfil
             const recoverable = recoverability === "RECOVERABLE";
             const safeForDelete = (policy.safety?.requireRecoverableBeforeDelete ?? true) ? recoverable : true;
             const hasSurvivingKeep = evaluations.some((candidate) => candidate.decision === "KEEP");
-            const missingTmdbIdentity = !version.fingerprint.identity.tmdbId && Boolean(version.fingerprint.identity.resolutionStatus);
-            if (missingTmdbIdentity) {
+            const hasCanonicalIdentity = Boolean(version.fingerprint.identity.tmdbId || version.fingerprint.identity.tvdbId || version.fingerprint.identity.imdbId);
+            const missingCanonicalIdentity = !hasCanonicalIdentity && Boolean(version.fingerprint.identity.resolutionStatus);
+            if (missingCanonicalIdentity) {
                 version.decision = "REVIEW";
-                version.reasons.push({ code: "identity_uncertain", message: "A TMDb identity is required before an automatic policy decision", facts: { tmdbId: version.fingerprint.identity.tmdbId || null, resolutionStatus: version.fingerprint.identity.resolutionStatus } });
+                version.reasons.push({ code: "identity_uncertain", message: "A canonical ARR/TMDb identity is required before an automatic policy decision", facts: { tmdbId: version.fingerprint.identity.tmdbId || null, tvdbId: version.fingerprint.identity.tvdbId || null, imdbId: version.fingerprint.identity.imdbId || null, resolutionStatus: version.fingerprint.identity.resolutionStatus } });
             }
             else if (version.decision === "REVIEW" && (!hasHardRequirementFailure || replacementEligible) && version.fingerprint.identity.confidence >= 0.65 && evaluations.length > 1 && hasSurvivingKeep && safeForDelete) {
                 version.decision = "DELETE_CANDIDATE";

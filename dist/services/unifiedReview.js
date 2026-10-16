@@ -57,10 +57,14 @@ function keyForIdentity(identity, fallback) {
     return `review_${digest(identityKey(identity) || fallback)}`;
 }
 function identityReviewKey(identity) {
-    // Unresolved episode reviews stay grouped by title/season so an operator can
-    // resolve the series context once. Canonical provider identities use
-    // identityKey(), which includes the exact episode number.
-    return `identity_review:${identity.kind || "episode"}:${identity.normalizedTitle || identity.title || "unknown"}:season:${identity.season ?? "unknown"}`;
+    // A review action resolves the series context, not one episode in isolation.
+    // Group every episode in the same series/season, using a canonical provider
+    // id when available and title/year only as the unresolved fallback.
+    const canonicalId = identity.tmdbId || identity.tvdbId || identity.imdbId;
+    const seriesKey = canonicalId
+        ? `id:${canonicalId}`
+        : `title:${identity.normalizedTitle || identity.title || "unknown"}:year:${identity.year ?? "unknown"}`;
+    return `identity_review:${identity.kind || "episode"}:${seriesKey}:season:${identity.season ?? "unknown"}`;
 }
 function recoverabilityFor(version) {
     return version.fingerprint.storage.recoverability?.status || (version.fingerprint.storage.infoHash ? "RECOVERABLE" : "UNKNOWN");
@@ -190,7 +194,8 @@ function buildUnifiedReviewQueue(groups, organizerReviews = [], status = "pendin
         const state = states.includes("NOT_RECOVERABLE") ? "NOT_RECOVERABLE" : states.includes("UNKNOWN") ? "UNKNOWN" : "RECOVERABLE";
         const sources = [...new Set(reviewVersions.map((version) => version.fingerprint.storage.recoverability?.source || (version.fingerprint.storage.infoHash ? "INFOHASH" : "UNKNOWN")))];
         const fallback = reviewVersions.map((version) => `${version.fingerprint.storage.provider}:${version.fingerprint.storage.torrentId}:${version.fingerprint.storage.fileId || ""}`).sort().join("|");
-        const key = hasIdentity && !group.identity.tmdbId && group.identity.kind === "episode" && group.identity.season !== undefined
+        const aggregateEpisodeReview = group.identity.kind === "episode" && group.identity.season !== undefined;
+        const key = aggregateEpisodeReview
             ? `review_${digest(identityReviewKey(group.identity))}`
             : keyForIdentity(group.identity, fallback);
         const dismissed = dismissedPolicyReviews.has(key);
@@ -200,7 +205,7 @@ function buildUnifiedReviewQueue(groups, organizerReviews = [], status = "pendin
             continue;
         add({
             key, identity: group.identity, title: group.identity.title, year: group.identity.year, kind: group.identity.kind,
-            season: group.identity.season, episode: group.identity.episode, issueTypes, reasonCodes, blockers: [...new Set(reviewVersions.flatMap((version) => version.reasons.map((reason) => reason.message)))],
+            season: group.identity.season, episode: aggregateEpisodeReview ? undefined : group.identity.episode, issueTypes, reasonCodes, blockers: [...new Set(reviewVersions.flatMap((version) => version.reasons.map((reason) => reason.message)))],
             policyDecision: "REVIEW", recoverability: { status: state, sources }, identityResolutionStatus: identityStatus, versionGroupId: group.id,
             decision: dismissed ? "dismissed" : "pending", versionIds: reviewVersions.map((version) => version.id),
             allowedActions: dismissed ? ["RESTORE_TO_REVIEW", "DETAILS"] : hasIdentity ? ["RESOLVE_IDENTITY", "DISMISS", "DETAILS"] : ["DISMISS", "DETAILS"], allowIdentityActions: hasIdentity,

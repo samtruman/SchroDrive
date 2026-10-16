@@ -1,4 +1,5 @@
 import { registry } from "../providers";
+import { config } from "../core/config";
 import { getConfiguredMountReadiness } from "./mount";
 import { loadMediaManagerInventory, type MediaManagerInventoryStats } from "./mediaManagerInventory";
 import { applyManualIdentityOverrides } from "./manualIdentity";
@@ -33,6 +34,13 @@ function readinessError(statuses: Awaited<ReturnType<typeof getConfiguredMountRe
   return unavailable ? `Provider mount is not ready (${unavailable.reason})` : undefined;
 }
 
+function arrIdentityResolutionAvailable(): boolean {
+  return Boolean(
+    config.providerReconciliationRadarrUrl && config.providerReconciliationRadarrApiKey
+    || config.providerReconciliationSonarrUrl && config.providerReconciliationSonarrApiKey,
+  );
+}
+
 async function execute(job: VersionManagerScanJob): Promise<void> {
   const stats: MediaManagerInventoryStats = {
     durationMs: 0, providers: 0, providerListCalls: 0, fileTreeFetches: 0,
@@ -60,7 +68,10 @@ async function execute(job: VersionManagerScanJob): Promise<void> {
     await probeVersionRecords(evaluatedVersions);
     const policy = getVersionManagerPolicy();
     await enrichVersionMetadata(evaluatedVersions, {
-      useArrIdentityResolution: policy.useArrIdentityResolution === true,
+      // ARR identity parsing is automatic whenever the corresponding ARR
+      // endpoints are configured. The persisted toggle remains a supported
+      // explicit opt-in, but users should not have to discover it manually.
+      useArrIdentityResolution: policy.useArrIdentityResolution === true || arrIdentityResolutionAvailable(),
       onProgress: (progress) => updateVersionManagerScanJob(job.id, {
         status: "ENRICHING",
         phase: "identity",

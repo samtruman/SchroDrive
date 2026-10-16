@@ -93,12 +93,13 @@ describe("unified Media Manager review queue", () => {
     expect(result.entries[0].versionIds.sort()).toEqual(["silo-s03e01", "silo-s03e02"]);
   });
 
-  test("keeps canonical episodes separate in identity review", () => {
+  test("aggregates canonical episodes from the same series and season", () => {
     const first = group({ id: "episode-1", identity: { title: "The Last of Us", normalizedTitle: "the last of us", year: 2023, kind: "episode", season: 1, episode: 1, tmdbId: "100", confidence: 0.98, source: "provider", resolutionStatus: "resolved" }, versions: [{ ...(group().versions[0] as any), id: "tlou-s01e01" }] as any });
     const second = group({ id: "episode-2", identity: { title: "The Last of Us", normalizedTitle: "the last of us", year: 2023, kind: "episode", season: 1, episode: 2, tmdbId: "100", confidence: 0.98, source: "provider", resolutionStatus: "resolved" }, versions: [{ ...(group().versions[0] as any), id: "tlou-s01e02" }] as any });
     const result = buildUnifiedReviewQueue([first, second]);
-    expect(result.entries).toHaveLength(2);
-    expect(result.entries.map((entry) => entry.versionIds[0]).sort()).toEqual(["tlou-s01e01", "tlou-s01e02"]);
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0].episode).toBeUndefined();
+    expect(result.entries[0].versionIds.sort()).toEqual(["tlou-s01e01", "tlou-s01e02"]);
   });
 
   test("does not merge same-title content with different canonical identities", () => {
