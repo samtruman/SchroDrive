@@ -319,7 +319,9 @@ A full Version Manager scan:
 1. reads the configured provider inventory;
 2. expands recursive file trees;
 3. fingerprints supported media files;
-4. enriches identity and recoverability evidence;
+4. enriches identity and recoverability evidence, including the configured
+   Radarr/Sonarr identity parsers when an ARR endpoint and API key are
+   available;
 5. evaluates all active profiles;
 6. persists a valid snapshot and audit counts.
 
@@ -369,7 +371,8 @@ overrides take precedence over weak title matching. Evidence may include:
 - Plex/Jellyfin metadata and provider IDs when configured;
 - TMDb search and canonical identity;
 - filename parsing as a fallback;
-- Radarr/Sonarr parser fallback when explicitly enabled;
+- Radarr/Sonarr parser fallback when a configured ARR endpoint and API key are
+  available (or when explicitly enabled by policy);
 - persisted manual identity overrides.
 
 Movie and episode identities are never merged solely because their titles look
@@ -390,6 +393,21 @@ assignment.
 The identity picker can search TMDb and apply or clear a manual override. The
 override reevaluates the latest cached records and does not start a provider
 rescan.
+
+#### ARR identity enrichment and review grouping
+
+When Radarr or Sonarr is configured with a reachable endpoint and API key, the
+scan automatically attempts ARR identity resolution; the persisted policy flag
+is not required for this availability-based path. TMDb remains the fallback
+when ARR cannot resolve an item. A record is considered canonically identified
+when it has a TMDb, TVDb, or IMDb ID. Records with one of those IDs are not
+forced into manual review merely because a TMDb ID is absent.
+
+Episode review items are grouped by series and season (using the canonical ID
+when available, otherwise the normalized title and year). The group retains
+all underlying version IDs, so resolving one review group does not discard
+other releases or episodes. A review remains pending only when the identity is
+ambiguous or the season/episode assignment cannot be established.
 
 ### 7. Policy model
 
