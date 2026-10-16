@@ -64,9 +64,9 @@ async function execute(job: VersionManagerScanJob): Promise<void> {
     });
     const evaluatedVersions = applyManualIdentityOverrides(versions);
 
-    updateVersionManagerScanJob(job.id, { status: "ENRICHING", phase: "identity", completed: 0, total: evaluatedVersions.length });
-    await probeVersionRecords(evaluatedVersions);
     const policy = getVersionManagerPolicy();
+    const profiles = getVersionProfiles();
+    updateVersionManagerScanJob(job.id, { status: "ENRICHING", phase: "identity", completed: 0, total: evaluatedVersions.length });
     await enrichVersionMetadata(evaluatedVersions, {
       // ARR identity parsing is automatic whenever the corresponding ARR
       // endpoints are configured. The persisted toggle remains a supported
@@ -80,8 +80,19 @@ async function execute(job: VersionManagerScanJob): Promise<void> {
       }),
     });
 
+    // FFprobe is deliberately demand-driven. Filename/provider metadata is
+    // sufficient for single-version content; only logical groups with an
+    // actual choice incur remote file access. Probe results remain cached.
+    const comparisonIds = new Set(
+      evaluateVersionGroups(evaluatedVersions, profiles, policy)
+        .filter((group) => group.versions.length > 1)
+        .flatMap((group) => group.versions.map((version) => version.id)),
+    );
+    const comparisonVersions = evaluatedVersions.filter((version) => comparisonIds.has(version.id));
+    updateVersionManagerScanJob(job.id, { status: "ENRICHING", phase: "technical-comparison", completed: 0, total: comparisonVersions.length });
+    await probeVersionRecords(comparisonVersions);
+
     updateVersionManagerScanJob(job.id, { status: "EVALUATING", phase: "policy", completed: 0, total: evaluatedVersions.length });
-    const profiles = getVersionProfiles();
     const groups = evaluateVersionGroups(evaluatedVersions, profiles, policy);
 
     const finalReadiness = readinessError(await getConfiguredMountReadiness([job.providerId]));

@@ -21,11 +21,15 @@ export interface UnifiedReviewEntry {
   recoverability?: { status: "RECOVERABLE" | "NOT_RECOVERABLE" | "UNKNOWN"; sources: string[] };
   identityResolutionStatus?: string;
   organizerReview?: OrganizerReviewEntry;
+  organizerReviews: OrganizerReviewEntry[];
   /** Compatibility projection used by the existing Review detail/actions. */
   review?: OrganizerReviewEntry;
   parsed?: OrganizerReviewEntry["parsed"];
   sourceBasename?: string;
   sourcePath?: string;
+  sourcePaths: string[];
+  episodes: number[];
+  identityEvidence?: { method: "organizer_override" | "canonical_snapshot" | "filename_fallback"; canonical: boolean; source: string };
   decision?: OrganizerReviewEntry["decision"];
   versionGroupId?: string;
   versionIds: string[];
@@ -120,6 +124,10 @@ function mergeEntry(entries: Map<string, UnifiedReviewEntry>, value: UnifiedRevi
   current.blockers = [...new Set([...current.blockers, ...value.blockers])];
   current.versionIds = [...new Set([...current.versionIds, ...value.versionIds])];
   current.allowedActions = [...new Set([...current.allowedActions, ...value.allowedActions])];
+  current.organizerReviews = [...current.organizerReviews, ...value.organizerReviews]
+    .filter((entry, index, all) => all.findIndex((candidate) => candidate.id === entry.id) === index);
+  current.sourcePaths = [...new Set([...current.sourcePaths, ...value.sourcePaths])];
+  current.episodes = [...new Set([...current.episodes, ...value.episodes])].sort((left, right) => left - right);
   if (!current.organizerReview && value.organizerReview) {
     current.organizerReview = value.organizerReview;
     current.review = value.review;
@@ -177,6 +185,8 @@ function makeOrganizerEntry(entry: OrganizerReviewEntry): UnifiedReviewEntry {
     season: identity.season, episode: aggregateEpisodeReview ? undefined : identity.episode, issueTypes: ["IDENTITY_ISSUE"], reasonCodes: [entry.parsed.reason || entry.parsed.status],
     blockers: [entry.parsed.reason || "Manual identity review required"], identityResolutionStatus: entry.override ? "resolved" : entry.parsed.status,
     organizerReview: entry, review: entry, parsed: entry.parsed, sourceBasename: entry.sourceBasename, sourcePath: entry.sourcePath,
+    organizerReviews: [entry], sourcePaths: [entry.sourcePath], episodes: identity.episode === undefined ? [] : [identity.episode],
+    identityEvidence: { method: entry.override ? "organizer_override" : "filename_fallback", canonical: Boolean(identity.tmdbId || identity.imdbId || identity.tvdbId), source: entry.override ? "manual organizer override" : "filename parser" },
     decision: entry.decision, versionIds: [], allowedActions: entry.decision === "dismissed" ? ["RESTORE_TO_REVIEW", "DETAILS"] : ["RESOLVE_IDENTITY", "ACCEPT_AS_DETECTED", "DISMISS", "RETRY", "DETAILS"],
     allowIdentityActions: true,
   };
@@ -248,6 +258,9 @@ export function buildUnifiedReviewQueue(groups: VersionGroup[], organizerReviews
       policyDecision: "REVIEW", recoverability: { status: state, sources }, identityResolutionStatus: identityStatus, versionGroupId: group.id,
       decision: dismissed ? "dismissed" : "pending", versionIds: reviewVersions.map((version) => version.id),
       allowedActions: dismissed ? ["RESTORE_TO_REVIEW", "DETAILS"] : hasIdentity ? ["RESOLVE_IDENTITY", "DISMISS", "DETAILS"] : ["DISMISS", "DETAILS"], allowIdentityActions: hasIdentity,
+      organizerReviews: [], sourcePaths: reviewVersions.map((version) => version.fingerprint.storage.path).filter((value): value is string => Boolean(value)),
+      episodes: group.identity.episode === undefined ? [] : [group.identity.episode],
+      identityEvidence: { method: "canonical_snapshot", canonical: Boolean(group.identity.tmdbId || group.identity.imdbId || group.identity.tvdbId), source: group.identity.source || "version snapshot" },
     });
   }
   const result = [...entries.values()];

@@ -181,6 +181,43 @@ describe("Arr library path reconciliation", () => {
     }
   });
 
+  test("uses a unique Sonarr title before TMDb even when the episode year differs from the series year", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "arr-series-year-"));
+    try {
+      const source = path.join(root, "provider", "Brothers.2026.S01E05.mkv");
+      const oldDir = path.join(root, "organized", "TV", "Brothers", "Season 01");
+      const arrDir = path.join(root, "organized", "TV", "Brothers (2025)");
+      const oldLink = path.join(oldDir, path.basename(source));
+      const newLink = path.join(arrDir, "Season 01", path.basename(source));
+      await mkdir(path.dirname(source), { recursive: true });
+      await mkdir(oldDir, { recursive: true });
+      await writeFile(source, "fixture");
+      await symlink(path.relative(oldDir, source), oldLink);
+
+      config.organizedBase = path.join(root, "organized");
+      config.providerReconciliationRadarrUrl = "";
+      config.providerReconciliationRadarrApiKey = "";
+      config.providerReconciliationSonarrUrl = "http://sonarr.fixture";
+      config.providerReconciliationSonarrApiKey = "fixture-key";
+
+      let tmdbCalls = 0;
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/v3/series")) return new Response(JSON.stringify([{ id: 72, title: "Brothers", year: 2025, tmdbId: 250203, path: arrDir }]), { status: 200 });
+        if (url.includes("api.themoviedb.org")) tmdbCalls++;
+        return new Response(JSON.stringify({ id: 1, status: "queued" }), { status: 201 });
+      }) as typeof fetch;
+
+      const result = await reconcileOrganizedLibraryWithArr();
+      expect(result).toMatchObject({ moved: 1, unresolved: 0 });
+      expect(tmdbCalls).toBe(0);
+      expect((await lstat(newLink)).isSymbolicLink()).toBe(true);
+      await expect(lstat(oldLink)).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
 
 
 

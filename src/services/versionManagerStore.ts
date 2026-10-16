@@ -165,7 +165,7 @@ export function getLatestVersionManagerRecords(providerId?: string): VersionReco
 }
 
 export type VersionManagerScanStatus = "IDLE" | "SCANNING" | "ENRICHING" | "EVALUATING" | "PERSISTING" | "COMPLETED" | "PARTIAL" | "FAILED";
-export type VersionManagerScanPhase = "idle" | "provider_listing" | "file_tree" | "fingerprint" | "identity" | "policy" | "persistence";
+export type VersionManagerScanPhase = "idle" | "provider_listing" | "file_tree" | "fingerprint" | "identity" | "technical-comparison" | "policy" | "persistence";
 
 export interface VersionManagerScanJob {
   id: string;

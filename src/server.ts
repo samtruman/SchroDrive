@@ -34,7 +34,7 @@ import { getBlacklistEntries, getBlacklistCount, addToBlacklist, removeFromBlack
 import { tokenRotator } from "./core/tokenRotator";
 import { clearOrganizerReviewOverride, decideOrganizerReview, filterOrganizerReviewsByParserStatus, listOrganizerReviewAudit, listOrganizerReviews, retryOrganizerReview, validateReviewOverride } from "./services/organizerReview";
 import { browseMountedFilesystem, FilesystemBrowserError } from "./core/filesystemBrowser";
-import { evaluateVersionGroups, validateRule, validateScoringRules, versionManagerPolicyHash, type VersionRecord } from "./services/versionManager";
+import { evaluateVersionGroups, normalizeRankingWeights, validateRule, validateScoringRules, versionManagerPolicyHash, type VersionRecord } from "./services/versionManager";
 import { loadMediaManagerInventory, type MediaManagerInventoryStats } from "./services/mediaManagerInventory";
 import { deriveAcquisitionNeeds } from "./services/acquisition";
 import { SeerrAcquisitionAdapter } from "./services/seerrAcquisitionAdapter";
@@ -346,7 +346,7 @@ export function startServer() {
       const profiles = req.body.profiles.map((profile: any) => ({ ...profile, arrProfiles: profile.arrProfiles ? {
         movie: profile.arrProfiles.movie ? { ...profile.arrProfiles.movie, provider: "radarr" } : undefined,
         tv: profile.arrProfiles.tv ? { ...profile.arrProfiles.tv, provider: "sonarr" } : undefined,
-      } : undefined, hardRequirements: profile.hardRequirements ? validateRule(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? validateScoringRules(profile.scoringRules) : undefined }));
+      } : undefined, rankingWeights: normalizeRankingWeights(profile.rankingWeights), hardRequirements: profile.hardRequirements ? validateRule(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? validateScoringRules(profile.scoringRules) : undefined }));
       const policy = { ...getVersionManagerPolicy(), ...(req.body.policy || {}), safety: { ...getVersionManagerPolicy().safety, ...(req.body.policy?.safety || {}) } };
       const records = applyManualIdentityOverrides(getLatestVersionManagerRecords(provider.id));
       const current = evaluateVersionGroups(records, getVersionProfiles(), getVersionManagerPolicy());
@@ -862,7 +862,7 @@ export function startServer() {
   app.put("/api/version-manager/profiles", (req, res) => {
     try {
       if (!Array.isArray(req.body?.profiles) || req.body.profiles.length === 0) return res.status(400).json({ ok: false, error: "profiles must be a non-empty array" });
-      const profiles = req.body.profiles.map((profile: any) => ({ ...profile, hardRequirements: profile.hardRequirements ? validateRule(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? validateScoringRules(profile.scoringRules) : undefined }));
+      const profiles = req.body.profiles.map((profile: any) => ({ ...profile, rankingWeights: normalizeRankingWeights(profile.rankingWeights), hardRequirements: profile.hardRequirements ? validateRule(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? validateScoringRules(profile.scoringRules) : undefined }));
       const policy: ReturnType<typeof getVersionManagerPolicy> = {
         acquisitionMode: req.body.policy?.acquisitionMode === "NATIVE" ? "NATIVE" : "ARR",
         enableRemote: req.body.policy?.enableRemote === true,
@@ -917,6 +917,26 @@ export function startServer() {
     const offset = Math.max(0, Number(req.query.offset) || 0);
     const all = filterOrganizerReviewsByParserStatus(listOrganizerReviews(includeResolved, status), parserStatus);
     res.json({ ok: true, entries: all.slice(offset, offset + limit), total: all.length, limit, offset });
+  });
+
+  /** Applies one auditable decision to every organizer row represented by an aggregated review card. */
+  app.post('/api/organizer/review/batch', (req, res) => {
+    const ids: string[] = Array.isArray(req.body?.ids)
+      ? Array.from(new Set<string>((req.body.ids as unknown[]).filter((value: unknown): value is string => typeof value === 'string' && /^review_[a-f0-9]{64}$/.test(value))))
+      : [];
+    if (!ids.length) return res.status(400).json({ ok: false, error: 'At least one valid review id is required' });
+    const known = new Set(listOrganizerReviews(true).map((entry) => entry.id));
+    if (ids.some((id) => !known.has(id))) return res.status(409).json({ ok: false, error: 'One or more review entries are no longer available; refresh Review' });
+    if (req.body?.action === 'retry') {
+      return res.json({ ok: true, entries: ids.map(retryOrganizerReview).filter(Boolean) });
+    }
+    const decision = req.body?.decision;
+    if (decision !== 'accepted' && decision !== 'dismissed') return res.status(400).json({ ok: false, error: 'decision must be accepted or dismissed' });
+    let override;
+    try { override = validateReviewOverride(req.body?.override); }
+    catch (err: any) { return res.status(400).json({ ok: false, error: err?.message || 'Invalid override' }); }
+    if (decision === 'accepted' && !override) return res.status(400).json({ ok: false, error: 'A canonical identity is required before accepting an aggregated review' });
+    return res.json({ ok: true, entries: ids.map((id) => decideOrganizerReview(id, decision, override)).filter(Boolean) });
   });
 
   /** GET /api/organizer/review/:id — Returns one review entry. */

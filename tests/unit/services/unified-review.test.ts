@@ -109,6 +109,9 @@ describe("unified Media Manager review queue", () => {
     const result = buildUnifiedReviewQueue([], [first, second]);
     expect(result.entries).toHaveLength(1);
     expect(result.entries[0].episode).toBeUndefined();
+    expect(result.entries[0].episodes).toEqual([3, 4]);
+    expect(result.entries[0].organizerReviews.map((entry) => entry.id).sort()).toEqual(["brothers-e03", "brothers-e04"]);
+    expect(result.entries[0].sourcePaths).toHaveLength(2);
   });
 
   test("aggregates canonical episodes from the same series and season", () => {
@@ -117,6 +120,7 @@ describe("unified Media Manager review queue", () => {
     const result = buildUnifiedReviewQueue([first, second]);
     expect(result.entries).toHaveLength(1);
     expect(result.entries[0].episode).toBeUndefined();
+    expect(result.entries[0].episodes).toEqual([1, 2]);
     expect(result.entries[0].versionIds.sort()).toEqual(["tlou-s01e01", "tlou-s01e02"]);
   });
 

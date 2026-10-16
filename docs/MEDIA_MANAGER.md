@@ -602,6 +602,7 @@ Policy and identity:
 - POST /api/version-manager/identity/override
 - POST /api/version-manager/review/:key
 - POST /api/version-manager/missing/:key
+- POST /api/organizer/review/batch
 
 Actions and migration:
 
@@ -717,3 +718,41 @@ The Media Manager becomes fully actionable only when the required inventory
 scope is ready. This preserves the correctness of Missing, Review, Delete
 Candidates, season-pack comparison, and duplicate analysis while keeping the
 mount and general SchroDrive UI available during startup.
+
+## Comparison evidence, duplicate coverage and grouped review
+
+Technical probing is demand-driven. Filename/provider metadata is used for
+single-version content. `ffprobe` is invoked only for logical groups containing
+multiple competing versions, and its result is cached by stable path and size.
+Every winner and loser exposes profile eligibility, total score, score
+breakdown, probe status/tool and measured bitrate when available. Unknown or
+unavailable evidence remains explicit and is never presented as an FFprobe
+result.
+
+Base resolution, source, codec, audio, Atmos, HDR, HDR10+ and Dolby Vision
+weights are persisted profile settings editable in the GUI and included in the
+policy hash. Structured advanced scoring rules remain additive.
+
+Policy Delete defaults to **All duplicates and review items**. Operators can
+filter to physically eliminable items, protected items, pack-protected items,
+identity review, or incomplete/provider-unavailable items. The full view must
+not hide a duplicate merely because deleting its physical ProviderItem is
+unsafe.
+
+A season pack is one physical unit. When retained standalone episodes cover
+every episode in the pack, normal profile/size ranking can retain the singles
+and propose the pack. When singles are incomplete, the pack survives and
+overlapping singles become candidates even if an individual single scores
+higher; otherwise both physical releases would remain while the pack cannot be
+removed.
+
+Organizer review entries for the same series and season form one UI task. The
+task lists every episode and source path, displays identity provenance, and
+applies retry, dismiss, or canonical matching to all represented rows. A raw
+filename detection cannot be accepted without a canonical identity.
+
+ARR reconciliation is authoritative whenever Radarr/Sonarr are configured. It
+matches primary and alternate ARR titles first. A Sonarr series title match
+does not reject a later episode because its release year differs from the
+series premiere year. TMDb search is only the fallback; unresolved items remain
+in Media Manager review.

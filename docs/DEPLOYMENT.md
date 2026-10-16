@@ -314,6 +314,28 @@ build identity. A release is not complete while required code exists only in a
 container layer, validation directory, uncommitted worktree, or host-mounted
 build directory.
 
+### Automated release invariants
+
+`scripts/deploy-schrodrive.sh` is the only supported production release path on
+the SAM server. It enforces these invariants before replacing the service:
+
+- host name and architecture must match the configured x86_64 target;
+- the source worktree must be clean and have at least 12 GiB free;
+- typecheck, the complete backend test suite and both builds must pass;
+- the image build fails if APT fails; `ffmpeg`, `ffprobe` and `rclone` must be
+  executable inside the completed image;
+- persistent `compose-active.yml` is backed up and atomically updated to the
+  immutable source-SHA image tag; temporary Compose overrides are forbidden;
+- any failure after the Compose update restores the saved Compose file and
+  recreates the previous SchroDrive service;
+- backend, frontend, runtime commit, provider browse, mount and Audit Cleanup
+  are checked before success is reported;
+- the effective container image and the image in persistent Compose must match;
+- only the active image and one known rollback image are retained by default.
+
+A successful one-off container start is not a deployment. The release is valid
+only when a normal Compose recreation uses the same build.
+
 
 ## Integration test target
 

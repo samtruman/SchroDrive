@@ -5,8 +5,9 @@ import { parseMediaFilename } from "./mediaParser";
 import { recordOrganizerReview, resolveOrganizerReviewAutomatically } from "./organizerReview";
 import { searchTmdb } from "./tmdbService";
 
-type ArrMovie = { id?: number; title?: string; year?: number; tmdbId?: number | string; path?: string };
-type ArrSeries = { id?: number; title?: string; year?: number; tmdbId?: number | string; path?: string };
+type ArrAlternateTitle = string | { title?: string };
+type ArrMovie = { id?: number; title?: string; originalTitle?: string; alternateTitles?: ArrAlternateTitle[]; year?: number; tmdbId?: number | string; imdbId?: string; path?: string };
+type ArrSeries = { id?: number; title?: string; alternateTitles?: ArrAlternateTitle[]; year?: number; tmdbId?: number | string; tvdbId?: number | string; imdbId?: string; path?: string };
 
 type Candidate = {
   source: string;
@@ -131,10 +132,15 @@ function findArrRecordByTitle(candidate: Candidate, records: Array<ArrMovie | Ar
   const candidateTitle = normalizeArrTitle(candidate.title || "");
   if (!candidateTitle) return undefined;
   const matches = records.filter((item) => {
-    if (normalizeArrTitle(item.title || "") !== candidateTitle) return false;
+    const aliases = [item.title, "originalTitle" in item ? item.originalTitle : undefined, ...(item.alternateTitles || []).map((value) => typeof value === "string" ? value : value.title)]
+      .filter((value): value is string => Boolean(value))
+      .map(normalizeArrTitle);
+    if (!aliases.includes(candidateTitle)) return false;
     // A known year must agree when ARR provides one. Missing ARR metadata is
-    // tolerated because older imports may not expose the year.
-    return !candidate.year || !item.year || Number(item.year) === candidate.year;
+    // tolerated because older imports may not expose the year. Episode release
+    // years frequently differ from the series premiere year, so Sonarr title
+    // identity remains authoritative when the alias match is unique.
+    return candidate.category === "series" || !candidate.year || !item.year || Number(item.year) === candidate.year;
   });
   // Do not guess when two regional variants or same-title entries are configured.
   return matches.length === 1 ? matches[0] : undefined;

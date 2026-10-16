@@ -26,6 +26,8 @@ CURL_MAX_TIME="${SCHRODRIVE_CURL_MAX_TIME:-8}"
 STARTUP_ATTEMPTS="${SCHRODRIVE_STARTUP_ATTEMPTS:-30}"
 STARTUP_DELAY="${SCHRODRIVE_STARTUP_DELAY:-2}"
 STARTUP_TIMEOUT="${SCHRODRIVE_STARTUP_TIMEOUT:-180}"
+IMAGE_RETENTION="${SCHRODRIVE_IMAGE_RETENTION:-2}"
+MIN_FREE_KIB="${SCHRODRIVE_MIN_FREE_KIB:-12582912}"
 SHORT_SHA="$(git -C "$ROOT" rev-parse --short=12 HEAD)"
 FULL_SHA="$(git -C "$ROOT" rev-parse HEAD)"
 BUILD_TIME="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -60,6 +62,11 @@ if grep -qE 'validation-runtime|/app/web/\.next|/app/dist' "$COMPOSE_FILE"; then
   echo "remove validation-runtime and host build mounts before deploying" >&2
   exit 1
 fi
+free_kib="$(df -Pk "$ROOT" | awk 'NR==2 {print $4}')"
+if ! [[ "$free_kib" =~ ^[0-9]+$ ]] || (( free_kib < MIN_FREE_KIB )); then
+  echo "insufficient free space for a safe build: ${free_kib:-unknown} KiB available, ${MIN_FREE_KIB} KiB required" >&2
+  exit 1
+fi
 
 echo "== SchroDrive deployment validation =="
 echo "checkout: $FULL_SHA"
@@ -88,13 +95,56 @@ mkdir -p "$BACKUP"
 cp -a "$COMPOSE_FILE" "$BACKUP/compose-active.yml"
 
 docker build   --build-arg SCHRODRIVE_BUILD_COMMIT="$FULL_SHA"   --build-arg SCHRODRIVE_BUILD_TIME="$BUILD_TIME"   --build-arg SCHRODRIVE_IMAGE="$IMAGE"   -t "$IMAGE" "$ROOT"
-OVERRIDE="$(mktemp)"
-trap 'rm -f "$OVERRIDE"' EXIT
-cat > "$OVERRIDE" <<EOF
-services:
-  schrodrive:
-    image: $IMAGE
-EOF
+for required_tool in ffmpeg ffprobe rclone; do
+  docker run --rm --entrypoint /bin/sh "$IMAGE" -lc "command -v $required_tool >/dev/null" || {
+    echo "built image is missing required runtime tool: $required_tool" >&2
+    exit 1
+  }
+done
+
+previous_image="$(docker inspect --format '{{.Config.Image}}' schrodrive 2>/dev/null || true)"
+rollback_required=0
+rollback() {
+  exit_code=$?
+  if (( rollback_required == 1 )); then
+    echo "deployment failed; restoring compose source and previous SchroDrive image" >&2
+    cp -a "$BACKUP/compose-active.yml" "$COMPOSE_FILE"
+    docker compose -f "$COMPOSE_FILE" up -d --no-deps --force-recreate schrodrive >/dev/null 2>&1 || true
+  fi
+  exit "$exit_code"
+}
+trap rollback ERR
+
+python3 - "$COMPOSE_FILE" "$IMAGE" <<'PY'
+import os
+import re
+import sys
+import tempfile
+
+path, image = sys.argv[1:]
+text = open(path, encoding="utf-8").read()
+pattern = re.compile(r"(?ms)^(\s{2}schrodrive:\s*\n)(.*?)(?=^\s{2}[A-Za-z0-9_.-]+:\s*\n|\Z)")
+match = pattern.search(text)
+if not match:
+    raise SystemExit("compose service schrodrive was not found")
+body = match.group(2)
+if re.search(r"(?m)^\s{4}image:\s*", body):
+    body = re.sub(r"(?m)^\s{4}image:\s*.*$", f"    image: {image}", body, count=1)
+else:
+    body = f"    image: {image}\n" + body
+updated = text[:match.start()] + match.group(1) + body + text[match.end():]
+fd, temporary = tempfile.mkstemp(prefix=".compose-active.", dir=os.path.dirname(path), text=True)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(updated)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(temporary, path)
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
+PY
+rollback_required=1
 
 # The production container may have been created by the historical CineCircle
 # compose project rather than by this checkout.  Compose cannot replace a
@@ -117,7 +167,8 @@ fi
 # release pipeline owns only SchroDrive; recreating or creating Prowlarr,
 # Seerr, and the other integrations here can conflict with their independently
 # managed containers.  Keep the replacement scoped to this service.
-docker compose -f "$COMPOSE_FILE" -f "$OVERRIDE" up -d --no-deps --force-recreate schrodrive
+docker compose -f "$COMPOSE_FILE" config >/dev/null
+docker compose -f "$COMPOSE_FILE" up -d --no-deps --force-recreate schrodrive
 
 probe() {
   curl -fsS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" "$1" >/dev/null
@@ -233,11 +284,50 @@ for key in ("commit", "runtimeCommit", "frontendCommit"):
         raise SystemExit(f"frontend build identity mismatch for {key}: expected {expected}, got {payload}")
 PY
 
+effective_image="$(docker inspect --format '{{.Config.Image}}' schrodrive)"
+if [[ "$effective_image" != "$IMAGE" ]]; then
+  echo "runtime image mismatch: expected $IMAGE, got $effective_image" >&2
+  exit 1
+fi
+compose_image="$(docker compose -f "$COMPOSE_FILE" config | awk '/^[[:space:]]+schrodrive:/{service=1; next} service && /^[[:space:]]+image:/{print $2; exit} service && /^[[:space:]]{2}[A-Za-z0-9_.-]+:/{exit}')"
+if [[ "$compose_image" != "$IMAGE" ]]; then
+  echo "compose source image mismatch: expected $IMAGE, got ${compose_image:-missing}" >&2
+  exit 1
+fi
+
 if ! curl -fsS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" \
   "http://127.0.0.1:$WEB_PORT/media-manager/audit-cleanup" | grep -q "Audit Cleanup"; then
   echo "audit-cleanup GUI route check failed" >&2
   exit 1
 fi
+
+# Keep the active image and one previous deploy image for rollback.  Without
+# this retention step every deploy leaves a full tagged image behind and the
+# Docker filesystem eventually fills up.  This runs only after every health,
+# build-identity, mount and GUI check has passed.
+if ! [[ "$IMAGE_RETENTION" =~ ^[2-9][0-9]*$ ]]; then
+  echo "SCHRODRIVE_IMAGE_RETENTION must be an integer >= 2" >&2
+  exit 1
+fi
+mapfile -t deploy_images < <(docker image ls --filter 'reference=schrodrive:deploy-*' --format '{{.Repository}}:{{.Tag}} {{.CreatedAt}}' | sort -rk2,3 | awk '{print $1}')
+keep_images=("$IMAGE")
+if [[ -n "$previous_image" && "$previous_image" == schrodrive:deploy-* && "$previous_image" != "$IMAGE" ]]; then
+  keep_images+=("$previous_image")
+fi
+for candidate in "${deploy_images[@]}"; do
+  (( ${#keep_images[@]} >= IMAGE_RETENTION )) && break
+  [[ " ${keep_images[*]} " == *" $candidate "* ]] || keep_images+=("$candidate")
+done
+if (( ${#deploy_images[@]} > ${#keep_images[@]} )); then
+  echo "Pruning ${#deploy_images[@]} SchroDrive deploy images to retention=$IMAGE_RETENTION"
+  for obsolete_image in "${deploy_images[@]}"; do
+    [[ " ${keep_images[*]} " == *" $obsolete_image "* ]] && continue
+    docker image rm "$obsolete_image" || echo "warning: unable to remove $obsolete_image" >&2
+  done
+fi
+
+rollback_required=0
+trap - ERR
 
 echo "Deploy passed."
 echo "build:  $FULL_SHA"

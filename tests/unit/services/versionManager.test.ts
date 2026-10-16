@@ -34,6 +34,7 @@ describe("version manager", () => {
     expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash(policy, [{ ...base, scoringRules: [{ ...base.scoringRules![0], field: "source" }] }]));
     expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash(policy, [{ ...base, enabled: false }]));
     expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash(policy, [{ ...base, priority: 11 }]));
+    expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash(policy, [{ ...base, rankingWeights: { resolution: 80, source: 20, codec: 15, audio: 15, atmos: 3, hdr: 4, hdr10Plus: 6, dolbyVision: 8 } }]));
     expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash(policy, [{ ...base, hardRequirements: { op: "COMPARE", field: "hdr", operator: "equals", value: true } }]));
     expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash(policy, [{ ...base, languagePolicy: { ...base.languagePolicy, required: { values: ["ita"], mode: "ANY" } } }]));
     expect(versionManagerPolicyHash(policy, [base])).not.toBe(versionManagerPolicyHash({ ...policy, enableRemote: true }, [base]));

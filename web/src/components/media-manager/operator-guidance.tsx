@@ -7,7 +7,7 @@ export function ReviewActionGuide() {
     <h2 className="mb-2 font-semibold">What can I do here?</h2>
     <dl className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
       <div><dt className="font-medium">Resolve Identity</dt><dd className="text-muted-foreground">Search TMDb and confirm the correct film or series when detection is wrong or uncertain.</dd></div>
-      <div><dt className="font-medium">Accept as detected</dt><dd className="text-muted-foreground">Approve the displayed identity without correcting it. Use only when it is correct; the organizer may then continue processing it.</dd></div>
+      <div><dt className="font-medium">Confirm association</dt><dd className="text-muted-foreground">After choosing a canonical TMDb result, apply the same association to every episode shown in the grouped review.</dd></div>
       <div><dt className="font-medium">Dismiss</dt><dd className="text-muted-foreground">Remove the organizer task from Pending without deleting media. Find it under Dismissed and restore it later.</dd></div>
       <div><dt className="font-medium">Retry / Resume</dt><dd className="text-muted-foreground">Return the task to the organizer workflow after fixing its cause. This does not select a different identity.</dd></div>
       <div><dt className="font-medium">Details</dt><dd className="text-muted-foreground">Open identity, filenames, versions and reasons in a dialog. Viewing details changes nothing.</dd></div>
@@ -71,10 +71,14 @@ function VersionRow({ version }: { version: any }) {
   const season = identity.season ?? version.season;
   const episode = identity.episode ?? version.episode;
   const episodeLabel = season !== undefined && episode !== undefined ? `S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}` : undefined;
+  const evaluations = version.evaluations || [];
+  const probe = fp.probe || {};
   return <div className="px-3 py-2">
     <p className="break-words">{episodeLabel ? `${episodeLabel} · ` : ""}{name}</p>
     <p className="text-xs text-muted-foreground">{[video.resolution, fp.release?.source, video.codec, video.dolbyVision ? "Dolby Vision" : video.hdr10 ? "HDR10" : video.dynamicRange, languages, size].filter(Boolean).join(" · ")}</p>
     <p className="mt-1 text-xs">{reasons(version)}</p>
+    {evaluations.map((evaluation: any) => <p key={evaluation.profileId} className="mt-1 text-xs text-muted-foreground">{evaluation.profileId}: {evaluation.eligible ? "eligible" : "not eligible"} · score {evaluation.score ?? Object.values(evaluation.breakdown || {}).reduce((sum: number, value: any) => sum + Number(value || 0), 0)} · {Object.entries(evaluation.breakdown || {}).map(([key, value]) => `${key} ${value}`).join(", ") || "no scoring evidence"}</p>)}
+    <p className="mt-1 text-xs text-muted-foreground">Technical evidence: {probe.status || "not requested"} via {probe.tool || "filename"}{video.bitrate ? ` · video bitrate ${Math.round(Number(video.bitrate) / 1000)} kbps` : ""}{probe.error ? ` · ${probe.error}` : ""}</p>
   </div>;
 }
 

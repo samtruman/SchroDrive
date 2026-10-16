@@ -160,7 +160,7 @@ describe("physical delete impact projection", () => {
     expect(buildDeleteImpact(groups, "", "protected").some((item) => item.providerItemId === "season-pack" && item.state === "BLOCKED")).toBe(true);
   });
 
-  test("does not let a lower-resolution pack override a higher-resolution separate version", () => {
+  test("retains an incomplete lower-resolution pack and removes overlapping standalone episodes", () => {
     const packE01 = version("pack-e01", "season-pack", "DELETE_CANDIDATE", "Quality show", { kind: "episode", season: 1, episode: 1, normalizedTitle: "quality show" });
     const packE02 = version("pack-e02", "season-pack", "REVIEW", "Quality show", { kind: "episode", season: 1, episode: 2, normalizedTitle: "quality show" });
     const singleE01 = version("single-e01", "single-e01", "KEEP", "Quality show", { kind: "episode", season: 1, episode: 1, normalizedTitle: "quality show" });
@@ -172,10 +172,11 @@ describe("physical delete impact projection", () => {
       group("e02", { title: "Quality show", normalizedTitle: "quality show", kind: "episode", season: 1, episode: 2 }, [packE02]),
     ];
     const all = buildDeleteImpact(groups);
-    expect(all.some((item) => item.providerItemId === "single-e01")).toBe(false);
+    expect(all.some((item) => item.providerItemId === "single-e01" && item.state === "READY")).toBe(true);
+    expect(all.some((item) => item.providerItemId === "season-pack" && item.state === "BLOCKED")).toBe(true);
   });
 
-  test("does not delete a compliant standalone episode for a smaller non-compliant pack", () => {
+  test("does not keep a redundant standalone episode when an incomplete physical pack must survive", () => {
     const packE01 = version("pack-e01-language", "language-pack", "DELETE_CANDIDATE", "Language show", { kind: "episode", season: 1, episode: 1, normalizedTitle: "language show" });
     const packE02 = version("pack-e02-language", "language-pack", "REVIEW", "Language show", { kind: "episode", season: 1, episode: 2, normalizedTitle: "language show" });
     const standaloneE01 = version("single-e01-language", "single-language", "KEEP", "Language show", { kind: "episode", season: 1, episode: 1, normalizedTitle: "language show" });
@@ -188,7 +189,7 @@ describe("physical delete impact projection", () => {
       group("language-e02", { title: "Language show", normalizedTitle: "language show", kind: "episode", season: 1, episode: 2 }, [packE02]),
     ];
 
-    expect(buildDeleteImpact(groups, "", "candidates").some((item) => item.providerItemId === "single-language")).toBe(false);
+    expect(buildDeleteImpact(groups, "", "candidates").some((item) => item.providerItemId === "single-language")).toBe(true);
     expect(buildDeleteImpact(groups, "", "protected").some((item) => item.providerItemId === "language-pack" && item.state === "BLOCKED")).toBe(true);
   });
 

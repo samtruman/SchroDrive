@@ -26,7 +26,7 @@ import { ConfirmationDialog } from "./confirmation-dialog";
 import { groupLibraryPhysicalReleases, libraryGroupProfileIds, matchesLibraryFilter, matchesMissingNeed, missingNeedVersions, missingProfileNeeds, physicalReleaseEpisodeCount, sortMissingNeeds, type LibraryPhysicalRelease } from "./library-filters";
 
 type View = "overview" | "library" | "migration" | "settings" | "audit";
-type Profile = { id: string; name: string; enabled: boolean; priority?: number; description?: string; preferredResolution?: string; languagePolicy?: any; hardRequirements?: any; scoring?: Record<string, number>; scoringRules?: ScoringRule[]; sizePreference?: "LARGER" | "SMALLER" | "IGNORE"; minimumSizeDifferencePercent?: number; releaseGroupConsistency?: "DISABLED" | "SEASON"; acquisitionBehavior?: string; target?: string; arrProfiles?: { movie?: { provider?: "radarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string }; tv?: { provider?: "sonarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string } } };
+type Profile = { id: string; name: string; enabled: boolean; priority?: number; description?: string; preferredResolution?: string; languagePolicy?: any; hardRequirements?: any; scoring?: Record<string, number>; scoringRules?: ScoringRule[]; rankingWeights?: Record<string, number>; sizePreference?: "LARGER" | "SMALLER" | "IGNORE"; minimumSizeDifferencePercent?: number; releaseGroupConsistency?: "DISABLED" | "SEASON"; acquisitionBehavior?: string; target?: string; arrProfiles?: { movie?: { provider?: "radarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string }; tv?: { provider?: "sonarr"; serverId: string; qualityProfileId: string; qualityProfileName?: string } } };
 type ScoringRule = { op?: "COMPARE" | "IN" | "HAS"; field: string; operator?: string; value?: unknown; values?: unknown[]; weight: number };
 type PendingConfirmation = { title: string; description: string; context?: ReactNode; confirmLabel: string; variant?: "default" | "secondary" | "outline" | "destructive"; onConfirm: () => Promise<void> };
 type SelectedDeleteItem = { provider: string; providerItemId: string; physicalSize?: number };
@@ -153,6 +153,7 @@ async function refreshVersionManagerInventory(providerId: string): Promise<void>
 
 function IdentityResolver({
   reviewId,
+  reviewIds,
   versionGroupId,
   versionIds,
   providerId,
@@ -165,6 +166,7 @@ function IdentityResolver({
   actionLabel,
 }: {
   reviewId?: string;
+  reviewIds?: string[];
   versionGroupId?: string;
   versionIds?: string[];
   providerId?: string;
@@ -202,7 +204,7 @@ function IdentityResolver({
   }
 
   async function saveMatch() {
-    if (!selected || (!reviewId && !identity)) return;
+    if (!selected || (!reviewId && !reviewIds?.length && !identity)) return;
     setBusy(true); setMessage("");
     try {
       const override = {
@@ -210,13 +212,14 @@ function IdentityResolver({
         kind: selected.mediaType === "movie" ? "movie" : "episode", tmdbId: selected.tmdbId,
         imdbId: selected.imdbId, tvdbId: selected.tvdbId, originalLanguage: selected.originalLanguage,
       };
-      const response = await fetch(reviewId ? `/api/organizer/review/${encodeURIComponent(reviewId)}` : "/api/version-manager/identity/override", {
+      const useBatch = Boolean(reviewIds && reviewIds.length > 1);
+      const response = await fetch(useBatch ? "/api/organizer/review/batch" : reviewId ? `/api/organizer/review/${encodeURIComponent(reviewId)}` : "/api/version-manager/identity/override", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify(reviewId ? { decision: "accepted", override } : { provider: providerId, identity, versionGroupId, versionIds, override }),
+        body: JSON.stringify(useBatch ? { ids: reviewIds, decision: "accepted", override } : reviewId ? { decision: "accepted", override } : { provider: providerId, identity, versionGroupId, versionIds, override }),
       });
       const body = await readJsonResponse<any>(response, "Saving identity match");
       let evaluation = body;
-      if (reviewId && identity) {
+      if ((reviewId || reviewIds?.length) && identity) {
         const reevaluate = await fetch("/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: providerId, identity, override }) });
         evaluation = await readJsonResponse<any>(reevaluate, "Re-evaluating identity");
       }
@@ -262,7 +265,7 @@ function IdentityResolver({
         <p className="text-xs text-muted-foreground">IMDb: {candidate.imdbId || "—"} · TVDb: {candidate.tvdbId || "—"}</p>
         {candidate.overview && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{candidate.overview}</p>}
       </button>)}
-      <Button size="sm" onClick={() => setConfirmMatchOpen(true)} disabled={busy || !selected || (!reviewId && !identity)}>Confirm manual match</Button>
+      <Button size="sm" onClick={() => setConfirmMatchOpen(true)} disabled={busy || !selected || (!reviewId && !reviewIds?.length && !identity)}>Confirm manual match</Button>
       {existingOverride && <Button size="sm" variant="destructive" onClick={() => setClearMatchOpen(true)} disabled={busy}>Clear manual match</Button>}
     </div>}
     </div>}
@@ -494,7 +497,7 @@ function DetailPanel({ item, providerId, onClose, onReviewAction, onSaved }: { i
           {review && <div className="mt-4 rounded border bg-muted/20 p-3"><h3 className="mb-2 font-semibold">Detected identity</h3><p><b>Title:</b> {review.parsed?.title || "—"}</p><p><b>Type:</b> {review.parsed?.kind || "—"}</p><p><b>Status:</b> {review.parsed?.status || "—"}</p><p><b>Confidence:</b> {review.parsed?.confidence ?? "—"}</p><p><b>Reason:</b> {review.parsed?.reason || "—"}</p></div>}
           {review && <div className="mt-4 rounded border border-amber-500/40 bg-amber-500/5 p-3"><h3 className="mb-2 font-semibold">Problem and required action</h3><p>{(item.blockers || item.reasonCodes || []).join(" · ") || "The item requires operator review before an automatic decision is safe."}</p><p className="mt-1 text-xs text-muted-foreground">Identity confidence: {identity.confidence ?? "unknown"} · Recoverability: {item.recoverability?.status || "unknown"}</p><p className="mt-1 break-all text-xs text-muted-foreground">Source: {item.sourceBasename || review.sourceBasename || review.sourcePath || "not available"}</p></div>}
           {(identity.title || item.title) && (review || item.allowIdentityActions !== false) && <div className="mt-4"><h3 className="mb-2 font-semibold">Identity actions</h3><IdentityResolver reviewId={item.reviewId || review?.id} versionGroupId={item.versionGroupId} providerId={providerId} identity={{ title: identity.title || item.title, year: identity.year, kind: identity.kind, mediaType: identity.mediaType, tmdbId: identity.tmdbId }} initialQuery={identity.title || item.title} initialType={identity.kind === "episode" || identity.mediaType === "tv" ? "tv" : "movie"} initialYear={identity.year} existingOverride={item.override || review?.override || (identity.source === "manual" ? { tmdbId: identity.tmdbId } : undefined)} actionLabel={identityAction} onSaved={onSaved} /></div>}
-          {review && onReviewAction && <div className="mt-4 flex flex-wrap gap-2">{review.decision === "dismissed" ? <Button size="sm" onClick={() => onReviewAction(review.id, { action: "retry" }, review)}>Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => onReviewAction(review.id, { decision: "accepted" }, review)}>Accept as detected</Button><Button size="sm" variant="outline" onClick={() => onReviewAction(review.id, { action: "retry" }, review)}>Retry / Resume</Button><Button size="sm" variant="destructive" onClick={() => onReviewAction(review.id, { decision: "dismissed" }, review)}>Dismiss</Button></>}</div>}
+          {review && onReviewAction && <div className="mt-4 flex flex-wrap gap-2">{review.decision === "dismissed" ? <Button size="sm" onClick={() => onReviewAction(review.id, { action: "retry" }, item)}>Restore to Review</Button> : <><Button size="sm" variant="outline" onClick={() => onReviewAction(review.id, { action: "retry" }, item)}>Retry / Resume</Button><Button size="sm" variant="destructive" onClick={() => onReviewAction(review.id, { decision: "dismissed" }, item)}>Dismiss</Button></>}</div>}
         </section>
         <section>
           <h3 className="mb-2 font-semibold">Profiles</h3>
@@ -529,6 +532,8 @@ function DetailPanel({ item, providerId, onClose, onReviewAction, onSaved }: { i
                   <p className="text-xs">Release: {detail.name}</p>
                   {detail.storage.path && <p className="break-all text-xs text-muted-foreground">Path: {detail.storage.path}</p>}
                   {detail.fingerprint.subtitles?.length > 0 && <p className="text-xs text-muted-foreground">Subtitles: {[...new Set(detail.fingerprint.subtitles.map((subtitle: any) => subtitle.language).filter(Boolean))].join(", ")}</p>}
+                  {(version.evaluations || []).map((evaluation: any) => <p key={evaluation.profileId} className="mt-1 text-xs text-muted-foreground">{evaluation.profileId}: {evaluation.eligible ? "eligible" : "not eligible"} · score {evaluation.score ?? Object.values(evaluation.breakdown || {}).reduce((sum: number, value: any) => sum + Number(value || 0), 0)} · {Object.entries(evaluation.breakdown || {}).map(([key, value]) => `${key} ${value}`).join(", ") || "no score breakdown"}</p>)}
+                  <p className="mt-1 text-xs text-muted-foreground">Technical evidence: {detail.fingerprint.probe?.status || "not requested"} via {detail.fingerprint.probe?.tool || "filename"}{detail.video.bitrate ? ` · bitrate ${Math.round(Number(detail.video.bitrate) / 1000)} kbps` : ""}{detail.fingerprint.probe?.error ? ` · ${detail.fingerprint.probe.error}` : ""}</p>
                 </div>; })()
               ))
             ) : (
@@ -832,7 +837,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const [decision, setDecision] = useState("all");
   const [multipleVersions, setMultipleVersions] = useState(false);
   const [sort, setSort] = useState("title");
-  const [deleteScope, setDeleteScope] = useState("candidates");
+  const [deleteScope, setDeleteScope] = useState("all");
   const [selected, setSelected] = useState<any>(null);
   const [reviewStatus, setReviewStatus] = useState<"pending" | "dismissed" | "all">("pending");
   const [reviewIssueFilter, setReviewIssueFilter] = useState<"all" | "identity" | "recoverability">("all");
@@ -991,7 +996,11 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
     if (preset === "review") void loadReview();
   }, [loadReview, preset, reviewStatus]);
   async function reviewAction(id: string, body: Record<string, unknown>, item?: any) {
-    const endpoint = item?.organizerReview
+    const organizerIds = (item?.organizerReviews || []).map((entry: any) => entry.id).filter(Boolean);
+    const batch = organizerIds.length > 1;
+    const endpoint = batch
+      ? "/api/organizer/review/batch"
+      : item?.organizerReview
       ? `/api/organizer/review/${encodeURIComponent(id)}`
       : `/api/version-manager/review/${encodeURIComponent(id)}`;
     const response = await fetch(
@@ -999,7 +1008,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(batch ? { ...body, ids: organizerIds } : body),
       },
     );
     if (!response.ok) {
@@ -1162,7 +1171,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       )}
       {(preset === "delete" || preset === "delete-preview") && (
         <>
-          <div className="flex flex-wrap items-center gap-2"><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, release, filename or provider item…" /><select value={deleteScope} onChange={(event) => setDeleteScope(event.target.value)} className="rounded border bg-background p-2 text-sm"><option value="candidates">Delete candidates · physically eligible</option><option value="protected">Protected / Not deletable</option><option value="attention">Needs attention · policy / restore safety</option></select></div>
+          <div className="flex flex-wrap items-center gap-2"><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, release, filename or provider item…" /><select value={deleteScope} onChange={(event) => setDeleteScope(event.target.value)} className="rounded border bg-background p-2 text-sm"><option value="all">All duplicates and review items</option><option value="candidates">Eliminable · physically eligible</option><option value="protected">Protected / Not deletable</option><option value="pack-protected">Protected by season pack</option><option value="identity-review">Identity review</option><option value="incomplete">Incomplete / provider unavailable</option><option value="attention">Needs attention · policy / restore safety</option></select></div>
           <ErrorBox error={deletePreview.error || deleteImpact.error || deleteError} />
           {deleteNotice && <p className="rounded border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm">{deleteNotice}</p>}
           {deletePreview.loading ? <p className="text-sm text-muted-foreground">Evaluating policy…</p> : (
@@ -1303,7 +1312,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                   <Card>
                     <CardContent className="space-y-3 p-4">
                       <div className="flex flex-wrap items-start justify-between gap-2">
-                        <div><p className="font-medium">{entry.title || entry.sourceBasename || "Unidentified content"}{episodeLabel(entry.identity || entry) ? ` · ${episodeLabel(entry.identity || entry)}` : ""}</p><p className="break-all text-xs text-muted-foreground">{entry.year || "—"} · {entry.kind || "unknown"}{entry.sourceBasename ? ` · ${entry.sourceBasename}` : ""}</p></div>
+                        <div><p className="font-medium">{entry.title || entry.sourceBasename || "Unidentified content"}{entry.season !== undefined ? ` · Season ${entry.season}` : episodeLabel(entry.identity || entry) ? ` · ${episodeLabel(entry.identity || entry)}` : ""}</p><p className="break-all text-xs text-muted-foreground">{entry.year || "—"} · {entry.kind || "unknown"} · {(entry.organizerReviews || []).length || 1} source item(s)</p>{entry.episodes?.length > 0 && <p className="mt-1 text-xs text-muted-foreground">Episodes: {entry.episodes.map((episode: number) => `E${String(episode).padStart(2, "0")}`).join(", ")}</p>}<p className="mt-1 text-xs text-muted-foreground">Identity evidence: {entry.identityEvidence?.source || "unresolved"} · {entry.identityEvidence?.canonical ? "canonical ID available" : "canonical ID missing"}</p></div>
                         <div className="flex flex-wrap gap-1">{(entry.issueTypes || []).map((issue: string) => <StatusBadge key={issue} value={issue} />)}</div>
                       </div>
                       <p className="text-sm font-medium">{(entry.blockers || []).slice(0, 3).join(" · ") || "Review required"}</p>
@@ -1314,9 +1323,9 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                         const requirements = failedRequirementText(version);
                         return <div key={version.id} className="rounded border p-3 text-xs"><p className="break-all font-medium">{String(storage.path || version.releaseName || version.filename || version.id).split(/[\\/]/).pop()}</p><p className="mt-1 text-muted-foreground">{video.resolution || "resolution unknown"} · {video.codec || "codec unknown"} · audio {uniqueLanguages(fingerprint.audio || []) || "unknown"} · {formatSize(storage.size)} · {storage.provider || "provider unknown"} · ProviderItem {storage.torrentId || "unknown"}</p>{requirements.map((reason, index) => <p key={index} className="mt-1 text-amber-700">{reason}</p>)}</div>;
                       })}
-                      {entry.issueTypes?.includes("IDENTITY_ISSUE") && entry.decision !== "dismissed" && <IdentityResolver reviewId={entry.organizerReview?.id} versionGroupId={entry.versionGroupId} versionIds={entry.versionIds} providerId={provider.providerId} identity={entry.identity} initialQuery={entry.title || entry.sourceBasename} initialType={entry.kind === "episode" ? "tv" : "movie"} initialYear={entry.year} existingOverride={entry.organizerReview?.override} actionLabel={entry.organizerReview?.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />}
+                      {entry.issueTypes?.includes("IDENTITY_ISSUE") && entry.decision !== "dismissed" && <IdentityResolver reviewId={entry.organizerReview?.id} reviewIds={(entry.organizerReviews || []).map((item: any) => item.id)} versionGroupId={entry.versionGroupId} versionIds={entry.versionIds} providerId={provider.providerId} identity={entry.identity} initialQuery={entry.title || entry.sourceBasename} initialType={entry.kind === "episode" ? "tv" : "movie"} initialYear={entry.year} existingOverride={entry.organizerReview?.override} actionLabel={entry.organizerReview?.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />}
                       <div className="flex flex-wrap gap-2">
-                        {entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <><Button size="sm" variant="secondary" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "accepted" }, entry.organizerReview)}><Check className="mr-2 h-4 w-4" />Accept as detected</Button><Button size="sm" variant="destructive" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "dismissed" }, entry.organizerReview)}><X className="mr-2 h-4 w-4" />Dismiss</Button><Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry.organizerReview)}><RefreshCw className="mr-2 h-4 w-4" />Retry / Resume</Button></>)}
+                        {entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <><Button size="sm" variant="destructive" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "dismissed" }, entry)}><X className="mr-2 h-4 w-4" />Dismiss group</Button><Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Retry group</Button></>)}
                         {!entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.key, { action: "restore" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.key, { action: "dismiss" }, entry)}><X className="mr-2 h-4 w-4" />Dismiss</Button>)}
                         <Button size="sm" variant="ghost" onClick={() => setSelected(expanded ? null : enriched)}><ExternalLink className="mr-2 h-4 w-4" />{expanded ? "Close details" : "Details"}</Button>
                       </div>
@@ -2146,7 +2155,7 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
               <label className="grid gap-1 text-xs sm:col-span-2"><span>If required subtitles are missing</span><select className="rounded border bg-background p-2 text-sm" aria-label="Missing required subtitle action" value={subtitleLanguagePolicy.missingRequiredAction || "REVIEW"} onChange={(event) => updateLanguageTrack("subtitles", { missingRequiredAction: event.target.value })}><option value="REVIEW">Needs review</option><option value="DELETE_IF_REPLACED">Candidate only with replacement</option></select></label>
             </div></div>
           </div>}
-          <p className="text-xs text-muted-foreground">This release uses provider data and filename-derived metadata. Technical stream probing is deferred; unknown evidence stays in Review.</p>
+          <p className="text-xs text-muted-foreground">FFprobe runs only for versions that need technical comparison and reuses the persisted probe cache. Each comparison shows whether evidence came from FFprobe, provider metadata or filename parsing.</p>
         </CardContent>
       </Card>
       <div className="grid gap-4 lg:grid-cols-2">
@@ -2180,7 +2189,7 @@ function SettingsView({ section = "profiles" }: { section?: string }) {
       </div>
       <Card id="media-manager-rules" className="scroll-mt-20">
         <CardHeader><CardTitle className="text-base">Advanced rules</CardTitle></CardHeader>
-        <CardContent className="space-y-3 text-sm"><p className="text-muted-foreground">Optional expert controls for cases not covered above. Codec and source do not imply quality unless you explicitly add a rule.</p>{retentionProfile && <><details className="rounded border p-3"><summary className="cursor-pointer font-medium">Additional mandatory requirements</summary><p className="mt-2 text-xs text-muted-foreground">A failed requirement makes the version inadmissible; it cannot be rescued by ranking points.</p><div className="mt-2"><RuleBuilder node={retentionProfile.hardRequirements || { op: "AND", children: [] }} root onChange={(hardRequirements) => updateProfile(retentionProfileIndex, { hardRequirements } as any)} /></div></details><details className="rounded border p-3"><summary className="cursor-pointer font-medium">Additional ranking adjustments</summary><p className="mt-2 text-xs text-muted-foreground">Applied only after mandatory requirements pass. A weight of zero has no effect.</p><div className="mt-2 space-y-2">{(retentionProfile.scoringRules || []).map((rule, ruleIndex) => <ScoringRuleEditor key={ruleIndex} rule={rule} onChange={(next) => updateProfile(retentionProfileIndex, { scoringRules: (retentionProfile.scoringRules || []).map((item, itemIndex) => itemIndex === ruleIndex ? next : item) })} onRemove={() => updateProfile(retentionProfileIndex, { scoringRules: (retentionProfile.scoringRules || []).filter((_, itemIndex) => itemIndex !== ruleIndex) })} />)}<Button size="sm" variant="outline" onClick={() => updateProfile(retentionProfileIndex, { scoringRules: [...(retentionProfile.scoringRules || []), { op: "COMPARE", field: "resolution", operator: "equals", value: "2160p", weight: 10 }] })}>Add ranking adjustment</Button>{Object.keys(retentionProfile.scoring || {}).length > 0 && <p className="text-xs text-muted-foreground">Legacy field weights are preserved for compatibility.</p>}</div></details></>}</CardContent>
+        <CardContent className="space-y-3 text-sm"><p className="text-muted-foreground">Optional expert controls for cases not covered above. Every base weight is persisted and included in the policy hash.</p>{retentionProfile && <><details className="rounded border p-3"><summary className="cursor-pointer font-medium">Base ranking weights</summary><p className="mt-2 text-xs text-muted-foreground">These weights apply to every comparison; use Preview impact before saving.</p><div className="mt-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">{Object.entries({ resolution: 40, source: 20, codec: 15, audio: 15, atmos: 3, hdr: 4, hdr10Plus: 6, dolbyVision: 8 }).map(([key, fallback]) => <label key={key} className="grid gap-1 text-xs"><span>{key.replace(/([A-Z])/g, " $1")}</span><input className="rounded border bg-background p-2 text-sm" type="number" min="-1000" max="1000" value={retentionProfile.rankingWeights?.[key] ?? fallback} onChange={(event) => updateProfile(retentionProfileIndex, { rankingWeights: { ...(retentionProfile.rankingWeights || {}), [key]: Number(event.target.value) } })} /></label>)}</div></details><details className="rounded border p-3"><summary className="cursor-pointer font-medium">Additional mandatory requirements</summary><p className="mt-2 text-xs text-muted-foreground">A failed requirement makes the version inadmissible; it cannot be rescued by ranking points.</p><div className="mt-2"><RuleBuilder node={retentionProfile.hardRequirements || { op: "AND", children: [] }} root onChange={(hardRequirements) => updateProfile(retentionProfileIndex, { hardRequirements } as any)} /></div></details><details className="rounded border p-3"><summary className="cursor-pointer font-medium">Additional ranking adjustments</summary><p className="mt-2 text-xs text-muted-foreground">Applied only after mandatory requirements pass. A weight of zero has no effect.</p><div className="mt-2 space-y-2">{(retentionProfile.scoringRules || []).map((rule, ruleIndex) => <ScoringRuleEditor key={ruleIndex} rule={rule} onChange={(next) => updateProfile(retentionProfileIndex, { scoringRules: (retentionProfile.scoringRules || []).map((item, itemIndex) => itemIndex === ruleIndex ? next : item) })} onRemove={() => updateProfile(retentionProfileIndex, { scoringRules: (retentionProfile.scoringRules || []).filter((_, itemIndex) => itemIndex !== ruleIndex) })} />)}<Button size="sm" variant="outline" onClick={() => updateProfile(retentionProfileIndex, { scoringRules: [...(retentionProfile.scoringRules || []), { op: "COMPARE", field: "resolution", operator: "equals", value: "2160p", weight: 10 }] })}>Add ranking adjustment</Button>{Object.keys(retentionProfile.scoring || {}).length > 0 && <p className="text-xs text-muted-foreground">Legacy field weights are preserved for compatibility.</p>}</div></details></>}</CardContent>
       </Card>
       {(hasUnsavedChanges || saving || saved || saveError) && <div className="sticky bottom-4 z-10 flex flex-wrap items-center justify-end gap-3 rounded-lg border bg-background/95 p-3 shadow-lg backdrop-blur">
         {hasUnsavedChanges && <span className="text-sm text-amber-700">Unsaved retention changes</span>}
