@@ -22,28 +22,39 @@ function deleteIdentity(group) {
     };
 }
 function reasonMessages(version) {
-    return [...new Set((version.reasons || [])
-            .map((reason) => {
-            if (typeof reason === "string")
-                return reason;
-            const facts = reason.facts || {};
-            const details = [];
-            if (reason.code === "profile_winner") {
-                if (facts.profile)
-                    details.push(`profile ${String(facts.profile)}`);
-                if (typeof facts.score === "number")
-                    details.push(`score ${facts.score}`);
-                const evaluation = version.evaluations?.find((candidate) => candidate.profileId === String(facts.profile));
-                const breakdown = Object.entries(evaluation?.breakdown || {})
-                    .filter(([, value]) => Number.isFinite(Number(value)))
-                    .map(([key, value]) => `${key} ${value}`)
-                    .join(", ");
-                if (breakdown)
-                    details.push(`score breakdown: ${breakdown}`);
-            }
-            return details.length ? `${reason.message} (${details.join("; ")})` : reason.message;
-        })
-            .filter(Boolean))];
+    const messages = (version.reasons || [])
+        .map((reason) => {
+        if (typeof reason === "string")
+            return reason;
+        const facts = reason.facts || {};
+        const details = [];
+        if (reason.code === "profile_winner") {
+            if (facts.profile)
+                details.push(`profile ${String(facts.profile)}`);
+            if (typeof facts.score === "number")
+                details.push(`score ${facts.score}`);
+            const evaluation = version.evaluations?.find((candidate) => candidate.profileId === String(facts.profile));
+            const breakdown = Object.entries(evaluation?.breakdown || {})
+                .filter(([, value]) => Number.isFinite(Number(value)))
+                .map(([key, value]) => `${key} ${value}`)
+                .join(", ");
+            if (breakdown)
+                details.push(`score breakdown: ${breakdown}`);
+        }
+        return details.length ? `${reason.message} (${details.join("; ")})` : reason.message;
+    })
+        .filter(Boolean);
+    for (const evaluation of version.evaluations || []) {
+        const breakdown = Object.entries(evaluation.breakdown || {})
+            .filter(([, value]) => Number.isFinite(Number(value)))
+            .map(([key, value]) => `${key} ${value}`)
+            .join(", ");
+        const score = evaluation.score ?? Object.values(evaluation.breakdown || {}).reduce((sum, value) => sum + Number(value || 0), 0);
+        messages.push(`${evaluation.profileId}: ${evaluation.eligible ? "eligible" : "not eligible"}; score ${Math.round(score * 100) / 100}${breakdown ? `; score breakdown: ${breakdown}` : ""}`);
+    }
+    const probe = version.fingerprint.probe || { status: "not_requested", tool: "filename" };
+    messages.push(`Technical evidence: ${probe.status} via ${probe.tool}${probe.version ? ` ${probe.version}` : ""}${probe.error ? `; ${probe.error}` : ""}`);
+    return [...new Set(messages)];
 }
 function itemKey(provider, providerItemId) {
     return `${provider}:${providerItemId}`;
@@ -60,23 +71,6 @@ function resolutionValue(version) {
         return 2160;
     const match = resolution.match(/(\d{3,4})p/);
     return match ? Number(match[1]) : 0;
-}
-function episodeVersionPreference(packVersion, standaloneVersion) {
-    const packEvaluation = packVersion.evaluations?.find((evaluation) => evaluation.profileId === "primary")
-        || packVersion.evaluations?.find((evaluation) => evaluation.eligible);
-    const standaloneEvaluation = standaloneVersion.evaluations?.find((evaluation) => evaluation.profileId === "primary")
-        || standaloneVersion.evaluations?.find((evaluation) => evaluation.eligible);
-    if (packEvaluation?.eligible !== standaloneEvaluation?.eligible)
-        return packEvaluation?.eligible ? 1 : -1;
-    const packScore = Number(packEvaluation?.score ?? 0);
-    const standaloneScore = Number(standaloneEvaluation?.score ?? 0);
-    if (packScore !== standaloneScore)
-        return packScore - standaloneScore;
-    const packSize = Number(packVersion.fingerprint?.storage?.size || 0);
-    const standaloneSize = Number(standaloneVersion.fingerprint?.storage?.size || 0);
-    if (packSize !== standaloneSize)
-        return packSize - standaloneSize;
-    return resolutionValue(packVersion) - resolutionValue(standaloneVersion);
 }
 function sameEpisodeFamily(left, right) {
     const a = left.identity;
@@ -100,7 +94,13 @@ function matchesScope(item, scope) {
         return hasCandidate && item.state !== "READY";
     if (scope === "attention")
         return !hasCandidate && hasReview;
-    return true;
+    if (scope === "pack-protected")
+        return item.versions.some((version) => version.reasons?.some((reason) => /pack/i.test(reason))) || item.alternativeVersions.some((version) => version.reasons?.some((reason) => /pack/i.test(reason)));
+    if (scope === "identity-review")
+        return hasReview;
+    if (scope === "incomplete")
+        return item.reasons.some((reason) => /recoverab|only copy|unavailable|metadata/i.test(reason));
+    return hasCandidate || hasReview || item.alternativeVersions.length > 0;
 }
 /**
  * Projects the complete inventory into physical ProviderItems.
@@ -193,12 +193,11 @@ function buildDeleteImpact(groups, query = "", scope = "all") {
             if (!dominatingPack)
                 continue;
             forcedRetainedPacks.add(dominatingPack.pack.providerItemId);
-            // Coverage protects a pack that contains unique episodes, but it must
-            // not make a non-compliant or lower-quality pack displace a compliant
-            // standalone episode. Compare the matching episode, never the physical
-            // size or resolution of the whole pack.
-            if (episodeVersionPreference(dominatingPack.version, version) < 0)
-                continue;
+            // A pack with unique episodes is the physical unit that must survive.
+            // Once it is retained, overlapping standalone episodes are redundant
+            // even when one standalone file scores higher. Keeping both would leave
+            // duplicates while the pack cannot be deleted safely. Quality/size only
+            // decide between pack and singles when the singles cover every episode.
             version.decision = "DELETE_CANDIDATE";
             version.reasons = [...new Set([
                     ...(version.reasons || []),
@@ -242,7 +241,7 @@ function buildDeleteImpact(groups, query = "", scope = "all") {
         item.alternativeVersions = candidates.flatMap((candidate) => [
             ...(logicalKeepers.get(candidate.logicalKey) || []),
             ...((packAlternatives.get(candidate.logicalKey) || []).filter(({ version }) => item.providerItemId !== version.fingerprint.storage.torrentId
-                && resolutionValue(version) >= resolutionValue(candidate))),
+                && (forcedRetainedPacks.has(version.fingerprint.storage.torrentId) || resolutionValue(version) >= resolutionValue(candidate)))),
         ]
             .filter(({ version }) => itemKey(version.fingerprint.storage.provider, version.fingerprint.storage.torrentId) !== itemKey(item.provider, item.providerItemId))
             .map(({ group, version }) => ({

@@ -343,7 +343,7 @@ function startServer() {
             const profiles = req.body.profiles.map((profile) => ({ ...profile, arrProfiles: profile.arrProfiles ? {
                     movie: profile.arrProfiles.movie ? { ...profile.arrProfiles.movie, provider: "radarr" } : undefined,
                     tv: profile.arrProfiles.tv ? { ...profile.arrProfiles.tv, provider: "sonarr" } : undefined,
-                } : undefined, hardRequirements: profile.hardRequirements ? (0, versionManager_1.validateRule)(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? (0, versionManager_1.validateScoringRules)(profile.scoringRules) : undefined }));
+                } : undefined, rankingWeights: (0, versionManager_1.normalizeRankingWeights)(profile.rankingWeights), hardRequirements: profile.hardRequirements ? (0, versionManager_1.validateRule)(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? (0, versionManager_1.validateScoringRules)(profile.scoringRules) : undefined }));
             const policy = { ...(0, versionManagerStore_1.getVersionManagerPolicy)(), ...(req.body.policy || {}), safety: { ...(0, versionManagerStore_1.getVersionManagerPolicy)().safety, ...(req.body.policy?.safety || {}) } };
             const records = (0, manualIdentity_1.applyManualIdentityOverrides)((0, versionManagerStore_1.getLatestVersionManagerRecords)(provider.id));
             const current = (0, versionManager_1.evaluateVersionGroups)(records, (0, versionManagerStore_1.getVersionProfiles)(), (0, versionManagerStore_1.getVersionManagerPolicy)());
@@ -930,7 +930,7 @@ function startServer() {
         try {
             if (!Array.isArray(req.body?.profiles) || req.body.profiles.length === 0)
                 return res.status(400).json({ ok: false, error: "profiles must be a non-empty array" });
-            const profiles = req.body.profiles.map((profile) => ({ ...profile, hardRequirements: profile.hardRequirements ? (0, versionManager_1.validateRule)(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? (0, versionManager_1.validateScoringRules)(profile.scoringRules) : undefined }));
+            const profiles = req.body.profiles.map((profile) => ({ ...profile, rankingWeights: (0, versionManager_1.normalizeRankingWeights)(profile.rankingWeights), hardRequirements: profile.hardRequirements ? (0, versionManager_1.validateRule)(profile.hardRequirements) : undefined, scoringRules: profile.scoringRules ? (0, versionManager_1.validateScoringRules)(profile.scoringRules) : undefined }));
             const policy = {
                 acquisitionMode: req.body.policy?.acquisitionMode === "NATIVE" ? "NATIVE" : "ARR",
                 enableRemote: req.body.policy?.enableRemote === true,
@@ -982,6 +982,33 @@ function startServer() {
         const offset = Math.max(0, Number(req.query.offset) || 0);
         const all = (0, organizerReview_1.filterOrganizerReviewsByParserStatus)((0, organizerReview_1.listOrganizerReviews)(includeResolved, status), parserStatus);
         res.json({ ok: true, entries: all.slice(offset, offset + limit), total: all.length, limit, offset });
+    });
+    /** Applies one auditable decision to every organizer row represented by an aggregated review card. */
+    app.post('/api/organizer/review/batch', (req, res) => {
+        const ids = Array.isArray(req.body?.ids)
+            ? Array.from(new Set(req.body.ids.filter((value) => typeof value === 'string' && /^review_[a-f0-9]{64}$/.test(value))))
+            : [];
+        if (!ids.length)
+            return res.status(400).json({ ok: false, error: 'At least one valid review id is required' });
+        const known = new Set((0, organizerReview_1.listOrganizerReviews)(true).map((entry) => entry.id));
+        if (ids.some((id) => !known.has(id)))
+            return res.status(409).json({ ok: false, error: 'One or more review entries are no longer available; refresh Review' });
+        if (req.body?.action === 'retry') {
+            return res.json({ ok: true, entries: ids.map(organizerReview_1.retryOrganizerReview).filter(Boolean) });
+        }
+        const decision = req.body?.decision;
+        if (decision !== 'accepted' && decision !== 'dismissed')
+            return res.status(400).json({ ok: false, error: 'decision must be accepted or dismissed' });
+        let override;
+        try {
+            override = (0, organizerReview_1.validateReviewOverride)(req.body?.override);
+        }
+        catch (err) {
+            return res.status(400).json({ ok: false, error: err?.message || 'Invalid override' });
+        }
+        if (decision === 'accepted' && !override)
+            return res.status(400).json({ ok: false, error: 'A canonical identity is required before accepting an aggregated review' });
+        return res.json({ ok: true, entries: ids.map((id) => (0, organizerReview_1.decideOrganizerReview)(id, decision, override)).filter(Boolean) });
     });
     /** GET /api/organizer/review/:id — Returns one review entry. */
     app.get('/api/organizer/review/:id', (req, res) => {

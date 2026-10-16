@@ -51,9 +51,9 @@ async function execute(job) {
             });
         });
         const evaluatedVersions = (0, manualIdentity_1.applyManualIdentityOverrides)(versions);
-        (0, versionManagerStore_1.updateVersionManagerScanJob)(job.id, { status: "ENRICHING", phase: "identity", completed: 0, total: evaluatedVersions.length });
-        await (0, versionManagerProbe_1.probeVersionRecords)(evaluatedVersions);
         const policy = (0, versionManagerStore_1.getVersionManagerPolicy)();
+        const profiles = (0, versionManagerStore_1.getVersionProfiles)();
+        (0, versionManagerStore_1.updateVersionManagerScanJob)(job.id, { status: "ENRICHING", phase: "identity", completed: 0, total: evaluatedVersions.length });
         await (0, versionManagerMetadata_1.enrichVersionMetadata)(evaluatedVersions, {
             // ARR identity parsing is automatic whenever the corresponding ARR
             // endpoints are configured. The persisted toggle remains a supported
@@ -66,8 +66,16 @@ async function execute(job) {
                 total: progress.total,
             }),
         });
+        // FFprobe is deliberately demand-driven. Filename/provider metadata is
+        // sufficient for single-version content; only logical groups with an
+        // actual choice incur remote file access. Probe results remain cached.
+        const comparisonIds = new Set((0, versionManager_1.evaluateVersionGroups)(evaluatedVersions, profiles, policy)
+            .filter((group) => group.versions.length > 1)
+            .flatMap((group) => group.versions.map((version) => version.id)));
+        const comparisonVersions = evaluatedVersions.filter((version) => comparisonIds.has(version.id));
+        (0, versionManagerStore_1.updateVersionManagerScanJob)(job.id, { status: "ENRICHING", phase: "technical-comparison", completed: 0, total: comparisonVersions.length });
+        await (0, versionManagerProbe_1.probeVersionRecords)(comparisonVersions);
         (0, versionManagerStore_1.updateVersionManagerScanJob)(job.id, { status: "EVALUATING", phase: "policy", completed: 0, total: evaluatedVersions.length });
-        const profiles = (0, versionManagerStore_1.getVersionProfiles)();
         const groups = (0, versionManager_1.evaluateVersionGroups)(evaluatedVersions, profiles, policy);
         const finalReadiness = readinessError(await (0, mount_1.getConfiguredMountReadiness)([job.providerId]));
         if (finalReadiness)

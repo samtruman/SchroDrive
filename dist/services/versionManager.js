@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.defaultVersionManagerPolicy = exports.defaultVersionProfiles = exports.MEDIA_FILE_EXTENSIONS = void 0;
+exports.defaultVersionManagerPolicy = exports.defaultVersionProfiles = exports.MEDIA_FILE_EXTENSIONS = exports.defaultRankingWeights = void 0;
+exports.normalizeRankingWeights = normalizeRankingWeights;
 exports.validateRule = validateRule;
 exports.validateScoringRule = validateScoringRule;
 exports.validateScoringRules = validateScoringRules;
@@ -13,6 +14,25 @@ exports.versionManagerPolicyHash = versionManagerPolicyHash;
 const mediaParser_1 = require("./mediaParser");
 const migrationExporter_1 = require("./migrationExporter");
 const node_crypto_1 = require("node:crypto");
+exports.defaultRankingWeights = {
+    resolution: 40,
+    source: 20,
+    codec: 15,
+    audio: 15,
+    atmos: 3,
+    hdr: 4,
+    hdr10Plus: 6,
+    dolbyVision: 8,
+};
+function normalizeRankingWeights(value) {
+    const input = value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    return Object.fromEntries(Object.entries(exports.defaultRankingWeights).map(([key, fallback]) => {
+        const number = Number(input[key]);
+        if (!Number.isFinite(number) || number < -1000 || number > 1000)
+            return [key, fallback];
+        return [key, number];
+    }));
+}
 const RULE_FIELDS = new Set(["resolution", "source", "codec", "bitrate", "size", "fileSize", "audioCodec", "audioLanguage", "subtitleLanguage", "channels", "atmos", "hdr", "dolbyVision", "container", "originalLanguage", "identityConfidence", "mediaType", "profileEligible"]);
 const NUMERIC_RULE_FIELDS = new Set(["bitrate", "size", "fileSize", "channels", "identityConfidence"]);
 const BOOLEAN_RULE_FIELDS = new Set(["atmos", "hdr", "dolbyVision", "profileEligible"]);
@@ -346,19 +366,20 @@ function evaluateProfile(version, profile) {
     if (profile.target === "DIRECT_PLAY" && version.fingerprint.video.resolution !== "1080p") {
         reasons.push({ code: "remote_requires_1080p", message: "REMOTE / DIRECT PLAY requires a verified 1080p version", facts: { actualResolution: version.fingerprint.video.resolution, requiredResolution: "1080p" } });
     }
+    const weights = normalizeRankingWeights(profile.rankingWeights);
     const resolutionRank = rank(version.fingerprint.video.resolution, [profile.preferredResolution, "1080p", "720p"]);
-    breakdown.resolution = Math.max(0, 40 - resolutionRank * 12);
-    breakdown.source = Math.max(0, 20 - rank(version.fingerprint.release.source, profile.sourceOrder) * 4);
-    breakdown.codec = Math.max(0, 15 - rank(version.fingerprint.video.codec, profile.codecOrder) * 3);
-    breakdown.audio = Math.max(0, 15 - rank(version.fingerprint.audio[0]?.codec, profile.audioOrder) * 3) + (version.fingerprint.audio[0]?.atmos ? 3 : 0);
+    breakdown.resolution = Math.max(0, weights.resolution - resolutionRank * (weights.resolution * 0.3));
+    breakdown.source = Math.max(0, weights.source - rank(version.fingerprint.release.source, profile.sourceOrder) * (weights.source * 0.2));
+    breakdown.codec = Math.max(0, weights.codec - rank(version.fingerprint.video.codec, profile.codecOrder) * (weights.codec * 0.2));
+    breakdown.audio = Math.max(0, weights.audio - rank(version.fingerprint.audio[0]?.codec, profile.audioOrder) * (weights.audio * 0.2)) + (version.fingerprint.audio[0]?.atmos ? weights.atmos : 0);
     // Preserve video-master quality when comparing eligible releases. Dolby
     // Vision/HDR must not lose to a small audio-only bonus such as Atmos.
     breakdown.video = version.fingerprint.video.dolbyVision
-        ? 8
+        ? weights.dolbyVision
         : version.fingerprint.video.hdr10Plus
-            ? 6
+            ? weights.hdr10Plus
             : version.fingerprint.video.hdr10 || /hdr/i.test(version.fingerprint.video.hdrFormat || "")
-                ? 4
+                ? weights.hdr
                 : 0;
     breakdown.language = preferredLanguageScore(version, profile.languagePolicy);
     if (profile.target === "DIRECT_PLAY") {
@@ -690,6 +711,7 @@ function canonicalProfile(profile) {
         maxSizeBytes: profile.maxSizeBytes ?? null,
         scoring: Object.fromEntries(Object.entries(profile.scoring || {}).sort(([left], [right]) => left < right ? -1 : left > right ? 1 : 0)),
         scoringRules: (profile.scoringRules || []).map(canonicalScoringRule).sort(canonicalCompare),
+        rankingWeights: normalizeRankingWeights(profile.rankingWeights),
         sizePreference: profile.sizePreference || "IGNORE",
         minimumSizeDifferencePercent: profile.minimumSizeDifferencePercent ?? 0,
         releaseGroupConsistency: profile.releaseGroupConsistency || "DISABLED",
