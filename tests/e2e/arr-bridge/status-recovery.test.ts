@@ -11,6 +11,7 @@ const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sam7-status-'));
 const saved = { dbPath: config.dbPath, mountBase: config.mountBase, arrBridgePort: config.arrBridgePort, providers: config.providers, arrDownloadsPath: config.arrDownloadsPath };
 const hash = '7777777777777777777777777777777777777777';
 let unavailable = true;
+let silentEmpty = false;
 const listing = spyOn(registry, 'ordered');
 const record = (mountScanned = false) => ({ hash, magnet: `magnet:?xt=urn:btih:${hash}`, name: 'Original release', state: mountScanned ? 'uploading' : 'error', progress: mountScanned ? 1 : 0, size: 0, addedOn: 1, completionOn: -1, category: 'radarr', tags: '', savePath: root, contentPath: root, providerResults: [{ provider: 'alldebrid', id: '123', success: true }], files: [], pollAttempts: 61, mountScanned });
 function stored() { return JSON.parse((getDb().prepare('SELECT state_json FROM arr_tracked_torrents WHERE hash = ?').get(hash) as { state_json: string }).state_json); }
@@ -28,6 +29,7 @@ beforeAll(async () => {
   config.providers = [];
   listing.mockReturnValue([{ id: 'alldebrid', async listTorrents() {
     if (unavailable) throw new Error('temporary outage');
+    if (silentEmpty) return [];
     return [{ id: '123', name: 'Renamed.release.mkv', status: 'downloaded', progress: 100, bytes: 15450000000 }];
   } }] as any);
   await seed(record());
@@ -44,6 +46,15 @@ test('provider outage does not exhaust missing polls for an active download', as
   await seed({ ...record(), state: 'downloading', pollAttempts: 60 });
   await pollDebridStatus();
   expect(stored()).toMatchObject({ state: 'downloading', pollAttempts: 60 });
+  await seed(record());
+});
+test('an empty provider listing is not proof that a submitted torrent disappeared', async () => {
+  unavailable = false;
+  silentEmpty = true;
+  await seed({ ...record(), state: 'downloading', pollAttempts: 60 });
+  await pollDebridStatus();
+  expect(stored()).toMatchObject({ state: 'downloading', pollAttempts: 60 });
+  silentEmpty = false;
   await seed(record());
 });
 test('restored error recovers through provider ID despite rename and persists across restart', async () => {

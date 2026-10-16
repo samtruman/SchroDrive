@@ -224,15 +224,13 @@ export async function pollDebridStatus(): Promise<void> {
 
   if (pending.length === 0) return;
 
-  // Request authoritative inventory; outages must not count as missing torrents.
+  // Provider listings are discovery signals; absence is not proof of failure.
   const providers = registry.ordered();
   const allTorrents: Array<{ provider: string; id: string; status: string; progress: number; bytes: number; name: string }> = [];
-  const listedProviders = new Set<string>();
 
   for (const p of providers) {
     try {
       const torrents = await p.listTorrents(true);
-      listedProviders.add(p.id);
       for (const t of torrents) {
         allTorrents.push({
           id: String(t.id),
@@ -250,18 +248,10 @@ export async function pollDebridStatus(): Promise<void> {
 
   for (const torrent of pending) {
     const before = stateFingerprint(torrent);
-    // A provider outage is not evidence that a submitted torrent is missing.
-    const submissions = torrent.providerResults.filter(r => r.success && r.id);
-    const inventoryComplete = submissions.length
-      ? submissions.every(r => listedProviders.has(r.provider))
-      : listedProviders.size > 0;
-
     // Try to find this torrent across providers
-    let found = false;
     const info = findProviderTorrent(torrent, allTorrents);
     if (info) {
       torrent.pollAttempts = 0;
-      found = true;
       torrent.progress = info.progress / 100; // Normalise to 0.0–1.0
       torrent.size = info.bytes || torrent.size;
       torrent.name = info.name || torrent.name;
@@ -283,15 +273,7 @@ export async function pollDebridStatus(): Promise<void> {
         torrent.state = 'downloading';
       }
     }
-    if (!found && !inventoryComplete) continue;
-    if (!found) torrent.pollAttempts++;
-
-    // If torrent has been pending for ages with no match, mark as error
-    if (!found && torrent.pollAttempts > 60 && torrent.state !== 'error') { // ~15 minutes
-      console.warn(`${LOG_PREFIX} Torrent "${torrent.name}" not found on any provider after ${torrent.pollAttempts} polls — marking as error`);
-      torrent.state = 'error';
-    }
-    if (before !== stateFingerprint(torrent) || torrent.pollAttempts % 5 === 0) persistTrackedTorrent(torrent);
+    if (before !== stateFingerprint(torrent)) persistTrackedTorrent(torrent);
   }
 }
 
@@ -382,7 +364,7 @@ type MountMatch = {
 
 function normaliseMountName(value: string): string {
   return value
-    .replace(/\.[^.]+$/, '')
+    .replace(/[.](mkv|mp4|avi|mov|wmv|m4v|ts|m2ts|webm)$/i, '')
     .toLowerCase()
     .replace(/[._-]+/g, ' ')
     .replace(/\s+/g, ' ')
@@ -393,6 +375,7 @@ function normaliseMountName(value: string): string {
 export async function findBestMountMatch(searchDir: string, torrentName: string): Promise<MountMatch | null> {
   const entries = await fsp.readdir(searchDir, { withFileTypes: true });
   const target = normaliseMountName(torrentName);
+  if (!target) return null;
   const targetPrefix = target.slice(0, 20);
   const directories: MountMatch[] = [];
   const files: MountMatch[] = [];
@@ -410,7 +393,7 @@ export async function findBestMountMatch(searchDir: string, torrentName: string)
       directories.push({ path: fullPath, files: discovered, score: (exact ? 100000 : 1000) + discovered.length });
     } else if (entry.isFile() && isVideoFile(entry.name)) {
       const stat = await fsp.stat(fullPath);
-      files.push({ path: searchDir, files: [{ name: entry.name, size: stat.size, path: fullPath }], score: exact ? 100 : 1 });
+      files.push({ path: searchDir, files: [{ name: entry.name, size: stat.size, path: fullPath }], score: exact ? 100000 : 1 });
     }
   }
 

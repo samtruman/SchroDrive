@@ -57,4 +57,21 @@ describe('ARR bridge symlink paths', () => {
     expect(match?.path).toBe(pack);
     expect(match?.files.map(file => file.name).sort()).toEqual(['Lioness.S03E01.mkv', 'Lioness.S03E02.mkv']);
   });
+
+  test('prefers an exact single file over a merely similar directory', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'schrodrive-arr-file-'));
+    const mount = path.join(root, 'mount');
+    const similar = path.join(mount, 'Movie.2026.Extras');
+    fs.mkdirSync(similar, { recursive: true });
+    fs.writeFileSync(path.join(similar, 'bonus.mkv'), 'bonus');
+    fs.writeFileSync(path.join(mount, 'Movie.2026.mkv'), 'feature');
+    const match = await findBestMountMatch(mount, 'Movie.2026.mkv');
+    expect(match?.files.map(file => file.name)).toEqual(['Movie.2026.mkv']);
+  });
+
+  test('does not match an empty torrent name', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'schrodrive-arr-empty-'));
+    fs.writeFileSync(path.join(root, 'unrelated.mkv'), 'media');
+    expect(await findBestMountMatch(root, '')).toBeNull();
+  });
 });
