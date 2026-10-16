@@ -248,6 +248,7 @@ export async function pollDebridStatus(): Promise<void> {
 
   for (const torrent of pending) {
     const before = stateFingerprint(torrent);
+
     // Try to find this torrent across providers
     const info = findProviderTorrent(torrent, allTorrents);
     if (info) {
