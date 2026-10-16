@@ -4,6 +4,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.validateReviewOverride = validateReviewOverride;
 exports.getOrganizerReview = getOrganizerReview;
 exports.recordOrganizerReview = recordOrganizerReview;
+exports.resolveOrganizerReviewAutomatically = resolveOrganizerReviewAutomatically;
 exports.listOrganizerReviews = listOrganizerReviews;
 exports.filterOrganizerReviewsByParserStatus = filterOrganizerReviewsByParserStatus;
 exports.decideOrganizerReview = decideOrganizerReview;
@@ -85,6 +86,32 @@ function recordOrganizerReview(sourcePath, parsed) {
     database.prepare("INSERT INTO organizer_review_audit (review_id, action, payload_json, created_at) VALUES (?, ?, ?, ?)")
         .run(id, "recorded", JSON.stringify(parsed), now);
     return entry;
+}
+/**
+ * Marks a persisted review as resolved by an authoritative reconciliation
+ * pass. This is deliberately distinct from a manual acceptance: it does not
+ * create an identity override and remains auditable.
+ */
+function resolveOrganizerReviewAutomatically(sourcePath, reason) {
+    const database = (0, db_1.getDb)();
+    const id = keyFor(sourcePath);
+    const row = database.prepare("SELECT * FROM organizer_reviews WHERE id = ?").get(id);
+    if (!row || row.decision !== "pending")
+        return undefined;
+    const updatedAt = new Date().toISOString();
+    database.prepare("UPDATE organizer_reviews SET decision = 'accepted', updated_at = ? WHERE id = ?")
+        .run(updatedAt, id);
+    database.prepare("INSERT INTO organizer_review_audit (review_id, action, payload_json, created_at) VALUES (?, ?, ?, ?)")
+        .run(id, "auto_reconciled", JSON.stringify({ reason }), updatedAt);
+    const parsed = parseStoredJson(row.parsed_json);
+    if (!parsed)
+        return undefined;
+    const override = parseStoredJson(row.override_json);
+    return {
+        id, sourcePath: row.source_path, sourceBasename: row.source_basename,
+        parsed, decision: "accepted", createdAt: row.created_at, updatedAt,
+        ...(override ? { override } : {}),
+    };
 }
 function listOrganizerReviews(includeResolved = false, status) {
     const decision = status || (includeResolved ? undefined : "pending");

@@ -167,9 +167,13 @@ function makeOrganizerEntry(entry: OrganizerReviewEntry): UnifiedReviewEntry {
     confidence: entry.override ? 1 : entry.parsed.confidence,
     source: entry.override ? "manual" as const : "unknown" as const,
   };
+  const aggregateEpisodeReview = identity.kind === "episode" && identity.season !== undefined;
+  const key = aggregateEpisodeReview
+    ? `review_${digest(identityReviewKey(identity as VersionGroup["identity"]))}`
+    : keyForIdentity(identity, `organizer:${entry.id}`);
   return {
-    key: keyForIdentity(identity, `organizer:${entry.id}`), identity, title: identity.title, year: identity.year, kind: identity.kind,
-    season: identity.season, episode: identity.episode, issueTypes: ["IDENTITY_ISSUE"], reasonCodes: [entry.parsed.reason || entry.parsed.status],
+    key, identity, title: identity.title, year: identity.year, kind: identity.kind,
+    season: identity.season, episode: aggregateEpisodeReview ? undefined : identity.episode, issueTypes: ["IDENTITY_ISSUE"], reasonCodes: [entry.parsed.reason || entry.parsed.status],
     blockers: [entry.parsed.reason || "Manual identity review required"], identityResolutionStatus: entry.override ? "resolved" : entry.parsed.status,
     organizerReview: entry, review: entry, parsed: entry.parsed, sourceBasename: entry.sourceBasename, sourcePath: entry.sourcePath,
     decision: entry.decision, versionIds: [], allowedActions: entry.decision === "dismissed" ? ["RESTORE_TO_REVIEW", "DETAILS"] : ["RESOLVE_IDENTITY", "ACCEPT_AS_DETECTED", "DISMISS", "RETRY", "DETAILS"],

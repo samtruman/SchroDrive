@@ -303,6 +303,7 @@ async function reconcileOrganizedLibraryWithArr() {
             markUnresolved(candidate, reason);
             continue;
         }
+        (0, organizerReview_1.resolveOrganizerReviewAutomatically)(link, "ARR identity and authoritative library path resolved during reconciliation");
         let authoritativePath = record.path;
         let pathRepaired = false;
         if (authoritativePath && looksLikeReleasePath(authoritativePath)) {

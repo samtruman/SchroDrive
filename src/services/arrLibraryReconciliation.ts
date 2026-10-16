@@ -2,7 +2,7 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { config } from "../core/config";
 import { parseMediaFilename } from "./mediaParser";
-import { recordOrganizerReview } from "./organizerReview";
+import { recordOrganizerReview, resolveOrganizerReviewAutomatically } from "./organizerReview";
 import { searchTmdb } from "./tmdbService";
 
 type ArrMovie = { id?: number; title?: string; year?: number; tmdbId?: number | string; path?: string };
@@ -280,6 +280,7 @@ export async function reconcileOrganizedLibraryWithArr(): Promise<Reconciliation
       markUnresolved(candidate, reason);
       continue;
     }
+    resolveOrganizerReviewAutomatically(link, "ARR identity and authoritative library path resolved during reconciliation");
     let authoritativePath = record.path;
     let pathRepaired = false;
     if (authoritativePath && looksLikeReleasePath(authoritativePath)) {

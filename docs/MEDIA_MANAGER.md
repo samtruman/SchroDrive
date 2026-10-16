@@ -409,6 +409,14 @@ all underlying version IDs, so resolving one review group does not discard
 other releases or episodes. A review remains pending only when the identity is
 ambiguous or the season/episode assignment cannot be established.
 
+ARR path-reconciliation reviews use the same grouping rule as snapshot review:
+episode entries for the same series and season are presented as one actionable
+group instead of one card per episode. During reconciliation, a pending legacy
+ARR identity review is automatically closed when Sonarr/Radarr supplies a
+matching entity and authoritative library path; this records an audit event but
+does not create a manual identity override. The lookup order is ARR title/year
+matching first, then TMDb only as a fallback.
+
 ### 7. Policy model
 
 The policy contains enabled VersionProfiles and global safety/acquisition flags.

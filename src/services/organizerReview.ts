@@ -102,6 +102,31 @@ export function recordOrganizerReview(sourcePath: string, parsed: ParsedMediaIde
   return entry;
 }
 
+/**
+ * Marks a persisted review as resolved by an authoritative reconciliation
+ * pass. This is deliberately distinct from a manual acceptance: it does not
+ * create an identity override and remains auditable.
+ */
+export function resolveOrganizerReviewAutomatically(sourcePath: string, reason: string): OrganizerReviewEntry | undefined {
+  const database = getDb();
+  const id = keyFor(sourcePath);
+  const row = database.prepare("SELECT * FROM organizer_reviews WHERE id = ?").get(id) as any;
+  if (!row || row.decision !== "pending") return undefined;
+  const updatedAt = new Date().toISOString();
+  database.prepare("UPDATE organizer_reviews SET decision = 'accepted', updated_at = ? WHERE id = ?")
+    .run(updatedAt, id);
+  database.prepare("INSERT INTO organizer_review_audit (review_id, action, payload_json, created_at) VALUES (?, ?, ?, ?)")
+    .run(id, "auto_reconciled", JSON.stringify({ reason }), updatedAt);
+  const parsed = parseStoredJson<ParsedMediaIdentity>(row.parsed_json);
+  if (!parsed) return undefined;
+  const override = parseStoredJson<ReviewOverride>(row.override_json);
+  return {
+    id, sourcePath: row.source_path, sourceBasename: row.source_basename,
+    parsed, decision: "accepted", createdAt: row.created_at, updatedAt,
+    ...(override ? { override } : {}),
+  };
+}
+
 export function listOrganizerReviews(includeResolved = false, status?: ReviewDecision): OrganizerReviewEntry[] {
   const decision = status || (includeResolved ? undefined : "pending");
   const query = decision

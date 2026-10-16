@@ -8,6 +8,7 @@ import {
   listOrganizerReviewAudit,
   listOrganizerReviews,
   recordOrganizerReview,
+  resolveOrganizerReviewAutomatically,
   retryOrganizerReview,
   validateReviewOverride,
 } from "../../../src/services/organizerReview";
@@ -117,6 +118,17 @@ describe("Organizer review queue", () => {
     expect(retried?.override?.title).toBe("Retry me");
     expect(listOrganizerReviews().map((item) => item.id)).toEqual([entry.id]);
     expect(listOrganizerReviewAudit(entry.id).at(-1)?.action).toBe("retry");
+    clearOrganizerReviews();
+  });
+
+  test("authoritative ARR reconciliation closes a pending review without creating an override", () => {
+    clearOrganizerReviews();
+    const entry = recordOrganizerReview("/mount/arr-resolved.mkv", parsed);
+    const resolved = resolveOrganizerReviewAutomatically(entry.sourcePath, "ARR matched identity and path");
+    expect(resolved?.decision).toBe("accepted");
+    expect(resolved?.override).toBeUndefined();
+    expect(listOrganizerReviews()).toHaveLength(0);
+    expect(listOrganizerReviewAudit(entry.id).at(-1)?.action).toBe("auto_reconciled");
     clearOrganizerReviews();
   });
 
