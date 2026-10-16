@@ -97,6 +97,8 @@ function mergeEntry(entries, value) {
         current.episode = value.episode;
         current.identityResolutionStatus = value.identityResolutionStatus;
     }
+    if (current.kind === "episode" && current.season !== undefined)
+        current.episode = undefined;
     if (value.versionGroupId)
         current.versionGroupId || (current.versionGroupId = value.versionGroupId);
     if (value.policyDecision)
@@ -147,7 +149,10 @@ function buildUnifiedReviewQueue(groups, organizerReviews = [], status = "pendin
     const aliases = new Map();
     const canonicalByKey = new Map();
     const add = (value) => {
-        const fallback = identityKey({ ...value.identity, tmdbId: undefined, imdbId: undefined, tvdbId: undefined });
+        const aggregateEpisodeReview = value.identity?.kind === "episode" && value.identity.season !== undefined;
+        const fallback = aggregateEpisodeReview
+            ? identityReviewKey({ ...value.identity, tmdbId: undefined, imdbId: undefined, tvdbId: undefined })
+            : identityKey({ ...value.identity, tmdbId: undefined, imdbId: undefined, tvdbId: undefined });
         const canonical = Boolean(value.identity?.tmdbId || value.identity?.imdbId || value.identity?.tvdbId);
         const aliasedKey = fallback ? aliases.get(fallback) : undefined;
         const existingKey = entries.has(value.key) ? value.key : aliasedKey;
