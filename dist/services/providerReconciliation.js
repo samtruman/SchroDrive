@@ -299,10 +299,14 @@ class ProviderReconciliationIntake {
             const nextFingerprint = fingerprint(item);
             const action = !prior || prior.lastAction === 'deleted'
                 ? 'added' : prior.fingerprint === nextFingerprint ? undefined : 'changed';
-            if (!action)
+            const retryEvent = !action && prior
+                ? this.makeEvent(item, prior.lastAction === 'deleted' ? 'added' : prior.lastAction, nextFingerprint)
+                : undefined;
+            const retryPendingReview = Boolean(retryEvent && this.options.shouldRetry?.(retryEvent));
+            if (!action && !retryPendingReview)
                 continue;
-            const event = this.makeEvent(item, action, nextFingerprint);
-            await this.dispatch(event, item, nextFingerprint);
+            const event = action ? this.makeEvent(item, action, nextFingerprint) : retryEvent;
+            await this.dispatch(event, item, nextFingerprint, retryPendingReview);
             events.push(event);
         }
         // A missing status-list item is a removal, but an item still processing is not.
@@ -360,8 +364,8 @@ class ProviderReconciliationIntake {
             observedAt: item.observedAt, stableDedupeKey: eventKey(provider, item.providerItemId, action, fp),
         };
     }
-    async dispatch(event, item, fp) {
-        if (this.store.hasEvent(event.stableDedupeKey))
+    async dispatch(event, item, fp, forceRetry = false) {
+        if (!forceRetry && this.store.hasEvent(event.stableDedupeKey))
             return;
         await this.options.onEvent?.(event);
         if (this.options.dryRun) {

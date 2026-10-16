@@ -419,7 +419,9 @@ matching first, then TMDb only as a fallback. Bootstrap-library reconciliation
 and incremental provider intake share the same ARR title normalizer: display
 suffixes such as `Ghosts (US)` and `Brothers (2026)` do not prevent an
 otherwise unique match. A successful incremental retry also closes the exact
-provider review that an earlier failed attempt created.
+provider review that an earlier failed attempt created. Full scans selectively
+retry unchanged provider items only when that exact review is still pending;
+they do not resubmit every unchanged provider item to ARR.
 
 ### 7. Policy model
 

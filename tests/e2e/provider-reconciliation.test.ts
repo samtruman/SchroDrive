@@ -316,6 +316,27 @@ describe('provider reconciliation direct intake', () => {
     expect(succeeded.map((event) => event.providerItemId)).toEqual(['m-success']);
   });
 
+  test('retries one unchanged item when its exact organizer review is still pending', async () => {
+    const source = new SequenceSource([[snapshot('s-pending', 'Brothers.2026.S01E05')], [snapshot('s-pending', 'Brothers.2026.S01E05')]]);
+    const arr = new FakeArr();
+    let pending = false;
+    const succeeded: DirectFileEvent[] = [];
+    const intake = new ProviderReconciliationIntake(source, arr, new InMemoryIntakeStateStore(), {
+      routeFor,
+      shouldRetry: () => pending,
+      onSuccess: (event) => { succeeded.push(event); pending = false; },
+    });
+
+    await intake.reconcile('full');
+    pending = true;
+    const retried = await intake.reconcile('full');
+
+    expect(retried).toHaveLength(1);
+    expect(arr.submitted).toHaveLength(2);
+    expect(succeeded).toHaveLength(2);
+    expect(pending).toBe(false);
+  });
+
   test('starts recent and full polling at configured intervals and stops cleanly', async () => {
     let calls = 0;
     const intake = { async reconcile() { calls++; return []; } };

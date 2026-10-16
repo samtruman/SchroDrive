@@ -127,6 +127,12 @@ export function resolveOrganizerReviewAutomatically(sourcePath: string, reason: 
   };
 }
 
+/** True only for the exact provider/organizer path still awaiting a decision. */
+export function isOrganizerReviewPending(sourcePath: string): boolean {
+  const row = getDb().prepare("SELECT decision FROM organizer_reviews WHERE id = ?").get(keyFor(sourcePath)) as { decision?: ReviewDecision } | undefined;
+  return row?.decision === "pending";
+}
+
 export function listOrganizerReviews(includeResolved = false, status?: ReviewDecision): OrganizerReviewEntry[] {
   const decision = status || (includeResolved ? undefined : "pending");
   const query = decision

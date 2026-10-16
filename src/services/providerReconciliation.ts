@@ -322,6 +322,7 @@ export interface IntakeOptions {
   routeFor: (category: SourceCategory, provider?: string) => ArrRoute;
   onEvent?: (event: DirectFileEvent) => Promise<void> | void;
   onSuccess?: (event: DirectFileEvent) => Promise<void> | void;
+  shouldRetry?: (event: DirectFileEvent) => boolean;
   onReview?: (event: DirectFileEvent, error: Error) => Promise<void> | void;
 }
 
@@ -380,9 +381,13 @@ export class ProviderReconciliationIntake {
       const nextFingerprint = fingerprint(item);
       const action: DirectFileAction | undefined = !prior || prior.lastAction === 'deleted'
         ? 'added' : prior.fingerprint === nextFingerprint ? undefined : 'changed';
-      if (!action) continue;
-      const event = this.makeEvent(item, action, nextFingerprint);
-      await this.dispatch(event, item, nextFingerprint);
+      const retryEvent = !action && prior
+        ? this.makeEvent(item, prior.lastAction === 'deleted' ? 'added' : prior.lastAction, nextFingerprint)
+        : undefined;
+      const retryPendingReview = Boolean(retryEvent && this.options.shouldRetry?.(retryEvent));
+      if (!action && !retryPendingReview) continue;
+      const event = action ? this.makeEvent(item, action, nextFingerprint) : retryEvent!;
+      await this.dispatch(event, item, nextFingerprint, retryPendingReview);
       events.push(event);
     }
 
@@ -441,8 +446,8 @@ export class ProviderReconciliationIntake {
     };
   }
 
-  private async dispatch(event: DirectFileEvent, item: ProviderSnapshot, fp: string): Promise<void> {
-    if (this.store.hasEvent(event.stableDedupeKey)) return;
+  private async dispatch(event: DirectFileEvent, item: ProviderSnapshot, fp: string, forceRetry = false): Promise<void> {
+    if (!forceRetry && this.store.hasEvent(event.stableDedupeKey)) return;
     await this.options.onEvent?.(event);
     if (this.options.dryRun) {
       this.store.saveEvent(event);

@@ -1,7 +1,7 @@
 import { config } from "../core/config";
 import { registry } from "../providers";
 import { parseMediaFilename } from "./mediaParser";
-import { recordOrganizerReview, resolveOrganizerReviewAutomatically } from "./organizerReview";
+import { isOrganizerReviewPending, recordOrganizerReview, resolveOrganizerReviewAutomatically } from "./organizerReview";
 import { organizeOnce } from "./organizer";
 import {
   ProviderSnapshotSource,
@@ -38,6 +38,7 @@ export function createProviderReconciliationWorker(): ProviderReconciliationWork
       onSuccess: async (event) => {
         resolveOrganizerReviewAutomatically(event.path, `Provider reconciliation (${event.provider}) matched ARR and completed`);
       },
+      shouldRetry: (event) => isOrganizerReviewPending(event.path),
       onReview: async (event, error) => {
         const parsed = parseMediaFilename(event.path, event.path);
         recordOrganizerReview(event.path, { ...parsed, status: parsed.status === "matched" ? "ambiguous" : parsed.status, reason: `Provider reconciliation (${event.provider}): ${error.message}` });

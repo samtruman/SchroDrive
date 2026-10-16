@@ -5,6 +5,7 @@ exports.validateReviewOverride = validateReviewOverride;
 exports.getOrganizerReview = getOrganizerReview;
 exports.recordOrganizerReview = recordOrganizerReview;
 exports.resolveOrganizerReviewAutomatically = resolveOrganizerReviewAutomatically;
+exports.isOrganizerReviewPending = isOrganizerReviewPending;
 exports.listOrganizerReviews = listOrganizerReviews;
 exports.filterOrganizerReviewsByParserStatus = filterOrganizerReviewsByParserStatus;
 exports.decideOrganizerReview = decideOrganizerReview;
@@ -112,6 +113,11 @@ function resolveOrganizerReviewAutomatically(sourcePath, reason) {
         parsed, decision: "accepted", createdAt: row.created_at, updatedAt,
         ...(override ? { override } : {}),
     };
+}
+/** True only for the exact provider/organizer path still awaiting a decision. */
+function isOrganizerReviewPending(sourcePath) {
+    const row = (0, db_1.getDb)().prepare("SELECT decision FROM organizer_reviews WHERE id = ?").get(keyFor(sourcePath));
+    return row?.decision === "pending";
 }
 function listOrganizerReviews(includeResolved = false, status) {
     const decision = status || (includeResolved ? undefined : "pending");

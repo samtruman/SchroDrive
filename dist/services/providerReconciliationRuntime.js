@@ -37,6 +37,7 @@ function createProviderReconciliationWorker() {
                 onSuccess: async (event) => {
                     (0, organizerReview_1.resolveOrganizerReviewAutomatically)(event.path, `Provider reconciliation (${event.provider}) matched ARR and completed`);
                 },
+                shouldRetry: (event) => (0, organizerReview_1.isOrganizerReviewPending)(event.path),
                 onReview: async (event, error) => {
                     const parsed = (0, mediaParser_1.parseMediaFilename)(event.path, event.path);
                     (0, organizerReview_1.recordOrganizerReview)(event.path, { ...parsed, status: parsed.status === "matched" ? "ambiguous" : parsed.status, reason: `Provider reconciliation (${event.provider}): ${error.message}` });
