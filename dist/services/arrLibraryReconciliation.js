@@ -38,6 +38,7 @@ const fsp = __importStar(require("node:fs/promises"));
 const path = __importStar(require("node:path"));
 const config_1 = require("../core/config");
 const mediaParser_1 = require("./mediaParser");
+const organizerReview_1 = require("./organizerReview");
 const tmdbService_1 = require("./tmdbService");
 function normalize(value) {
     return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
@@ -132,21 +133,42 @@ function candidateFor(link, organizedBase) {
         season: parsed.season ?? (Number((parts.find((part) => /^Season\s+\d+$/i.test(part)) || "").replace(/\D/g, "")) || undefined),
     };
 }
-function findArrRecord(candidate, tmdbId, records) {
-    if (tmdbId) {
-        const byTmdb = records.find((item) => String(item.tmdbId || "") === tmdbId);
-        if (byTmdb)
-            return byTmdb;
-    }
-    const exact = records.find((item) => normalize(item.title || "") === normalize(candidate.title || ""));
-    if (exact)
-        return exact;
+function findArrRecordByTmdb(tmdbId, records) {
+    if (!tmdbId)
+        return undefined;
+    return records.find((item) => String(item.tmdbId || "") === tmdbId);
+}
+function findArrRecordByTitle(candidate, records) {
     const candidateTitle = normalizeArrTitle(candidate.title || "");
     if (!candidateTitle)
         return undefined;
-    const aliases = records.filter((item) => normalizeArrTitle(item.title || "") === candidateTitle);
-    // Do not guess when two regional variants are configured.
-    return aliases.length === 1 ? aliases[0] : undefined;
+    const matches = records.filter((item) => {
+        if (normalizeArrTitle(item.title || "") !== candidateTitle)
+            return false;
+        // A known year must agree when ARR provides one. Missing ARR metadata is
+        // tolerated because older imports may not expose the year.
+        return !candidate.year || !item.year || Number(item.year) === candidate.year;
+    });
+    // Do not guess when two regional variants or same-title entries are configured.
+    return matches.length === 1 ? matches[0] : undefined;
+}
+function findArrRecord(candidate, records, tmdbId) {
+    // ARR is authoritative for the path we must repair. Use the title/year
+    // match first, then use TMDB only as a fallback when ARR metadata is enough
+    // to identify the media but not enough to match its title spelling.
+    return findArrRecordByTitle(candidate, records) || findArrRecordByTmdb(tmdbId, records);
+}
+function recordArrIdentityReview(candidate, link, reason) {
+    const parsed = (0, mediaParser_1.parseMediaFilename)(path.basename(link), link);
+    (0, organizerReview_1.recordOrganizerReview)(link, {
+        ...parsed,
+        status: "unmatched",
+        kind: candidate.category === "movie" ? "movie" : "episode",
+        title: candidate.title || parsed.title,
+        year: candidate.year ?? parsed.year,
+        season: candidate.season ?? parsed.season,
+        reason,
+    });
 }
 async function resolveTmdbId(candidate) {
     if (!candidate.title)
@@ -270,11 +292,15 @@ async function reconcileOrganizedLibraryWithArr() {
         const candidate = candidateFor(link, organizedBase);
         if (!candidate)
             continue;
-        const tmdbId = await resolveTmdbId(candidate).catch(() => undefined);
         const records = candidate.category === "movie" ? movies : series;
-        const record = findArrRecord(candidate, tmdbId, records);
+        const arrTitleRecord = findArrRecordByTitle(candidate, records);
+        const tmdbId = arrTitleRecord ? undefined : await resolveTmdbId(candidate).catch(() => undefined);
+        const record = findArrRecord(candidate, records, tmdbId);
         if (!record?.path) {
-            markUnresolved(candidate, record ? "arr-path-missing" : "arr-identity-unmatched");
+            const reason = record ? "arr-path-missing" : "arr-identity-unmatched";
+            if (!record)
+                recordArrIdentityReview(candidate, link, "ARR identity could not be matched by title/year or TMDB fallback");
+            markUnresolved(candidate, reason);
             continue;
         }
         let authoritativePath = record.path;
