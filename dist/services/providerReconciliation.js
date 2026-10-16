@@ -20,6 +20,7 @@ const db_1 = require("../core/db");
 const mediaClassifier_1 = require("../core/mediaClassifier");
 const mediaParser_1 = require("./mediaParser");
 const tmdbService_1 = require("./tmdbService");
+const arrTitleIdentity_1 = require("./arrTitleIdentity");
 class InMemoryIntakeStateStore {
     constructor() {
         this.items = new Map();
@@ -133,27 +134,32 @@ class HttpArrClient {
     }
 }
 exports.HttpArrClient = HttpArrClient;
-function normalizedTitle(value) {
-    return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
-}
 async function findArrEntity(route, event) {
     const filename = node_path_1.default.basename(event.path);
     const parsed = (0, mediaParser_1.parseMediaFilename)(filename, event.path);
-    const title = normalizedTitle(parsed.title || event.path.split('/').filter(Boolean).slice(-2, -1)[0] || '');
+    const title = (0, arrTitleIdentity_1.normalizeArrTitle)(parsed.title || event.path.split('/').filter(Boolean).slice(-2, -1)[0] || '');
     const endpoint = route.kind === 'radarr' ? 'movie' : 'series';
     const kind = route.kind === 'radarr' ? 'movie' : 'tv';
-    const canonical = parsed.title ? await resolveCanonicalMetadata(parsed.title, kind, parsed.year) : undefined;
     const response = await fetch(`${route.baseUrl.replace(/\/$/, '')}/api/v3/${endpoint}`, {
         headers: { 'X-Api-Key': route.apiKey },
     });
     if (!response.ok)
         throw new Error(`Arr ${endpoint} lookup failed: HTTP ${response.status}`);
     const records = await response.json();
+    const titleMatches = records.filter((record) => {
+        if (!record.id || !(0, arrTitleIdentity_1.arrTitleAliases)(record).includes(title))
+            return false;
+        return route.kind === 'sonarr' || !parsed.year || !record.year || Number(record.year) === parsed.year;
+    });
+    if (titleMatches.length === 1)
+        return titleMatches[0];
+    // ARR is authoritative. TMDB is only a fallback when ARR title aliases do
+    // not produce one unambiguous result.
+    const canonical = parsed.title ? await resolveCanonicalMetadata(parsed.title, kind, parsed.year) : undefined;
     const matchByTmdb = canonical?.tmdbId
         ? records.find((record) => record.id && String(record.tmdbId || '') === canonical.tmdbId)
         : undefined;
-    const match = matchByTmdb || records.find((record) => record.id && normalizedTitle(record.title || '') === title);
-    return match;
+    return matchByTmdb;
 }
 function safeSegment(value) {
     return value.replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim() || 'Unknown';
@@ -370,6 +376,7 @@ class ProviderReconciliationIntake {
                 const command = await this.arr.submitScan(route, event);
                 this.store.saveEvent(event, command);
                 this.store.saveItem({ provider: event.provider, providerItemId: item.providerItemId, fingerprint: fp, path: event.path, tree: event.tree, sourceCategory: event.sourceCategory, lastAction: event.action, commandId: command.commandId, terminalStatus: command.status, updatedAt: event.observedAt });
+                await this.options.onSuccess?.(event);
                 return;
             }
             catch (error) {

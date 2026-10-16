@@ -415,7 +415,11 @@ group instead of one card per episode. During reconciliation, a pending legacy
 ARR identity review is automatically closed when Sonarr/Radarr supplies a
 matching entity and authoritative library path; this records an audit event but
 does not create a manual identity override. The lookup order is ARR title/year
-matching first, then TMDb only as a fallback.
+matching first, then TMDb only as a fallback. Bootstrap-library reconciliation
+and incremental provider intake share the same ARR title normalizer: display
+suffixes such as `Ghosts (US)` and `Brothers (2026)` do not prevent an
+otherwise unique match. A successful incremental retry also closes the exact
+provider review that an earlier failed attempt created.
 
 ### 7. Policy model
 

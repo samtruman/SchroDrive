@@ -4,6 +4,7 @@ import { config } from "../core/config";
 import { parseMediaFilename } from "./mediaParser";
 import { recordOrganizerReview, resolveOrganizerReviewAutomatically } from "./organizerReview";
 import { searchTmdb } from "./tmdbService";
+import { arrTitleAliases, normalizeArrTitle } from "./arrTitleIdentity";
 
 type ArrAlternateTitle = string | { title?: string };
 type ArrMovie = { id?: number; title?: string; originalTitle?: string; alternateTitles?: ArrAlternateTitle[]; year?: number; tmdbId?: number | string; imdbId?: string; path?: string };
@@ -29,16 +30,6 @@ type ReconciliationResult = {
 
 function normalize(value: string): string {
   return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
-}
-
-function normalizeArrTitle(value: string): string {
-  // Sonarr may append a territory marker or the premiere year to disambiguate
-  // a series, e.g. `Ghosts (US)` or `Brothers (2026)`. Neither suffix is part
-  // of the release title parsed from the media filename.
-  return normalize(value
-    .replace(/\s*\((?:US|UK|AU|CA|IE|NZ)\)\s*$/i, "")
-    .replace(/\s*\((?:19|20|21)\d{2}\)\s*$/i, "")
-    .replace(/\s+(?:US|UK|AU|CA|IE|NZ)\s*$/i, ""));
 }
 
 function looksLikeReleasePath(value: string): boolean {
@@ -135,9 +126,7 @@ function findArrRecordByTitle(candidate: Candidate, records: Array<ArrMovie | Ar
   const candidateTitle = normalizeArrTitle(candidate.title || "");
   if (!candidateTitle) return undefined;
   const matches = records.filter((item) => {
-    const aliases = [item.title, "originalTitle" in item ? item.originalTitle : undefined, ...(item.alternateTitles || []).map((value) => typeof value === "string" ? value : value.title)]
-      .filter((value): value is string => Boolean(value))
-      .map(normalizeArrTitle);
+    const aliases = arrTitleAliases(item);
     if (!aliases.includes(candidateTitle)) return false;
     // A known year must agree when ARR provides one. Missing ARR metadata is
     // tolerated because older imports may not expose the year. Episode release

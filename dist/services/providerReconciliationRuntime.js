@@ -34,6 +34,9 @@ function createProviderReconciliationWorker() {
         return [new providerReconciliation_1.ProviderReconciliationIntake(source, arr, store, {
                 dryRun: config_1.config.providerReconciliationDryRun,
                 routeFor: (category, sourceProvider) => category === "Movies" ? providerReconciliationRoutes(sourceProvider || providerId).movies : providerReconciliationRoutes(sourceProvider || providerId).shows,
+                onSuccess: async (event) => {
+                    (0, organizerReview_1.resolveOrganizerReviewAutomatically)(event.path, `Provider reconciliation (${event.provider}) matched ARR and completed`);
+                },
                 onReview: async (event, error) => {
                     const parsed = (0, mediaParser_1.parseMediaFilename)(event.path, event.path);
                     (0, organizerReview_1.recordOrganizerReview)(event.path, { ...parsed, status: parsed.status === "matched" ? "ambiguous" : parsed.status, reason: `Provider reconciliation (${event.provider}): ${error.message}` });

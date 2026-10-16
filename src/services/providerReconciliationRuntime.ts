@@ -1,7 +1,7 @@
 import { config } from "../core/config";
 import { registry } from "../providers";
 import { parseMediaFilename } from "./mediaParser";
-import { recordOrganizerReview } from "./organizerReview";
+import { recordOrganizerReview, resolveOrganizerReviewAutomatically } from "./organizerReview";
 import { organizeOnce } from "./organizer";
 import {
   ProviderSnapshotSource,
@@ -35,6 +35,9 @@ export function createProviderReconciliationWorker(): ProviderReconciliationWork
     return [new ProviderReconciliationIntake(source, arr, store, {
       dryRun: config.providerReconciliationDryRun,
       routeFor: (category, sourceProvider) => category === "Movies" ? providerReconciliationRoutes(sourceProvider || providerId).movies : providerReconciliationRoutes(sourceProvider || providerId).shows,
+      onSuccess: async (event) => {
+        resolveOrganizerReviewAutomatically(event.path, `Provider reconciliation (${event.provider}) matched ARR and completed`);
+      },
       onReview: async (event, error) => {
         const parsed = parseMediaFilename(event.path, event.path);
         recordOrganizerReview(event.path, { ...parsed, status: parsed.status === "matched" ? "ambiguous" : parsed.status, reason: `Provider reconciliation (${event.provider}): ${error.message}` });

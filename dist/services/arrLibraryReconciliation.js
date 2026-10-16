@@ -40,17 +40,9 @@ const config_1 = require("../core/config");
 const mediaParser_1 = require("./mediaParser");
 const organizerReview_1 = require("./organizerReview");
 const tmdbService_1 = require("./tmdbService");
+const arrTitleIdentity_1 = require("./arrTitleIdentity");
 function normalize(value) {
     return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
-}
-function normalizeArrTitle(value) {
-    // Sonarr may append a territory marker or the premiere year to disambiguate
-    // a series, e.g. `Ghosts (US)` or `Brothers (2026)`. Neither suffix is part
-    // of the release title parsed from the media filename.
-    return normalize(value
-        .replace(/\s*\((?:US|UK|AU|CA|IE|NZ)\)\s*$/i, "")
-        .replace(/\s*\((?:19|20|21)\d{2}\)\s*$/i, "")
-        .replace(/\s+(?:US|UK|AU|CA|IE|NZ)\s*$/i, ""));
 }
 function looksLikeReleasePath(value) {
     const base = path.basename(value).toLocaleLowerCase();
@@ -142,13 +134,11 @@ function findArrRecordByTmdb(tmdbId, records) {
     return records.find((item) => String(item.tmdbId || "") === tmdbId);
 }
 function findArrRecordByTitle(candidate, records) {
-    const candidateTitle = normalizeArrTitle(candidate.title || "");
+    const candidateTitle = (0, arrTitleIdentity_1.normalizeArrTitle)(candidate.title || "");
     if (!candidateTitle)
         return undefined;
     const matches = records.filter((item) => {
-        const aliases = [item.title, "originalTitle" in item ? item.originalTitle : undefined, ...(item.alternateTitles || []).map((value) => typeof value === "string" ? value : value.title)]
-            .filter((value) => Boolean(value))
-            .map(normalizeArrTitle);
+        const aliases = (0, arrTitleIdentity_1.arrTitleAliases)(item);
         if (!aliases.includes(candidateTitle))
             return false;
         // A known year must agree when ARR provides one. Missing ARR metadata is

@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { mkdtemp, lstat, rm } from 'node:fs/promises';
+import path from 'node:path';
+import { tmpdir } from 'node:os';
 import { closeDb } from '../../src/core/db';
 import {
   ProviderReconciliationIntake,
@@ -11,6 +14,7 @@ import {
   isMediaFile,
   ProviderSnapshotSource,
   ProviderReconciliationWorker,
+  HttpArrClient,
 } from '../../src/services/providerReconciliation';
 
 function snapshot(id: string, name: string, files = [{ path: `${name}.mkv`, size: 10 }]): ProviderSnapshot {
@@ -257,6 +261,59 @@ describe('provider reconciliation direct intake', () => {
     await expect(intake.reconcile()).rejects.toThrow('permanent');
     expect(reviewed).toHaveLength(1);
     expect(reviewed[0].action).toBe('added');
+  });
+
+  test('uses ARR title aliases before TMDB for year-suffixed Sonarr titles', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'provider-arr-title-'));
+    const originalFetch = globalThis.fetch;
+    try {
+      const library = path.join(root, 'organized', 'TV', 'Brothers');
+      let tmdbCalls = 0;
+      let commandBody: Record<string, unknown> | undefined;
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url.endsWith('/api/v3/series')) {
+          return new Response(JSON.stringify([{ id: 57, title: 'Brothers (2026)', year: 2026, path: library, tvdbId: 448114 }]), { status: 200 });
+        }
+        if (url.includes('api.themoviedb.org')) {
+          tmdbCalls++;
+          return new Response(JSON.stringify({ results: [] }), { status: 200 });
+        }
+        if (url.endsWith('/api/v3/command')) {
+          commandBody = JSON.parse(String(init?.body || '{}'));
+          return new Response(JSON.stringify({ id: 91, status: 'queued' }), { status: 201 });
+        }
+        return new Response('{}', { status: 404 });
+      }) as typeof fetch;
+
+      const event: DirectFileEvent = {
+        provider: 'alldebrid', providerItemId: 'alldebrid:brothers', action: 'added',
+        path: 'shows/Brothers.2026.S01E05.mkv/Brothers.2026.S01E05.mkv', tree: [],
+        sourceCategory: 'Shows', observedAt: new Date().toISOString(), stableDedupeKey: 'brothers',
+      };
+      const result = await new HttpArrClient().submitScan({
+        kind: 'sonarr', baseUrl: 'http://sonarr.fixture', apiKey: 'fixture-key',
+        sourcePathPrefix: path.join(root, 'provider'), symlinkLibraryPath: path.join(root, 'organized', 'TV'),
+      }, event);
+
+      expect(result.commandId).toBe('91');
+      expect(tmdbCalls).toBe(0);
+      expect(commandBody).toEqual({ name: 'RescanSeries', seriesId: 57 });
+      expect((await lstat(path.join(library, 'Season 01', 'Brothers.2026.S01E05.mkv'))).isSymbolicLink()).toBe(true);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('calls onSuccess only after ARR accepts the event', async () => {
+    const succeeded: DirectFileEvent[] = [];
+    const intake = new ProviderReconciliationIntake(
+      new SequenceSource([[snapshot('m-success', 'Movie (2026)')]]), new FakeArr(), new InMemoryIntakeStateStore(),
+      { routeFor, onSuccess: (event) => { succeeded.push(event); } },
+    );
+    await intake.reconcile();
+    expect(succeeded.map((event) => event.providerItemId)).toEqual(['m-success']);
   });
 
   test('starts recent and full polling at configured intervals and stops cleanly', async () => {
