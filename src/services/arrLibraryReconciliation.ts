@@ -2,6 +2,7 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { config } from "../core/config";
 import { parseMediaFilename } from "./mediaParser";
+import { recordOrganizerReview } from "./organizerReview";
 import { searchTmdb } from "./tmdbService";
 
 type ArrMovie = { id?: number; title?: string; year?: number; tmdbId?: number | string; path?: string };
@@ -121,18 +122,42 @@ function candidateFor(link: string, organizedBase: string): Candidate | undefine
   };
 }
 
-function findArrRecord(candidate: Candidate, tmdbId: string | undefined, records: Array<ArrMovie | ArrSeries>): ArrMovie | ArrSeries | undefined {
-  if (tmdbId) {
-    const byTmdb = records.find((item) => String(item.tmdbId || "") === tmdbId);
-    if (byTmdb) return byTmdb;
-  }
-  const exact = records.find((item) => normalize(item.title || "") === normalize(candidate.title || ""));
-  if (exact) return exact;
+function findArrRecordByTmdb(tmdbId: string | undefined, records: Array<ArrMovie | ArrSeries>): ArrMovie | ArrSeries | undefined {
+  if (!tmdbId) return undefined;
+  return records.find((item) => String(item.tmdbId || "") === tmdbId);
+}
+
+function findArrRecordByTitle(candidate: Candidate, records: Array<ArrMovie | ArrSeries>): ArrMovie | ArrSeries | undefined {
   const candidateTitle = normalizeArrTitle(candidate.title || "");
   if (!candidateTitle) return undefined;
-  const aliases = records.filter((item) => normalizeArrTitle(item.title || "") === candidateTitle);
-  // Do not guess when two regional variants are configured.
-  return aliases.length === 1 ? aliases[0] : undefined;
+  const matches = records.filter((item) => {
+    if (normalizeArrTitle(item.title || "") !== candidateTitle) return false;
+    // A known year must agree when ARR provides one. Missing ARR metadata is
+    // tolerated because older imports may not expose the year.
+    return !candidate.year || !item.year || Number(item.year) === candidate.year;
+  });
+  // Do not guess when two regional variants or same-title entries are configured.
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function findArrRecord(candidate: Candidate, records: Array<ArrMovie | ArrSeries>, tmdbId?: string): ArrMovie | ArrSeries | undefined {
+  // ARR is authoritative for the path we must repair. Use the title/year
+  // match first, then use TMDB only as a fallback when ARR metadata is enough
+  // to identify the media but not enough to match its title spelling.
+  return findArrRecordByTitle(candidate, records) || findArrRecordByTmdb(tmdbId, records);
+}
+
+function recordArrIdentityReview(candidate: Candidate, link: string, reason: string): void {
+  const parsed = parseMediaFilename(path.basename(link), link);
+  recordOrganizerReview(link, {
+    ...parsed,
+    status: "unmatched",
+    kind: candidate.category === "movie" ? "movie" : "episode",
+    title: candidate.title || parsed.title,
+    year: candidate.year ?? parsed.year,
+    season: candidate.season ?? parsed.season,
+    reason,
+  });
 }
 
 async function resolveTmdbId(candidate: Candidate): Promise<string | undefined> {
@@ -245,11 +270,14 @@ export async function reconcileOrganizedLibraryWithArr(): Promise<Reconciliation
   for (const link of links) {
     const candidate = candidateFor(link, organizedBase);
     if (!candidate) continue;
-    const tmdbId = await resolveTmdbId(candidate).catch(() => undefined);
     const records = candidate.category === "movie" ? movies : series;
-    const record = findArrRecord(candidate, tmdbId, records);
+    const arrTitleRecord = findArrRecordByTitle(candidate, records);
+    const tmdbId = arrTitleRecord ? undefined : await resolveTmdbId(candidate).catch(() => undefined);
+    const record = findArrRecord(candidate, records, tmdbId);
     if (!record?.path) {
-      markUnresolved(candidate, record ? "arr-path-missing" : "arr-identity-unmatched");
+      const reason = record ? "arr-path-missing" : "arr-identity-unmatched";
+      if (!record) recordArrIdentityReview(candidate, link, "ARR identity could not be matched by title/year or TMDB fallback");
+      markUnresolved(candidate, reason);
       continue;
     }
     let authoritativePath = record.path;
