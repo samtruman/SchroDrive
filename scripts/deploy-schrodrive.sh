@@ -219,20 +219,23 @@ elif [[ "$status_check" -ne 0 ]]; then
   exit 1
 fi
 audit_api="http://127.0.0.1:$API_PORT/api/organizer/audit-cleanup"
-if ! audit_payload="$(curl -fsS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" "$audit_api")"; then
+audit_payload_file="$(mktemp "$BACKUP/audit-cleanup.XXXXXX.json")"
+if ! curl -fsS --connect-timeout "$CURL_CONNECT_TIMEOUT" --max-time "$CURL_MAX_TIME" -o "$audit_payload_file" "$audit_api"; then
   echo "audit-cleanup API check failed: $audit_api" >&2
   exit 1
 fi
-python3 - "$audit_payload" <<'PY'
+python3 - "$audit_payload_file" <<'PY'
 import json
 import sys
 try:
-    payload = json.loads(sys.argv[1])
+    with open(sys.argv[1], encoding="utf-8") as source:
+        payload = json.load(source)
 except Exception as exc:
     raise SystemExit(f"audit-cleanup API did not return JSON: {exc}")
 if payload.get("ok") is not True or not isinstance(payload.get("audit"), dict):
     raise SystemExit("audit-cleanup API returned an invalid payload")
 PY
+rm -f "$audit_payload_file"
 
 # A healthy container is not enough: verify the effective runtime provider and
 # mount. This catches Compose/runtime drift that leaves a stale FUSE endpoint.

@@ -32,9 +32,6 @@ RUN bun run build
 FROM oven/bun:latest AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-ARG SCHRODRIVE_BUILD_COMMIT=unknown
-ARG SCHRODRIVE_BUILD_TIME=unknown
-ARG SCHRODRIVE_IMAGE=unknown
 
 # Install system dependencies
 # Note: oven/bun is Debian-based, not Alpine — use apt instead of apk
@@ -42,6 +39,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rclone fuse3 curl ca-certificates supervisor ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 RUN grep -qxF 'user_allow_other' /etc/fuse.conf || printf 'user_allow_other\n' >> /etc/fuse.conf
+
+# Build metadata changes on every commit. Keep it after the expensive system
+# dependency layer so a new revision does not reinstall FFmpeg and rclone.
+ARG SCHRODRIVE_BUILD_COMMIT=unknown
+ARG SCHRODRIVE_BUILD_TIME=unknown
+ARG SCHRODRIVE_IMAGE=unknown
 
 # Copy web GUI before the backend artifact so backend-only changes do not
 # invalidate the large web dependency/artifact layers below.
