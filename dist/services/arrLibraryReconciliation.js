@@ -42,6 +42,12 @@ const tmdbService_1 = require("./tmdbService");
 function normalize(value) {
     return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 }
+function normalizeArrTitle(value) {
+    // Sonarr may append a territory marker, e.g. `Ghosts (US)`.
+    return normalize(value
+        .replace(/\s*\((?:US|UK|AU|CA|IE|NZ)\)\s*$/i, "")
+        .replace(/\s+(?:US|UK|AU|CA|IE|NZ)\s*$/i, ""));
+}
 function looksLikeReleasePath(value) {
     const base = path.basename(value).toLocaleLowerCase();
     return /(?:^|[. _-])(mkv|mp4|m4v|avi|mov)$/.test(base) ||
@@ -126,6 +132,22 @@ function candidateFor(link, organizedBase) {
         season: parsed.season ?? (Number((parts.find((part) => /^Season\s+\d+$/i.test(part)) || "").replace(/\D/g, "")) || undefined),
     };
 }
+function findArrRecord(candidate, tmdbId, records) {
+    if (tmdbId) {
+        const byTmdb = records.find((item) => String(item.tmdbId || "") === tmdbId);
+        if (byTmdb)
+            return byTmdb;
+    }
+    const exact = records.find((item) => normalize(item.title || "") === normalize(candidate.title || ""));
+    if (exact)
+        return exact;
+    const candidateTitle = normalizeArrTitle(candidate.title || "");
+    if (!candidateTitle)
+        return undefined;
+    const aliases = records.filter((item) => normalizeArrTitle(item.title || "") === candidateTitle);
+    // Do not guess when two regional variants are configured.
+    return aliases.length === 1 ? aliases[0] : undefined;
+}
 async function resolveTmdbId(candidate) {
     if (!candidate.title)
         return undefined;
@@ -209,7 +231,7 @@ async function repairArrPath(category, record, destination) {
  */
 async function reconcileOrganizedLibraryWithArr() {
     if (!configured())
-        return { scanned: 0, moved: 0, unresolved: 0 };
+        return { scanned: 0, moved: 0, unresolved: 0, unresolvedByReason: {}, unresolvedSamples: [] };
     const organizedBase = config_1.config.organizedBase;
     const links = [];
     for (const category of ["Movies", "TV", "Anime"]) {
@@ -235,6 +257,14 @@ async function reconcileOrganizedLibraryWithArr() {
     }
     let moved = 0;
     let unresolved = 0;
+    const unresolvedByReason = {};
+    const unresolvedSamples = [];
+    const markUnresolved = (candidate, reason) => {
+        unresolved++;
+        unresolvedByReason[reason] = (unresolvedByReason[reason] || 0) + 1;
+        if (unresolvedSamples.length < 20)
+            unresolvedSamples.push({ title: candidate.title, path: candidate.currentLink, reason });
+    };
     const rescannedRecords = new Set();
     for (const link of links) {
         const candidate = candidateFor(link, organizedBase);
@@ -242,10 +272,9 @@ async function reconcileOrganizedLibraryWithArr() {
             continue;
         const tmdbId = await resolveTmdbId(candidate).catch(() => undefined);
         const records = candidate.category === "movie" ? movies : series;
-        const record = (tmdbId && records.find((item) => String(item.tmdbId || "") === tmdbId)) ||
-            records.find((item) => normalize(item.title || "") === normalize(candidate.title || ""));
+        const record = findArrRecord(candidate, tmdbId, records);
         if (!record?.path) {
-            unresolved++;
+            markUnresolved(candidate, record ? "arr-path-missing" : "arr-identity-unmatched");
             continue;
         }
         let authoritativePath = record.path;
@@ -253,7 +282,7 @@ async function reconcileOrganizedLibraryWithArr() {
         if (authoritativePath && looksLikeReleasePath(authoritativePath)) {
             const inferred = inferredLibraryDirectory(link, candidate, organizedBase, record);
             if (!inferred) {
-                unresolved++;
+                markUnresolved(candidate, "release-path-without-safe-library-directory");
                 console.warn(`[${new Date().toISOString()}][organize] ARR path looks like a release path; no safe library directory`, {
                     title: record.title,
                     path: authoritativePath,
@@ -266,7 +295,7 @@ async function reconcileOrganizedLibraryWithArr() {
                 pathRepaired = true;
             }
             catch (error) {
-                unresolved++;
+                markUnresolved(candidate, "arr-path-repair-failed");
                 console.warn(`[${new Date().toISOString()}][organize] ARR path repair deferred`, {
                     title: record.title,
                     path: authoritativePath,
@@ -298,5 +327,5 @@ async function reconcileOrganizedLibraryWithArr() {
             }
         }
     }
-    return { scanned: links.length, moved, unresolved };
+    return { scanned: links.length, moved, unresolved, unresolvedByReason, unresolvedSamples };
 }

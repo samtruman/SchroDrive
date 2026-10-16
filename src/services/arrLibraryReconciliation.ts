@@ -16,8 +16,24 @@ type Candidate = {
   season?: number;
 };
 
+type ReconciliationResult = {
+  scanned: number;
+  moved: number;
+  unresolved: number;
+  unresolvedByReason: Record<string, number>;
+  unresolvedSamples: Array<{ title?: string; path: string; reason: string }>;
+};
+
+
 function normalize(value: string): string {
   return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function normalizeArrTitle(value: string): string {
+  // Sonarr may append a territory marker, e.g. `Ghosts (US)`.
+  return normalize(value
+    .replace(/\s*\((?:US|UK|AU|CA|IE|NZ)\)\s*$/i, "")
+    .replace(/\s+(?:US|UK|AU|CA|IE|NZ)\s*$/i, ""));
 }
 
 function looksLikeReleasePath(value: string): boolean {
@@ -105,6 +121,20 @@ function candidateFor(link: string, organizedBase: string): Candidate | undefine
   };
 }
 
+function findArrRecord(candidate: Candidate, tmdbId: string | undefined, records: Array<ArrMovie | ArrSeries>): ArrMovie | ArrSeries | undefined {
+  if (tmdbId) {
+    const byTmdb = records.find((item) => String(item.tmdbId || "") === tmdbId);
+    if (byTmdb) return byTmdb;
+  }
+  const exact = records.find((item) => normalize(item.title || "") === normalize(candidate.title || ""));
+  if (exact) return exact;
+  const candidateTitle = normalizeArrTitle(candidate.title || "");
+  if (!candidateTitle) return undefined;
+  const aliases = records.filter((item) => normalizeArrTitle(item.title || "") === candidateTitle);
+  // Do not guess when two regional variants are configured.
+  return aliases.length === 1 ? aliases[0] : undefined;
+}
+
 async function resolveTmdbId(candidate: Candidate): Promise<string | undefined> {
   if (!candidate.title) return undefined;
   const result = await searchTmdb(candidate.title, candidate.category === "movie" ? "movie" : "tv", candidate.year, { retries: 1, timeoutMs: 5000 });
@@ -177,8 +207,8 @@ async function repairArrPath(category: Candidate["category"], record: { id?: num
  * AllDebrid manifest scans with the authoritative Radarr/Sonarr library path.
  * It is deliberately symlink-only and safe to run repeatedly.
  */
-export async function reconcileOrganizedLibraryWithArr(): Promise<{ scanned: number; moved: number; unresolved: number }> {
-  if (!configured()) return { scanned: 0, moved: 0, unresolved: 0 };
+export async function reconcileOrganizedLibraryWithArr(): Promise<ReconciliationResult> {
+  if (!configured()) return { scanned: 0, moved: 0, unresolved: 0, unresolvedByReason: {}, unresolvedSamples: [] };
   const organizedBase = config.organizedBase;
   const links: string[] = [];
   for (const category of ["Movies", "TV", "Anime"]) {
@@ -204,16 +234,22 @@ export async function reconcileOrganizedLibraryWithArr(): Promise<{ scanned: num
 
   let moved = 0;
   let unresolved = 0;
+  const unresolvedByReason: Record<string, number> = {};
+  const unresolvedSamples: ReconciliationResult["unresolvedSamples"] = [];
+  const markUnresolved = (candidate: Candidate, reason: string) => {
+    unresolved++;
+    unresolvedByReason[reason] = (unresolvedByReason[reason] || 0) + 1;
+    if (unresolvedSamples.length < 20) unresolvedSamples.push({ title: candidate.title, path: candidate.currentLink, reason });
+  };
   const rescannedRecords = new Set<string>();
   for (const link of links) {
     const candidate = candidateFor(link, organizedBase);
     if (!candidate) continue;
     const tmdbId = await resolveTmdbId(candidate).catch(() => undefined);
     const records = candidate.category === "movie" ? movies : series;
-    const record = (tmdbId && records.find((item) => String(item.tmdbId || "") === tmdbId)) ||
-      records.find((item) => normalize(item.title || "") === normalize(candidate.title || ""));
+    const record = findArrRecord(candidate, tmdbId, records);
     if (!record?.path) {
-      unresolved++;
+      markUnresolved(candidate, record ? "arr-path-missing" : "arr-identity-unmatched");
       continue;
     }
     let authoritativePath = record.path;
@@ -221,7 +257,7 @@ export async function reconcileOrganizedLibraryWithArr(): Promise<{ scanned: num
     if (authoritativePath && looksLikeReleasePath(authoritativePath)) {
       const inferred = inferredLibraryDirectory(link, candidate, organizedBase, record);
       if (!inferred) {
-        unresolved++;
+        markUnresolved(candidate, "release-path-without-safe-library-directory");
         console.warn(`[${new Date().toISOString()}][organize] ARR path looks like a release path; no safe library directory`, {
           title: record.title,
           path: authoritativePath,
@@ -233,7 +269,7 @@ export async function reconcileOrganizedLibraryWithArr(): Promise<{ scanned: num
         authoritativePath = inferred;
         pathRepaired = true;
       } catch (error) {
-        unresolved++;
+        markUnresolved(candidate, "arr-path-repair-failed");
         console.warn(`[${new Date().toISOString()}][organize] ARR path repair deferred`, {
           title: record.title,
           path: authoritativePath,
@@ -263,5 +299,5 @@ export async function reconcileOrganizedLibraryWithArr(): Promise<{ scanned: num
       }
     }
   }
-  return { scanned: links.length, moved, unresolved };
+  return { scanned: links.length, moved, unresolved, unresolvedByReason, unresolvedSamples };
 }

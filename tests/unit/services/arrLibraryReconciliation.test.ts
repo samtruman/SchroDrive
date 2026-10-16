@@ -143,4 +143,45 @@ describe("Arr library path reconciliation", () => {
     }
   });
 
+
+  test("matches Sonarr regional title aliases such as Ghosts and Ghosts (US)", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "arr-series-alias-"));
+    try {
+      const source = path.join(root, "provider", "Ghosts.2x16.Il.Libro.Di.Isaac.mkv");
+      const oldDir = path.join(root, "organized", "TV", "Ghosts", "Season 02");
+      const arrDir = path.join(root, "organized", "TV", "Ghosts (US)");
+      const oldLink = path.join(oldDir, path.basename(source));
+      const newLink = path.join(arrDir, "Season 02", path.basename(source));
+      await mkdir(path.dirname(source), { recursive: true });
+      await mkdir(oldDir, { recursive: true });
+      await writeFile(source, "fixture");
+      await symlink(path.relative(oldDir, source), oldLink);
+
+      config.organizedBase = path.join(root, "organized");
+      config.providerReconciliationRadarrUrl = "";
+      config.providerReconciliationRadarrApiKey = "";
+      config.providerReconciliationSonarrUrl = "http://sonarr.fixture";
+      config.providerReconciliationSonarrApiKey = "fixture-key";
+
+      globalThis.fetch = (async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/api/v3/series")) {
+          return new Response(JSON.stringify([{ id: 61, title: "Ghosts (US)", tmdbId: 95396, path: arrDir }]), { status: 200 });
+        }
+        return new Response(JSON.stringify({ id: 1, status: "queued" }), { status: 201 });
+      }) as typeof fetch;
+
+      const result = await reconcileOrganizedLibraryWithArr();
+      expect(result.moved).toBe(1);
+      expect(result.unresolved).toBe(0);
+      expect((await lstat(newLink)).isSymbolicLink()).toBe(true);
+      await expect(lstat(oldLink)).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+
+
+
 });
