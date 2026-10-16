@@ -322,7 +322,20 @@ class ProviderReconciliationIntake {
                 await this.options.onEvent?.(event);
                 this.store.saveEvent(event);
                 this.store.saveItem({ ...previous, tree: previous.tree || [], lastAction: 'deleted', updatedAt: event.observedAt });
+                await this.options.onDeleted?.(event);
                 events.push(event);
+            }
+        }
+        // Older versions could persist a deleted intake item while leaving its
+        // provider review pending. Replaying this idempotent callback during a
+        // full scan closes those stale, no-longer-actionable reviews.
+        if (mode === 'full') {
+            for (const previous of this.store.listItems().filter((item) => item.lastAction === 'deleted')) {
+                await this.options.onDeleted?.({
+                    provider: previous.provider || 'alldebrid', providerItemId: previous.providerItemId,
+                    action: 'deleted', path: previous.path, tree: previous.tree || [], sourceCategory: previous.sourceCategory,
+                    observedAt: new Date().toISOString(), stableDedupeKey: eventKey(previous.provider || 'alldebrid', previous.providerItemId, 'deleted', previous.fingerprint),
+                });
             }
         }
         this.store.saveCursor(mode, new Date().toISOString());

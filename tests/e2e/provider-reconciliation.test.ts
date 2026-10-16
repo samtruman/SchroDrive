@@ -337,6 +337,24 @@ describe('provider reconciliation direct intake', () => {
     expect(pending).toBe(false);
   });
 
+  test('closes legacy reviews for intake items already persisted as deleted', async () => {
+    const store = new InMemoryIntakeStateStore();
+    store.saveItem({
+      provider: 'alldebrid', providerItemId: 'alldebrid:gone', fingerprint: 'gone-fingerprint',
+      path: 'shows/Gone.S01E01/Gone.S01E01.mkv', tree: [], sourceCategory: 'Shows',
+      lastAction: 'deleted', terminalStatus: 'completed', updatedAt: new Date().toISOString(),
+    });
+    const deleted: DirectFileEvent[] = [];
+    const intake = new ProviderReconciliationIntake(new SequenceSource([[]]), new FakeArr(), store, {
+      routeFor,
+      onDeleted: (event) => { deleted.push(event); },
+    });
+
+    expect(await intake.reconcile('full')).toEqual([]);
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0]).toMatchObject({ providerItemId: 'alldebrid:gone', action: 'deleted' });
+  });
+
   test('starts recent and full polling at configured intervals and stops cleanly', async () => {
     let calls = 0;
     const intake = { async reconcile() { calls++; return []; } };

@@ -38,6 +38,9 @@ export function createProviderReconciliationWorker(): ProviderReconciliationWork
       onSuccess: async (event) => {
         resolveOrganizerReviewAutomatically(event.path, `Provider reconciliation (${event.provider}) matched ARR and completed`);
       },
+      onDeleted: async (event) => {
+        resolveOrganizerReviewAutomatically(event.path, `Provider reconciliation (${event.provider}) item is no longer present`);
+      },
       shouldRetry: (event) => isOrganizerReviewPending(event.path),
       onReview: async (event, error) => {
         const parsed = parseMediaFilename(event.path, event.path);

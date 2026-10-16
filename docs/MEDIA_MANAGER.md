@@ -421,7 +421,9 @@ suffixes such as `Ghosts (US)` and `Brothers (2026)` do not prevent an
 otherwise unique match. A successful incremental retry also closes the exact
 provider review that an earlier failed attempt created. Full scans selectively
 retry unchanged provider items only when that exact review is still pending;
-they do not resubmit every unchanged provider item to ARR.
+they do not resubmit every unchanged provider item to ARR. Reviews belonging
+to provider items already persisted as deleted are closed as stale during the
+same full scan, including records created by older deployments.
 
 ### 7. Policy model
 
