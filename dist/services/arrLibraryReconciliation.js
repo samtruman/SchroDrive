@@ -44,9 +44,12 @@ function normalize(value) {
     return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 }
 function normalizeArrTitle(value) {
-    // Sonarr may append a territory marker, e.g. `Ghosts (US)`.
+    // Sonarr may append a territory marker or the premiere year to disambiguate
+    // a series, e.g. `Ghosts (US)` or `Brothers (2026)`. Neither suffix is part
+    // of the release title parsed from the media filename.
     return normalize(value
         .replace(/\s*\((?:US|UK|AU|CA|IE|NZ)\)\s*$/i, "")
+        .replace(/\s*\((?:19|20|21)\d{2}\)\s*$/i, "")
         .replace(/\s+(?:US|UK|AU|CA|IE|NZ)\s*$/i, ""));
 }
 function looksLikeReleasePath(value) {

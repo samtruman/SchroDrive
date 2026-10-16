@@ -203,7 +203,7 @@ describe("Arr library path reconciliation", () => {
       let tmdbCalls = 0;
       globalThis.fetch = (async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url.endsWith("/api/v3/series")) return new Response(JSON.stringify([{ id: 72, title: "Brothers", year: 2025, tmdbId: 250203, path: arrDir }]), { status: 200 });
+        if (url.endsWith("/api/v3/series")) return new Response(JSON.stringify([{ id: 72, title: "Brothers (2026)", year: 2026, tmdbId: 250203, path: arrDir }]), { status: 200 });
         if (url.includes("api.themoviedb.org")) tmdbCalls++;
         return new Response(JSON.stringify({ id: 1, status: "queued" }), { status: 201 });
       }) as typeof fetch;
