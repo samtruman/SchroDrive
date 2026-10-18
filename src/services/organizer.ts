@@ -1025,11 +1025,29 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
       console.warn(`[${new Date().toISOString()}][organize] skipping source mount`, { reason: status.reason });
       continue;
     }
-    // Check for Zurg-style organised category layout (__all__/anime/shows/movies)
+    // Prefer the provider's category roots. __all__ is a provider-side
+    // aggregation view, not an additional organiser source: scanning it in
+    // addition to movies/shows exposes the same file through a second path
+    // and makes the collision allocator create suffixed duplicate symlinks.
+    const categoryRoots = ["movies", "shows", "anime"]
+      .map((category) => path.join(b, category))
+      .filter((root) => root !== b);
+    let addedCategoryRoot = false;
+    for (const categoryRoot of categoryRoots) {
+      const categoryStat = await fsp.stat(categoryRoot).catch(() => null);
+      if (categoryStat?.isDirectory()) {
+        roots.push(categoryRoot);
+        addedCategoryRoot = true;
+      }
+    }
+    if (addedCategoryRoot) continue;
+
+    // Legacy/provider layouts without category roots can still be imported
+    // from __all__ as a fallback. It must never be combined with categories.
     const allDir = path.join(b, "__all__");
     const allStat = await fsp.stat(allDir).catch(() => null);
     if (allStat?.isDirectory()) {
-      roots.push(allDir);  // Scan __all__ only — it's the superset, avoids duplicates
+      roots.push(allDir);
       continue;
     }
 
