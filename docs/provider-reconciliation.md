@@ -102,6 +102,8 @@ reconciliation.
 
 ### Idempotent ARR path repair
 
+When title/year matching is missing or ambiguous, reconciliation asks the configured Sonarr or Radarr \/api\/v3\/parse endpoint to resolve the release filename and then matches the returned ARR entity ID. TMDB remains the last fallback; genuinely unresolved identities stay in the review queue.
+
 ARR reconciliation is safe to repeat. When an existing organized destination already points to the same provider source, the stale alias is removed instead of being retained as a duplicate. After an ARR move, empty season/title parent directories under the organized library are removed immediately; library roots such as Movies, TV, and Anime are preserved. The operation never removes provider content or a non-empty directory.
 
 The older generic `REFRESH_LIBRARY_ON_ADD` setting is not the control for this

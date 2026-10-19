@@ -87,6 +87,34 @@ async function fetchArr(baseUrl, apiKey, endpoint) {
     const body = await response.json();
     return Array.isArray(body) ? body : [];
 }
+async function resolveArrRecordByParser(candidate, link, records) {
+    const baseUrl = candidate.category === "movie" ? config_1.config.providerReconciliationRadarrUrl : config_1.config.providerReconciliationSonarrUrl;
+    const apiKey = candidate.category === "movie" ? config_1.config.providerReconciliationRadarrApiKey : config_1.config.providerReconciliationSonarrApiKey;
+    if (!baseUrl || !apiKey)
+        return undefined;
+    try {
+        const url = baseUrl.replace(/\/$/, "") + "/api/v3/parse?title=" + encodeURIComponent(path.basename(link));
+        const response = await fetch(url, { headers: { "X-Api-Key": apiKey, Accept: "application/json" } });
+        if (!response.ok)
+            return undefined;
+        const parsed = await response.json();
+        const media = candidate.category === "movie" ? (parsed.movie || parsed) : (parsed.series || parsed.tvSeries || parsed);
+        const id = media?.id;
+        if (id === undefined || id === null)
+            return undefined;
+        const record = records.find((item) => String(item.id || "") === String(id));
+        if (!record)
+            return undefined;
+        if (candidate.category === "series" && !parsed.series && !parsed.tvSeries)
+            return undefined;
+        if (candidate.category === "movie" && !parsed.movie)
+            return undefined;
+        return record;
+    }
+    catch {
+        return undefined;
+    }
+}
 async function walkSymlinks(root, out = []) {
     const entries = await fsp.readdir(root, { withFileTypes: true }).catch(() => []);
     for (const entry of entries) {
@@ -305,8 +333,9 @@ async function reconcileOrganizedLibraryWithArr() {
             continue;
         const records = candidate.category === "movie" ? movies : series;
         const arrTitleRecord = findArrRecordByTitle(candidate, records);
-        const tmdbId = arrTitleRecord ? undefined : await resolveTmdbId(candidate).catch(() => undefined);
-        const record = findArrRecord(candidate, records, tmdbId);
+        const parserRecord = arrTitleRecord ? undefined : await resolveArrRecordByParser(candidate, link, records);
+        const tmdbId = arrTitleRecord || parserRecord ? undefined : await resolveTmdbId(candidate).catch(() => undefined);
+        const record = arrTitleRecord || parserRecord || findArrRecord(candidate, records, tmdbId);
         if (!record?.path) {
             const reason = record ? "arr-path-missing" : "arr-identity-unmatched";
             if (!record)
