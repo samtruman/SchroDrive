@@ -169,6 +169,20 @@ async function resolveTmdbId(candidate) {
     const result = await (0, tmdbService_1.searchTmdb)(candidate.title, candidate.category === "movie" ? "movie" : "tv", candidate.year, { retries: 1, timeoutMs: 5000 });
     return result.status === "matched" && result.metadata?.tmdbId ? String(result.metadata.tmdbId) : undefined;
 }
+async function removeEmptyOrganizedParents(start) {
+    const root = path.resolve(config_1.config.organizedBase);
+    let current = path.resolve(path.dirname(start));
+    while (current.startsWith(root + path.sep)) {
+        const relative = path.relative(root, current);
+        if (!relative || relative.split(path.sep).length <= 1)
+            break;
+        const entries = await fsp.readdir(current).catch(() => null);
+        if (!entries || entries.length > 0)
+            break;
+        await fsp.rmdir(current).catch(() => undefined);
+        current = path.dirname(current);
+    }
+}
 async function moveSymlink(link, destination) {
     if (path.normalize(link) === path.normalize(destination))
         return false;
@@ -195,12 +209,14 @@ async function moveSymlink(link, destination) {
         if (path.normalize(existingTarget) !== path.normalize(source))
             return false;
         await fsp.unlink(link);
+        await removeEmptyOrganizedParents(link);
         return true;
     }
     else {
         await fsp.symlink(source, destination);
     }
     await fsp.unlink(link);
+    await removeEmptyOrganizedParents(link);
     return true;
 }
 async function requestArrRescan(category, recordId) {
