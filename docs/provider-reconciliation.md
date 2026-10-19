@@ -41,39 +41,19 @@ to force it on, while an explicit `false` disables automatic activation.
 
 ## Bootstrap reconciliation edge cases
 
-The initial organizer pass also reconciles links that were created before
-Radarr/Sonarr integration was available. Release-like directory names are not
-treated as authoritative identities: the file basename and TMDb/ARR identity
-are used to resolve the record, then the symlink is moved to the ARR-owned
-library path.
+Provider mounts that expose category directories and an aggregate `__all__`
+directory are scanned through the category directories only. Every direct,
+non-hidden category directory is eligible, including custom categories; the
+aggregate `__all__` and compatibility `links` directories are never combined
+with authoritative roots. If no category root exists, `__all__` (then `links`)
+is retained as a legacy fallback. This prevents an Arr-reconciled file from
+being imported a second time through an aggregate alias while preserving older
+provider layouts. Existing aggregate aliases are removed only when the
+corresponding category-root link is present in the same organised folder.
 
-This includes numeric movie titles whose release name uses a form such as
-`1917.(2019).2160p...`. The numeric title and the parenthesized year must be
-parsed separately; otherwise the release tokens can be mistaken for the media
-title or year.
-
-
-The release year is secondary identity evidence, not a hard filter. A unique Radarr/Sonarr title match is authoritative even when the release filename year differs from the catalog year, for example an Eden release dated 2024 catalogued by Radarr as Eden (2025). The year remains a disambiguator when multiple ARR records share the same title.
-
-A rescan is requested once per matched movie or series during each organizer
-pass, even when the symlink is already under the correct path. This allows
-Sonarr/Radarr to register files that existed before the reconciliation pass.
-The operation remains symlink-only: provider-backed files are never copied or
-deleted. If an ARR path is unavailable, the item is deferred and the
-standalone organizer does not create a competing fallback path.
-
-Live validation on 2026-10-15 confirmed the behavior with:
-
-- Radarr: `1917` moved from a release-like folder into
-  `Movies/1917 (2019)` and became associated;
-- Sonarr: Widow's Bay increased from 2 to 10 registered episode files;
-- 241 existing symlinks were reconciled without physical media copies.
-
-Live validation on 2026-10-19 confirmed the year-mismatch case with AllDebrid and Radarr:
-
-- Eden release dated 2024 was initially under Movies/Eden (2024) while Radarr authoritative record was Eden (2025).
-- The organizer moved the symlink to Movies/Eden (2025) without copying or deleting provider media.
-- The pass moved 9 symlinks in total and Radarr reported hasFile=true for Eden afterwards.
+Alias reconciliation compares the complete provider-relative media path, not
+only the final filename. This keeps two different sources with the same leaf
+name from being treated as the same media item.
 
 ## Contract coverage
 
