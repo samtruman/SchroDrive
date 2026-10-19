@@ -180,6 +180,8 @@ async function moveSymlink(link: string, destination: string): Promise<boolean> 
       ? rawExistingTarget
       : path.resolve(path.dirname(destination), rawExistingTarget);
     if (path.normalize(existingTarget) !== path.normalize(source)) return false;
+    await fsp.unlink(link);
+    return true;
   } else {
     await fsp.symlink(source, destination);
   }
