@@ -125,17 +125,14 @@ function findArrRecordByTmdb(tmdbId: string | undefined, records: Array<ArrMovie
 function findArrRecordByTitle(candidate: Candidate, records: Array<ArrMovie | ArrSeries>): ArrMovie | ArrSeries | undefined {
   const candidateTitle = normalizeArrTitle(candidate.title || "");
   if (!candidateTitle) return undefined;
-  const matches = records.filter((item) => {
-    const aliases = arrTitleAliases(item);
-    if (!aliases.includes(candidateTitle)) return false;
-    // A known year must agree when ARR provides one. Missing ARR metadata is
-    // tolerated because older imports may not expose the year. Episode release
-    // years frequently differ from the series premiere year, so Sonarr title
-    // identity remains authoritative when the alias match is unique.
-    return candidate.category === "series" || !candidate.year || !item.year || Number(item.year) === candidate.year;
-  });
-  // Do not guess when two regional variants or same-title entries are configured.
-  return matches.length === 1 ? matches[0] : undefined;
+  const titleMatches = records.filter((item) => arrTitleAliases(item).includes(candidateTitle));
+  if (titleMatches.length === 1) return titleMatches[0];
+  // The release year is secondary evidence: it disambiguates duplicate titles,
+  // but must not block a unique ARR identity when release and catalog years
+  // differ (for example a festival release in 2024 catalogued by TMDb/Radarr
+  // as a 2025 movie).
+  const yearMatches = titleMatches.filter((item) => !candidate.year || !item.year || Number(item.year) === candidate.year);
+  return yearMatches.length === 1 ? yearMatches[0] : undefined;
 }
 
 function findArrRecord(candidate: Candidate, records: Array<ArrMovie | ArrSeries>, tmdbId?: string): ArrMovie | ArrSeries | undefined {
