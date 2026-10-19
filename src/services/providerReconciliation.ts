@@ -204,6 +204,15 @@ export class HttpArrClient implements ArrClient {
 
 type ArrEntity = { id?: number; title?: string; originalTitle?: string; alternateTitles?: Array<string | { title?: string }>; tmdbId?: number | string; year?: number; path?: string };
 
+async function fetchArrEntities(route: ArrRoute, endpoint: string): Promise<ArrEntity[]> {
+  const response = await fetch(`${route.baseUrl.replace(/\/$/, '')}/api/v3/${endpoint}`, {
+    headers: { 'X-Api-Key': route.apiKey },
+  });
+  if (!response.ok) throw new Error(`Arr ${endpoint} lookup failed: HTTP ${response.status}`);
+  const body = await response.json();
+  return Array.isArray(body) ? body as ArrEntity[] : [];
+}
+
 async function findArrEntity(route: ArrRoute, event: DirectFileEvent): Promise<ArrEntity | undefined> {
   const filename = path.basename(event.path);
   const parsed = parseMediaFilename(filename, event.path);
@@ -217,20 +226,30 @@ async function findArrEntity(route: ArrRoute, event: DirectFileEvent): Promise<A
   const title = normalizeArrTitle(parsed.title || event.path.split('/').filter(Boolean).slice(-2, -1)[0] || '');
   const endpoint = route.kind === 'radarr' ? 'movie' : 'series';
   const kind = route.kind === 'radarr' ? 'movie' : 'tv';
-  const response = await fetch(`${route.baseUrl.replace(/\/$/, '')}/api/v3/${endpoint}`, {
-    headers: { 'X-Api-Key': route.apiKey },
-  });
-  if (!response.ok) throw new Error(`Arr ${endpoint} lookup failed: HTTP ${response.status}`);
-  const records = await response.json() as ArrEntity[];
+  const records = await fetchArrEntities(route, endpoint);
   if (manual?.tmdbId) {
     const manualMatch = records.find((record) => record.id && String(record.tmdbId || '') === String(manual.tmdbId));
     if (manualMatch) return manualMatch;
   }
   const titleMatches = records.filter((record) => {
     if (!record.id || !arrTitleAliases(record).includes(title)) return false;
-    return route.kind === 'sonarr' || !parsed.year || !record.year || Number(record.year) === parsed.year;
+    return true;
   });
   if (titleMatches.length === 1) return titleMatches[0];
+
+  // The release year is secondary evidence. It disambiguates duplicate ARR
+  // titles, but must not reject a unique title match when the catalog year
+  // differs from the year parsed from a release filename.
+  const titleYearMatches = titleMatches.filter((record) => !parsed.year || !record.year || Number(record.year) === parsed.year);
+  if (titleYearMatches.length === 1) return titleYearMatches[0];
+
+  // Use ARR's own metadata lookup before the external TMDB fallback. This
+  // keeps ARR authoritative and avoids requiring a second TMDB credential.
+  const lookup = await fetchArrEntities(route, `${endpoint}/lookup?term=${encodeURIComponent(parsed.title || filename)}`);
+  const yearMatches = lookup.filter((candidate) => !parsed.year || !candidate.year || Number(candidate.year) === parsed.year);
+  const tmdbIds = new Set(yearMatches.map((candidate) => String(candidate.tmdbId || '')).filter(Boolean));
+  const tmdbMatches = records.filter((record) => record.id && tmdbIds.has(String(record.tmdbId || '')));
+  if (tmdbMatches.length === 1) return tmdbMatches[0];
 
   // ARR is authoritative. TMDB is only a fallback when ARR title aliases do
   // not produce one unambiguous result.
