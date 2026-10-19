@@ -52,6 +52,9 @@ This includes numeric movie titles whose release name uses a form such as
 parsed separately; otherwise the release tokens can be mistaken for the media
 title or year.
 
+
+The release year is secondary identity evidence, not a hard filter. A unique Radarr/Sonarr title match is authoritative even when the release filename year differs from the catalog year, for example an Eden release dated 2024 catalogued by Radarr as Eden (2025). The year remains a disambiguator when multiple ARR records share the same title.
+
 A rescan is requested once per matched movie or series during each organizer
 pass, even when the symlink is already under the correct path. This allows
 Sonarr/Radarr to register files that existed before the reconciliation pass.
@@ -65,6 +68,12 @@ Live validation on 2026-10-15 confirmed the behavior with:
   `Movies/1917 (2019)` and became associated;
 - Sonarr: Widow's Bay increased from 2 to 10 registered episode files;
 - 241 existing symlinks were reconciled without physical media copies.
+
+Live validation on 2026-10-19 confirmed the year-mismatch case with AllDebrid and Radarr:
+
+- Eden release dated 2024 was initially under Movies/Eden (2024) while Radarr authoritative record was Eden (2025).
+- The organizer moved the symlink to Movies/Eden (2025) without copying or deleting provider media.
+- The pass moved 9 symlinks in total and Radarr reported hasFile=true for Eden afterwards.
 
 ## Contract coverage
 
