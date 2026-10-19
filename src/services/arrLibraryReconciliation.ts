@@ -15,6 +15,7 @@ type Candidate = {
   currentLink: string;
   category: "movie" | "series";
   title?: string;
+  titleCandidates?: string[];
   year?: number;
   season?: number;
 };
@@ -102,16 +103,18 @@ function candidateFor(link: string, organizedBase: string): Candidate | undefine
   const folderYear = rawFolderTitle.match(/\((\d{4})\)$/)?.[1];
   const releaseLikeFolder = looksLikeReleasePath(rawFolderTitle) || /^\d{4}\b/.test(rawFolderTitle);
   const numericMovie = path.basename(link).match(/^(\d{1,4})[._\s-]+(?:\(((?:19|20|21)\d{2})\)|((?:19|20|21)\d{2}))(?:[._\s-]|$)/i);
+  const titleCandidates = [...new Set([folderTitle, parsed.title].filter((value): value is string => Boolean(value)))];
   const resolvedTitle = numericMovie?.[1] || (releaseLikeFolder && parsed.title ? parsed.title : (folderTitle || parsed.title));
   const resolvedYear = numericMovie ? Number(numericMovie[2] || numericMovie[3]) : (parsed.year || (folderYear ? Number(folderYear) : undefined));
   if (category === "movies") {
-    return { source, currentLink: link, category: "movie", title: resolvedTitle, year: resolvedYear };
+    return { source, currentLink: link, category: "movie", title: resolvedTitle, titleCandidates, year: resolvedYear };
   }
   return {
     source,
     currentLink: link,
     category: "series",
     title: resolvedTitle,
+    titleCandidates,
     year: parsed.year || (folderYear ? Number(folderYear) : undefined),
     season: parsed.season ?? (Number((parts.find((part) => /^Season\s+\d+$/i.test(part)) || "").replace(/\D/g, "")) || undefined),
   };
@@ -123,15 +126,11 @@ function findArrRecordByTmdb(tmdbId: string | undefined, records: Array<ArrMovie
 }
 
 function findArrRecordByTitle(candidate: Candidate, records: Array<ArrMovie | ArrSeries>): ArrMovie | ArrSeries | undefined {
-  const candidateTitle = normalizeArrTitle(candidate.title || "");
-  if (!candidateTitle) return undefined;
-  const titleMatches = records.filter((item) => arrTitleAliases(item).includes(candidateTitle));
+  const candidateTitles = [...new Set([candidate.title, ...(candidate.titleCandidates || [])].filter(Boolean).map((title) => normalizeArrTitle(title!)))];
+  if (!candidateTitles.length) return undefined;
+  const titleMatches = records.filter((item) => candidateTitles.some((title) => arrTitleAliases(item).includes(title)));
   if (titleMatches.length === 1) return titleMatches[0];
-  // The release year is secondary evidence: it disambiguates duplicate titles,
-  // but must not block a unique ARR identity when release and catalog years
-  // differ (for example a festival release in 2024 catalogued by TMDb/Radarr
-  // as a 2025 movie).
-  const yearMatches = titleMatches.filter((item) => !candidate.year || !item.year || Number(item.year) === candidate.year);
+  const yearMatches = titleMatches.filter((item) => !candidate.year || !item.year || Number(item.year) === candidate.year || Math.abs(Number(item.year) - candidate.year) === 1);
   return yearMatches.length === 1 ? yearMatches[0] : undefined;
 }
 

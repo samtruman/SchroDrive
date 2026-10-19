@@ -57,6 +57,8 @@ exports.shouldDeferToReview = shouldDeferToReview;
 exports.computeTarget = computeTarget;
 exports.makeSymlink = makeSymlink;
 exports.resolveCollisionTarget = resolveCollisionTarget;
+exports.selectProviderRoots = selectProviderRoots;
+exports.providerMediaKey = providerMediaKey;
 exports.organizeOnce = organizeOnce;
 exports.startOrganizerWatch = startOrganizerWatch;
 const fs = __importStar(require("fs"));
@@ -893,8 +895,8 @@ async function reconcileObsoleteSymlinks(dir, desiredBySource) {
         const source = path.resolve(path.dirname(full), current);
         const relative = path.relative(path.resolve(config_1.config.mountBase), source);
         const segments = relative.split(path.sep);
-        if (segments.length >= 3 && ["movies", "shows", "anime"].includes(segments[1])) {
-            categoryTargetLeaves.add(path.basename(source));
+        if (segments.length >= 3 && segments[1] !== "__all__") {
+            categoryTargetLeaves.add(providerMediaKey(config_1.config.mountBase, source));
         }
     }
     for (const ent of entries) {
@@ -919,7 +921,8 @@ async function reconcileObsoleteSymlinks(dir, desiredBySource) {
         const relative = path.relative(path.resolve(config_1.config.mountBase), source);
         const segments = relative.split(path.sep);
         const isProviderAllAlias = segments.length >= 3 && segments[1] === "__all__";
-        if (isProviderAllAlias && categoryTargetLeaves.has(path.basename(source))) {
+        const mediaKey = providerMediaKey(config_1.config.mountBase, source);
+        if (isProviderAllAlias && categoryTargetLeaves.has(mediaKey)) {
             console.log(`[${new Date().toISOString()}][organize] obsolete __all__ alias`, {
                 path: full,
                 target: source,
@@ -940,6 +943,39 @@ async function reconcileObsoleteSymlinks(dir, desiredBySource) {
         removedLinks++;
     }
     return { removedLinks, removedDirs };
+}
+/**
+ * Select provider roots without scanning an aggregate alias alongside
+ * authoritative category directories. Unknown/custom category directories are
+ * included automatically when category roots exist.
+ */
+function selectProviderRoots(providerBase, entries) {
+    const excluded = new Set(["__all__", "links"]);
+    const categoryRoots = entries
+        .filter((entry) => entry.isDirectory() && !excluded.has(entry.name) && !entry.name.startsWith("."))
+        .map((entry) => path.join(providerBase, entry.name));
+    if (categoryRoots.length > 0)
+        return categoryRoots;
+    const all = entries.find((entry) => entry.isDirectory() && entry.name === "__all__");
+    if (all)
+        return [path.join(providerBase, all.name)];
+    const links = entries.find((entry) => entry.isDirectory() && entry.name === "links");
+    if (links)
+        return [path.join(providerBase, links.name)];
+    return [providerBase];
+}
+/**
+ * Return the provider-relative media path used to match aggregate aliases
+ * against authoritative category links. Keeping the full relative path avoids
+ * collisions when two sources have the same basename.
+ */
+function providerMediaKey(mountBase, source) {
+    const relative = path.relative(path.resolve(mountBase), path.resolve(source));
+    const segments = relative.split(path.sep);
+    if (segments.length < 3)
+        return relative;
+    const categoryIndex = segments[1] === "__all__" ? 2 : 1;
+    return segments.slice(categoryIndex + 1).join(path.sep);
 }
 // ===========================================================================
 // Main Orchestration
@@ -994,43 +1030,11 @@ async function organizeOnce(opts) {
     for (const b of providerBases) {
         const status = readinessByPath.get(path.resolve(b));
         if (config_1.config.runMount && status && !status.ready) {
-            console.warn(`[${new Date().toISOString()}][organize] skipping source mount`, { reason: status.reason });
+            console.warn("[" + new Date().toISOString() + "][organize] skipping source mount", { reason: status.reason });
             continue;
         }
-        // Prefer the provider's category roots. __all__ is a provider-side
-        // aggregation view, not an additional organiser source: scanning it in
-        // addition to movies/shows exposes the same file through a second path
-        // and makes the collision allocator create suffixed duplicate symlinks.
-        const categoryRoots = ["movies", "shows", "anime"]
-            .map((category) => path.join(b, category))
-            .filter((root) => root !== b);
-        let addedCategoryRoot = false;
-        for (const categoryRoot of categoryRoots) {
-            const categoryStat = await fsp.stat(categoryRoot).catch(() => null);
-            if (categoryStat?.isDirectory()) {
-                roots.push(categoryRoot);
-                addedCategoryRoot = true;
-            }
-        }
-        if (addedCategoryRoot)
-            continue;
-        // Legacy/provider layouts without category roots can still be imported
-        // from __all__ as a fallback. It must never be combined with categories.
-        const allDir = path.join(b, "__all__");
-        const allStat = await fsp.stat(allDir).catch(() => null);
-        if (allStat?.isDirectory()) {
-            roots.push(allDir);
-            continue;
-        }
-        // Legacy layout: check for links/ subdirectory
-        const linksDir = path.join(b, "links");
-        const linksStat = await fsp.stat(linksDir).catch(() => null);
-        if (linksStat?.isDirectory()) {
-            roots.push(linksDir);
-        }
-        else {
-            roots.push(b);
-        }
+        const entries = await fsp.readdir(b, { withFileTypes: true }).catch(() => []);
+        roots.push(...selectProviderRoots(b, entries));
     }
     // Add WebDAV mount roots where skipOrganiser is false
     if (config_1.config.webdavMountsEnabled) {
