@@ -100,5 +100,9 @@ entry removal; an unchanged periodic scan does not repeatedly refresh servers.
 Missing credentials or an unreachable optional server do not block provider
 reconciliation.
 
+### Idempotent ARR path repair
+
+ARR reconciliation is safe to repeat. When an existing organized destination already points to the same provider source, the stale alias is removed instead of being retained as a duplicate. After an ARR move, empty season/title parent directories under the organized library are removed immediately; library roots such as Movies, TV, and Anime are preserved. The operation never removes provider content or a non-empty directory.
+
 The older generic `REFRESH_LIBRARY_ON_ADD` setting is not the control for this
 path. It must not be used as a substitute for the server-specific settings.
