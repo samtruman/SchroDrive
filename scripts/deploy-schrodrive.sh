@@ -37,9 +37,27 @@ require_command() {
   command -v "$1" >/dev/null 2>&1 || { echo "missing command: $1" >&2; exit 1; }
 }
 for command in git docker curl python3; do require_command "$command"; done
-BUN="${SCHRODRIVE_BUN_BIN:-$(command -v bun || true)}"
-[[ -x "$BUN" ]] || BUN="/home/samtruman/.bun/bin/bun"
-[[ -x "$BUN" ]] || { echo "missing Bun executable; set SCHRODRIVE_BUN_BIN" >&2; exit 1; }
+BUN=""
+if [[ -n "${SCHRODRIVE_BUN_BIN:-}" ]]; then
+  BUN="$SCHRODRIVE_BUN_BIN"
+fi
+if [[ ! -x "$BUN" ]]; then
+  for candidate in \
+    "$(command -v bun || true)" \
+    "/srv/storage/build-cache/bun/bin/bun" \
+    "/home/samtruman/.bun/bin/bun" \
+    "/usr/local/bin/bun"; do
+    if [[ -x "$candidate" ]]; then
+      BUN="$candidate"
+      break
+    fi
+  done
+fi
+[[ -x "$BUN" ]] || {
+  echo "missing Bun executable; checked PATH, /srv/storage/build-cache/bun/bin/bun, /home/samtruman/.bun/bin/bun, and /usr/local/bin/bun" >&2
+  echo "set SCHRODRIVE_BUN_BIN to override" >&2
+  exit 1
+}
 [[ -f "$COMPOSE_FILE" ]] || { echo "compose file not found: $COMPOSE_FILE" >&2; exit 1; }
 actual_hostname="$(hostname -s)"
 actual_arch="$(uname -m)"

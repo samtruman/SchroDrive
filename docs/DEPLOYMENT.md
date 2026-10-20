@@ -111,9 +111,13 @@ data, while file details and short-lived download URLs are rebuilt lazily
 after a restart.
 
 The deploy script uses the host Bun installation even for non-interactive SSH
-sessions. On the current server it is `/home/samtruman/.bun/bin/bun`; an
-explicit `SCHRODRIVE_BUN_BIN` may be supplied when another installation is
-required.
+sessions. On the current SAM server the installed x86-64 binary is
+`/srv/storage/build-cache/bun/bin/bun` (currently Bun 1.4.2). That directory
+is not necessarily in a non-interactive SSH `PATH`, so the deployment script
+checks it explicitly, after `PATH` and before the other standard Bun paths.
+An explicit `SCHRODRIVE_BUN_BIN` may be supplied when another installation is
+required. Do not extract Bun from a container or use a Raspberry Pi binary for
+SAM server deployments.
 
 ## Configuration precedence and Organizer naming
 
@@ -205,7 +209,7 @@ considered finished.
 3. Run the relevant Bun tests, the complete applicable unit/regression suite,
    backend typecheck, backend build, frontend build, and git diff --check.
    Use the host Bun installation explicitly for non-interactive sessions
-   (SCHRODRIVE_BUN_BIN or /home/samtruman/.bun/bin/bun on the reference host).
+   (SCHRODRIVE_BUN_BIN or /srv/storage/build-cache/bun/bin/bun on SAM server).
 4. Update documentation for every new feature, architectural choice, runtime
    contract, configuration behavior, or operational workflow. Small isolated
    bug fixes may use the change description only, but must still record any
