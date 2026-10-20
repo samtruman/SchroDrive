@@ -148,11 +148,23 @@ function decideOrganizerReview(id, decision, override) {
         return undefined;
     const updatedAt = new Date().toISOString();
     const effectiveOverride = override || parseStoredJson(row.override_json);
+    // Reject unsupported paths before changing the review state.
+    if (decision === "accepted" && effectiveOverride?.kind === "episode" && effectiveOverride.episode !== undefined) {
+        const provider = /\/(alldebrid)\//i.exec(row.source_path)?.[1];
+        if (!provider || !(0, manualIdentity_1.sourceOverrideKey)(provider, row.source_path))
+            throw new Error("Cannot safely identify the provider source for this episode");
+    }
     database.prepare("UPDATE organizer_reviews SET decision = ?, override_json = ?, updated_at = ? WHERE id = ?")
         .run(decision, effectiveOverride ? JSON.stringify(effectiveOverride) : null, updatedAt, id);
     if (decision === "accepted" && effectiveOverride) {
         const parsed = parseStoredJson(row.parsed_json);
-        if (parsed)
+        if (parsed && effectiveOverride.kind === "episode" && effectiveOverride.episode !== undefined) {
+            const provider = /\/(alldebrid)\//i.exec(row.source_path)?.[1];
+            if (!provider)
+                throw new Error("Cannot safely identify the provider source for this episode");
+            (0, manualIdentity_1.saveManualIdentityOverrideForSource)(provider, row.source_path, (0, manualIdentity_1.manualOverrideFromReview)(effectiveOverride));
+        }
+        else if (parsed)
             (0, manualIdentity_1.saveManualIdentityOverride)(parsed, (0, manualIdentity_1.manualOverrideFromReview)(effectiveOverride));
     }
     database.prepare("INSERT INTO organizer_review_audit (review_id, action, payload_json, created_at) VALUES (?, ?, ?, ?)")
@@ -189,6 +201,9 @@ function clearOrganizerReviewOverride(id) {
     const now = new Date().toISOString();
     database.prepare("UPDATE organizer_reviews SET decision = 'pending', override_json = NULL, updated_at = ? WHERE id = ?").run(now, id);
     const parsed = parseStoredJson(row.parsed_json);
+    const provider = /\/(alldebrid)\//i.exec(row.source_path)?.[1];
+    if (provider)
+        (0, manualIdentity_1.clearManualIdentityOverrideForSource)(provider, row.source_path);
     if (parsed)
         (0, manualIdentity_1.clearManualIdentityOverride)(parsed);
     database.prepare("INSERT INTO organizer_review_audit (review_id, action, payload_json, created_at) VALUES (?, ?, ?, ?)").run(id, "cleared_override", null, now);

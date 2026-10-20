@@ -44,12 +44,14 @@ const acquisition_1 = require("./services/acquisition");
 const seerrAcquisitionAdapter_1 = require("./services/seerrAcquisitionAdapter");
 const versionManagerStore_1 = require("./services/versionManagerStore");
 const tmdbService_1 = require("./services/tmdbService");
+const reviewEpisodeAssignments_1 = require("./services/reviewEpisodeAssignments");
+const db_1 = require("./core/db");
 const manualIdentity_1 = require("./services/manualIdentity");
 const migrationExporter_1 = require("./services/migrationExporter");
 const migrationImporter_1 = require("./services/migrationImporter");
 const migrationState_1 = require("./services/migrationState");
 const providerMigrationCapabilities_1 = require("./services/providerMigrationCapabilities");
-const db_1 = require("./core/db");
+const db_2 = require("./core/db");
 const unifiedReview_1 = require("./services/unifiedReview");
 const versionManagerScanJob_1 = require("./services/versionManagerScanJob");
 const magnetBackup_1 = require("./services/magnetBackup");
@@ -471,7 +473,7 @@ function startServer() {
     });
     app.get("/api/version-manager/delete/history", (_req, res) => {
         try {
-            return res.json({ ok: true, items: (0, db_1.listVersionManagerDeleteAudit)(200) });
+            return res.json({ ok: true, items: (0, db_2.listVersionManagerDeleteAudit)(200) });
         }
         catch (error) {
             return res.status(500).json({ ok: false, error: error?.message || "Delete history unavailable" });
@@ -499,12 +501,12 @@ function startServer() {
             if (!provider)
                 return res.status(400).json({ ok: false, error: `Provider ${providerId} is not configured` });
             const result = await (0, deleteExecutor_1.executeVersionManagerDelete)({ groups: snapshot.groups, provider, providerItemId, dryRun, confirmation: req.body?.confirmation, selection });
-            (0, db_1.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId, snapshotId: snapshot.snapshotId, mode, status: result.status, detail: dryRun ? "ProviderItem revalidated; provider delete was not called" : "ProviderItem deleted after final revalidation" });
+            (0, db_2.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId, snapshotId: snapshot.snapshotId, mode, status: result.status, detail: dryRun ? "ProviderItem revalidated; provider delete was not called" : "ProviderItem deleted after final revalidation" });
             return res.json({ ok: true, policyDryRun, mode, ...result });
         }
         catch (error) {
             if (providerId && providerItemId)
-                (0, db_1.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "FAILED", detail: error?.message || "Delete execution failed" });
+                (0, db_2.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "FAILED", detail: error?.message || "Delete execution failed" });
             return res.status(409).json({ ok: false, policyDryRun, mode, error: error?.message || "Delete execution failed" });
         }
     });
@@ -530,18 +532,18 @@ function startServer() {
             if (!provider)
                 return res.status(400).json({ ok: false, error: `Provider ${providerId} is not configured` });
             const result = await (0, deleteExecutor_1.executeVersionManagerDeleteBatch)({ groups: snapshot.groups, provider, providerItemIds, dryRun, confirmation: req.body?.confirmation, selection });
-            result.results.forEach((item) => (0, db_1.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId: item.providerItemId, snapshotId: snapshot.snapshotId, mode, status: item.status, detail: dryRun ? "Batch ProviderItem revalidated; provider delete was not called" : "ProviderItem deleted by confirmed batch after final revalidation" }));
+            result.results.forEach((item) => (0, db_2.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId: item.providerItemId, snapshotId: snapshot.snapshotId, mode, status: item.status, detail: dryRun ? "Batch ProviderItem revalidated; provider delete was not called" : "ProviderItem deleted by confirmed batch after final revalidation" }));
             return res.json({ ok: true, policyDryRun, mode, ...result });
         }
         catch (error) {
             const batchError = error instanceof deleteExecutor_1.BatchDeleteExecutionError ? error : undefined;
             const inventoryDrift = error instanceof deleteExecutor_1.ProviderInventoryDriftError ? error : undefined;
             for (const id of batchError?.completedIds || [])
-                (0, db_1.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId: id, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "DELETED", detail: "ProviderItem deleted before the batch stopped" });
+                (0, db_2.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId: id, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "DELETED", detail: "ProviderItem deleted before the batch stopped" });
             if (batchError?.failedProviderItemId)
-                (0, db_1.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId: batchError.failedProviderItemId, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "FAILED", detail: error?.message || "Batch delete failed" });
+                (0, db_2.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId: batchError.failedProviderItemId, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "FAILED", detail: error?.message || "Batch delete failed" });
             for (const id of inventoryDrift?.staleProviderItemIds || [])
-                (0, db_1.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId: id, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "FAILED", detail: "ProviderItem is already absent; inventory refresh required before continuing" });
+                (0, db_2.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId: id, snapshotId: snapshot?.snapshotId || requestedSnapshotId || "unknown", mode, status: "FAILED", detail: "ProviderItem is already absent; inventory refresh required before continuing" });
             return res.status(409).json({
                 ok: false,
                 policyDryRun,
@@ -620,7 +622,7 @@ function startServer() {
             const adapter = new seerrAcquisitionAdapter_1.SeerrAcquisitionAdapter();
             const previews = await Promise.all(visibleNeeds.map(async (need) => {
                 const preview = await adapter.preview(need);
-                (0, db_1.recordAcquisitionAudit)({ needId: need.id, identity: need.contentIdentity, profileId: need.missingProfileId, adapterId: preview.adapterId, phase: "PREVIEW", status: preview.status, providerRequestId: preview.providerRequestId, detail: [preview.providerStatusSource, preview.mappingWarning].filter(Boolean).join("; ") });
+                (0, db_2.recordAcquisitionAudit)({ needId: need.id, identity: need.contentIdentity, profileId: need.missingProfileId, adapterId: preview.adapterId, phase: "PREVIEW", status: preview.status, providerRequestId: preview.providerRequestId, detail: [preview.providerStatusSource, preview.mappingWarning].filter(Boolean).join("; ") });
                 return preview;
             }));
             return res.json({ ok: true, provider: provider.id, readOnly: true, mode: "dry-run", status, snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, inventoryCount: versions.length, groupCount: groups.length, probe, needs: visibleNeeds, previews, adapter: await adapter.capabilities() });
@@ -744,7 +746,7 @@ function startServer() {
                 : sourceInventory;
             const exported = (0, migrationExporter_1.exportMigrationLibrary)(exportInventory, [], { mode: "FULL_LIBRARY", sourceProvider: source.id });
             const rawPlan = (0, migrationImporter_1.analyzeMigrationImport)({ manifest: exported.manifest }, targetInventory);
-            const audit = (0, db_1.listMigrationAudit)(10000).filter((entry) => entry.sourceProvider === source.id && entry.targetProvider === target.id);
+            const audit = (0, db_2.listMigrationAudit)(10000).filter((entry) => entry.sourceProvider === source.id && entry.targetProvider === target.id);
             const latest = new Map();
             for (const entry of audit)
                 if (!latest.has(entry.infoHash))
@@ -857,7 +859,7 @@ function startServer() {
             const after = (0, migrationImporter_1.analyzeMigrationImport)({ manifest: { schemaVersion: "1.0", items: [sourceItem] } }, await target.listTorrents());
             const sourceProvider = String(sourceItem?.provider || req.body?.sourceProvider || "unknown");
             const auditOutcome = (0, migrationImporter_1.migrationAuditOutcome)(after.items[0]?.status || "ALREADY_PRESENT_EQUIVALENT_HASH", result.providerItemId);
-            (0, db_1.recordMigrationAudit)({ sourceProvider, targetProvider: target.id, sourceProviderItemId: String(sourceItem?.providerItemId || ""), infoHash: recoverable.infoHash, initialStatus: initial.status, revalidationStatus: auditOutcome.reconciliationStatus, executionStatus: auditOutcome.executionStatus, targetProviderItemId: auditOutcome.targetProviderItemId, importExecuted: auditOutcome.importExecuted });
+            (0, db_2.recordMigrationAudit)({ sourceProvider, targetProvider: target.id, sourceProviderItemId: String(sourceItem?.providerItemId || ""), infoHash: recoverable.infoHash, initialStatus: initial.status, revalidationStatus: auditOutcome.reconciliationStatus, executionStatus: auditOutcome.executionStatus, targetProviderItemId: auditOutcome.targetProviderItemId, importExecuted: auditOutcome.importExecuted });
             res.json({ ok: true, readOnly: false, sourceProvider, targetProvider: target.id, result, postImportPlan: after });
         }
         catch (err) {
@@ -892,10 +894,10 @@ function startServer() {
             for (const item of execution.results) {
                 if (!item.infoHash)
                     continue;
-                (0, db_1.recordMigrationAudit)({ sourceProvider: source.id, targetProvider: target.id, infoHash: item.infoHash, initialStatus: "READY_TO_IMPORT", revalidationStatus: item.status === "SKIPPED_ALREADY_PRESENT" ? "ALREADY_PRESENT" : "READY_TO_IMPORT", executionStatus: item.status, targetProviderItemId: item.providerItemId, reason: item.reason, retryCount: item.retryCount, importExecuted: item.importExecuted });
+                (0, db_2.recordMigrationAudit)({ sourceProvider: source.id, targetProvider: target.id, infoHash: item.infoHash, initialStatus: "READY_TO_IMPORT", revalidationStatus: item.status === "SKIPPED_ALREADY_PRESENT" ? "ALREADY_PRESENT" : "READY_TO_IMPORT", executionStatus: item.status, targetProviderItemId: item.providerItemId, reason: item.reason, retryCount: item.retryCount, importExecuted: item.importExecuted });
             }
             for (const item of knownRejectedLegal) {
-                (0, db_1.recordMigrationAudit)({ sourceProvider: source.id, targetProvider: target.id, infoHash: item.infoHash, initialStatus: "READY_TO_IMPORT", revalidationStatus: "REJECTED_LEGAL", executionStatus: "REJECTED_LEGAL", reason: "LEGAL_RESTRICTION (previously recorded)", retryCount: 0, importExecuted: true });
+                (0, db_2.recordMigrationAudit)({ sourceProvider: source.id, targetProvider: target.id, infoHash: item.infoHash, initialStatus: "READY_TO_IMPORT", revalidationStatus: "REJECTED_LEGAL", executionStatus: "REJECTED_LEGAL", reason: "LEGAL_RESTRICTION (previously recorded)", retryCount: 0, importExecuted: true });
             }
             return res.json({ ok: true, readOnly: false, sourceProvider: source.id, targetProvider: target.id, initial: { providerItems: sourceInventory.length, targetItems: initialTargetInventory.length, plan: initialPlan.counts }, knownRejectedLegal: knownRejectedLegal.length, execution, final: { targetItems: finalTargetInventory.length, plan: finalPlan.counts, residualTentableReady: Math.max(0, finalPlan.counts.READY_TO_IMPORT - knownRejectedLegal.length) } });
         }
@@ -914,15 +916,15 @@ function startServer() {
             if (!need || typeof need !== "object")
                 return res.status(400).json({ ok: false, error: "A single acquisition need is required" });
             const adapter = new seerrAcquisitionAdapter_1.SeerrAcquisitionAdapter();
-            (0, db_1.recordAcquisitionAudit)({ needId: String(need.id || "unknown"), identity: need.contentIdentity, profileId: String(need.missingProfileId || ""), adapterId: "seerr", phase: "REVALIDATION", status: "REVALIDATED", detail: "Immediate status check performed by adapter" });
+            (0, db_2.recordAcquisitionAudit)({ needId: String(need.id || "unknown"), identity: need.contentIdentity, profileId: String(need.missingProfileId || ""), adapterId: "seerr", phase: "REVALIDATION", status: "REVALIDATED", detail: "Immediate status check performed by adapter" });
             const result = await adapter.request(need);
-            (0, db_1.recordAcquisitionAudit)({ needId: String(need.id || "unknown"), identity: need.contentIdentity, profileId: String(need.missingProfileId || ""), adapterId: "seerr", phase: "REQUEST", status: result.status, providerRequestId: result.providerRequestId, detail: result.detail });
+            (0, db_2.recordAcquisitionAudit)({ needId: String(need.id || "unknown"), identity: need.contentIdentity, profileId: String(need.missingProfileId || ""), adapterId: "seerr", phase: "REQUEST", status: result.status, providerRequestId: result.providerRequestId, detail: result.detail });
             return res.json({ ok: true, requestExecuted: true, result });
         }
         catch (err) {
             const need = req.body?.need;
             if (need && typeof need === "object")
-                (0, db_1.recordAcquisitionAudit)({ needId: String(need.id || "unknown"), identity: need.contentIdentity, profileId: String(need.missingProfileId || ""), adapterId: "seerr", phase: "REQUEST", status: "FAILED", detail: err?.message || "Seerr request failed" });
+                (0, db_2.recordAcquisitionAudit)({ needId: String(need.id || "unknown"), identity: need.contentIdentity, profileId: String(need.missingProfileId || ""), adapterId: "seerr", phase: "REQUEST", status: "FAILED", detail: err?.message || "Seerr request failed" });
             return res.status(502).json({ ok: false, requestExecuted: false, error: err?.message || "Seerr request failed" });
         }
     });
@@ -1008,6 +1010,36 @@ function startServer() {
         }
         if (decision === 'accepted' && !override)
             return res.status(400).json({ ok: false, error: 'A canonical identity is required before accepting an aggregated review' });
+        if (decision === 'accepted' && override?.kind === 'episode' && Array.isArray(req.body?.episodeAssignments)) {
+            if (override.season === undefined)
+                return res.status(400).json({ ok: false, error: 'A season number is required' });
+            const selected = (0, organizerReview_1.listOrganizerReviews)(true).filter((entry) => ids.includes(entry.id));
+            let assignments;
+            try {
+                assignments = (0, reviewEpisodeAssignments_1.validateReviewEpisodeAssignments)(selected, req.body.episodeAssignments);
+            }
+            catch (error) {
+                return res.status(400).json({ ok: false, error: error?.message || 'Invalid episode assignments' });
+            }
+            try {
+                const entries = (0, db_1.getDb)().transaction(() => ids.map((id) => (0, organizerReview_1.decideOrganizerReview)(id, decision, { ...override, episode: assignments.get(id) })).filter(Boolean))();
+                return res.json({ ok: true, entries });
+            }
+            catch (error) {
+                return res.status(400).json({ ok: false, error: error?.message || 'Unable to save episode assignments' });
+            }
+        }
+        if (decision === 'accepted' && override?.kind === 'episode') {
+            const selected = (0, organizerReview_1.listOrganizerReviews)(true).filter((entry) => ids.includes(entry.id));
+            if (override.season === undefined)
+                return res.status(400).json({ ok: false, error: 'A season number is required' });
+            if (override.episode === undefined && selected.some((entry) => entry.parsed.episode === undefined)) {
+                return res.status(400).json({ ok: false, error: 'Each item in a season must have a known episode number; resolve unknown episodes separately' });
+            }
+            if (override.episode !== undefined && new Set(selected.map((entry) => entry.sourceBasename)).size > 1) {
+                return res.status(400).json({ ok: false, error: 'A single episode number cannot be applied to different files' });
+            }
+        }
         return res.json({ ok: true, entries: ids.map((id) => (0, organizerReview_1.decideOrganizerReview)(id, decision, override)).filter(Boolean) });
     });
     /** GET /api/organizer/review/:id — Returns one review entry. */
@@ -1099,7 +1131,69 @@ function startServer() {
         else {
             if (!override)
                 return res.status(400).json({ ok: false, error: 'override is required' });
-            if (targetVersionIds.length)
+            if (Array.isArray(req.body?.reviewIds) && req.body.reviewIds.length) {
+                const reviewIds = req.body.reviewIds;
+                if (new Set(reviewIds).size !== reviewIds.length || reviewIds.some((id) => typeof id !== 'string'))
+                    return res.status(400).json({ ok: false, error: 'Invalid review ids' });
+                const reviews = (0, organizerReview_1.listOrganizerReviews)(true).filter((entry) => reviewIds.includes(entry.id));
+                if (reviews.length !== reviewIds.length)
+                    return res.status(409).json({ ok: false, error: 'Review changed; refresh and retry' });
+                const records = (0, versionManagerStore_1.getLatestVersionManagerRecords)(provider.id).filter((record) => targetVersionIds.includes(record.id));
+                if (records.length !== targetVersionIds.length || !targetVersionIds.length)
+                    return res.status(409).json({ ok: false, error: 'Version details changed; refresh and retry' });
+                let reviewMapping;
+                let versionMapping;
+                if (override.kind === 'episode') {
+                    if (override.season === undefined)
+                        return res.status(400).json({ ok: false, error: 'Season is required' });
+                    try {
+                        reviewMapping = (0, reviewEpisodeAssignments_1.validateReviewEpisodeAssignments)(reviews, req.body.episodeAssignments || []);
+                        versionMapping = (0, reviewEpisodeAssignments_1.validateReviewEpisodeAssignments)(records.map((record) => ({ id: record.id, sourcePath: record.fingerprint.storage.path })), req.body.versionAssignments || []);
+                        const sources = new Map();
+                        for (const row of reviews) {
+                            const key = (0, manualIdentity_1.sourceOverrideKey)(provider.id, row.sourcePath);
+                            if (!key)
+                                throw new Error('Cannot identify review source');
+                            sources.set(key, reviewMapping.get(row.id));
+                        }
+                        for (const record of records) {
+                            const key = (0, manualIdentity_1.sourceOverrideKey)(provider.id, record.fingerprint.storage.path);
+                            if (!key || sources.get(key) !== versionMapping.get(record.id))
+                                throw new Error('Review and version episode assignments do not match');
+                        }
+                    }
+                    catch (error) {
+                        return res.status(400).json({ ok: false, error: error?.message || 'Invalid episode assignments' });
+                    }
+                }
+                try {
+                    (0, db_1.getDb)().transaction(() => {
+                        for (const row of reviews)
+                            (0, organizerReview_1.decideOrganizerReview)(row.id, 'accepted', { ...override, ...(reviewMapping ? { episode: reviewMapping.get(row.id) } : {}) });
+                        for (const id of targetVersionIds)
+                            (0, manualIdentity_1.saveManualIdentityOverrideForVersion)(id, { ...override, ...(versionMapping ? { episode: versionMapping.get(id) } : {}) });
+                    })();
+                }
+                catch (error) {
+                    return res.status(400).json({ ok: false, error: error?.message || 'Unable to save review' });
+                }
+            }
+            else if (Array.isArray(req.body?.versionAssignments)) {
+                if (override.kind !== "episode" || override.season === undefined || !targetVersionIds.length)
+                    return res.status(400).json({ ok: false, error: "A season and explicit versions are required" });
+                const records = (0, versionManagerStore_1.getLatestVersionManagerRecords)(provider.id).filter((record) => targetVersionIds.includes(record.id));
+                let assignments;
+                try {
+                    assignments = (0, reviewEpisodeAssignments_1.validateReviewEpisodeAssignments)(records.map((record) => ({ id: record.id, sourcePath: record.fingerprint.storage.path })), req.body.versionAssignments);
+                }
+                catch (error) {
+                    return res.status(400).json({ ok: false, error: error?.message || "Invalid version assignments" });
+                }
+                if (records.length !== targetVersionIds.length)
+                    return res.status(409).json({ ok: false, error: "One or more versions are unavailable" });
+                (0, db_1.getDb)().transaction(() => targetVersionIds.forEach((versionId) => (0, manualIdentity_1.saveManualIdentityOverrideForVersion)(versionId, { ...override, episode: assignments.get(versionId) })))();
+            }
+            else if (targetVersionIds.length)
                 targetVersionIds.forEach((versionId) => (0, manualIdentity_1.saveManualIdentityOverrideForVersion)(versionId, override));
             else
                 (0, manualIdentity_1.saveManualIdentityOverride)(identityValue, override);

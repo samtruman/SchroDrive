@@ -1,6 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.identityOverrideKey = identityOverrideKey;
+exports.sourceOverrideKey = sourceOverrideKey;
+exports.saveManualIdentityOverrideForSource = saveManualIdentityOverrideForSource;
+exports.clearManualIdentityOverrideForSource = clearManualIdentityOverrideForSource;
 exports.saveManualIdentityOverride = saveManualIdentityOverride;
 exports.saveManualIdentityOverrideForVersion = saveManualIdentityOverrideForVersion;
 exports.clearManualIdentityOverrideForVersion = clearManualIdentityOverrideForVersion;
@@ -25,6 +28,33 @@ function readOverride(row) {
 }
 function versionOverrideKey(versionId) {
     return `version:${versionId}`;
+}
+/** Source key uses the full provider-relative path, never a basename or inferred title. */
+function sourceOverrideKey(provider, sourcePath) {
+    if (!provider || !sourcePath)
+        return undefined;
+    const normalized = sourcePath.replace(/\\/g, "/");
+    const marker = `/${provider.toLowerCase()}/`;
+    const markerIndex = normalized.toLowerCase().indexOf(marker);
+    let relative = markerIndex >= 0 ? normalized.slice(markerIndex + marker.length) : normalized;
+    if (markerIndex >= 0)
+        relative = relative.replace(/^(?:__all__|shows|movies)\//i, "");
+    else if (relative.startsWith("/"))
+        return undefined;
+    if (!relative || relative.split("/").some((part) => part === ".."))
+        return undefined;
+    return `source:${provider.toLowerCase()}:${relative}`;
+}
+function saveManualIdentityOverrideForSource(provider, sourcePath, override) {
+    const key = sourceOverrideKey(provider, sourcePath);
+    if (!key)
+        throw new Error("Provider source path cannot be identified safely");
+    return saveOverrideByKey(key, override);
+}
+function clearManualIdentityOverrideForSource(provider, sourcePath) {
+    const key = sourceOverrideKey(provider, sourcePath);
+    if (key)
+        (0, db_1.getDb)().prepare("DELETE FROM version_manager_identity_overrides WHERE identity_key = ?").run(key);
 }
 function saveOverrideByKey(key, override) {
     (0, db_1.getDb)().prepare("INSERT OR REPLACE INTO version_manager_identity_overrides (identity_key, override_json, updated_at) VALUES (?, ?, ?)")
@@ -65,6 +95,8 @@ function applyManualIdentityOverride(identity, override) {
         ...(override.originalTitle ? { originalTitle: override.originalTitle } : {}),
         ...(override.year !== undefined ? { year: override.year } : {}),
         ...(override.kind ? { kind: override.kind } : {}),
+        ...(override.season !== undefined ? { season: override.season } : {}),
+        ...(override.episode !== undefined ? { episode: override.episode } : {}),
         ...(override.originalLanguage ? { originalLanguage: override.originalLanguage } : {}),
         confidence: 1,
         source: "manual",
@@ -82,7 +114,10 @@ function applyManualIdentityOverrides(versions) {
     const database = (0, db_1.getDb)();
     return versions.map((version) => {
         const versionOverride = readOverride(database.prepare("SELECT override_json FROM version_manager_identity_overrides WHERE identity_key = ?").get(versionOverrideKey(version.id)));
-        const override = versionOverride || getManualIdentityOverride(version.fingerprint.identity);
+        const storage = version.fingerprint.storage;
+        const sourceKey = sourceOverrideKey(storage.provider, storage.path);
+        const sourceOverride = sourceKey ? readOverride(database.prepare("SELECT override_json FROM version_manager_identity_overrides WHERE identity_key = ?").get(sourceKey)) : undefined;
+        const override = versionOverride || sourceOverride || getManualIdentityOverride(version.fingerprint.identity);
         return override ? { ...version, fingerprint: { ...version.fingerprint, identity: applyManualIdentityOverride(version.fingerprint.identity, override) } } : version;
     });
 }
