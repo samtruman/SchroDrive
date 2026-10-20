@@ -737,6 +737,17 @@ breakdown, probe status/tool and measured bitrate when available. Unknown or
 unavailable evidence remains explicit and is never presented as an FFprobe
 result.
 
+For competing releases at the same resolution, an enabled size preference can
+use measured bitrate before the source-label score when both measurements are
+available. Otherwise the normal profile scoring and size fallback apply. The
+bitrate is technical evidence, not a guarantee of perceptual quality: it can
+include container or audio overhead, and a larger value does not by itself
+prove that a particular encode is better.
+
+Release-group detection also handles dotted group names such as `MeM.GP` and
+can fall back to the provider path. A season pack remains a single deletion
+unit: do not remove it unless the retained alternatives cover its episodes.
+
 Base resolution, source, codec, audio, Atmos, HDR, HDR10+ and Dolby Vision
 weights are persisted profile settings editable in the GUI and included in the
 policy hash. Structured advanced scoring rules remain additive.
