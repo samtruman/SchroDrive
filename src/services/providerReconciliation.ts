@@ -213,6 +213,18 @@ async function fetchArrEntities(route: ArrRoute, endpoint: string): Promise<ArrE
   return Array.isArray(body) ? body as ArrEntity[] : [];
 }
 
+async function parseArrEntity(route: ArrRoute, filename: string): Promise<ArrEntity | undefined> {
+  const endpoint = route.kind === 'radarr' ? 'movie' : 'series';
+  const response = await fetch(
+    route.baseUrl.replace(/\/$/, '') + '/api/v3/parse?title=' + encodeURIComponent(filename),
+    { headers: { 'X-Api-Key': route.apiKey } },
+  );
+  if (!response.ok) return undefined;
+  const body = await response.json() as Record<string, unknown>;
+  const entity = body[endpoint];
+  return entity && typeof entity === 'object' ? entity as ArrEntity : undefined;
+}
+
 async function findArrEntity(route: ArrRoute, event: DirectFileEvent): Promise<ArrEntity | undefined> {
   const filename = path.basename(event.path);
   const parsed = parseMediaFilename(filename, event.path);
@@ -235,18 +247,29 @@ async function findArrEntity(route: ArrRoute, event: DirectFileEvent): Promise<A
     if (!record.id || !arrTitleAliases(record).includes(title)) return false;
     return true;
   });
-  if (titleMatches.length === 1) return titleMatches[0];
 
-  // The release year is secondary evidence. It disambiguates duplicate ARR
-  // titles, but must not reject a unique title match when the catalog year
-  // differs from the year parsed from a release filename.
-  const titleYearMatches = titleMatches.filter((record) => !parsed.year || !record.year || Number(record.year) === parsed.year);
-  if (titleYearMatches.length === 1) return titleYearMatches[0];
+  // Let Arr parse the release first. If it identifies an entity that is not
+  // configured in this Arr instance, fail closed instead of guessing by title.
+  const parsedEntity = await parseArrEntity(route, filename);
+  if (parsedEntity?.id) {
+    return records.find((record) => String(record.id) === String(parsedEntity.id));
+  }
 
-  // Use ARR's own metadata lookup before the external TMDB fallback. This
-  // keeps ARR authoritative and avoids requiring a second TMDB credential.
+  // The year is secondary evidence: it disambiguates duplicate ARR titles,
+  // but a distant remake must not be accepted as a unique match.
+  const nearYearMatches = titleMatches.filter((record) => {
+    if (!parsed.year || !record.year) return true;
+    return Math.abs(Number(record.year) - parsed.year) <= 1;
+  });
+  if (nearYearMatches.length === 1) return nearYearMatches[0];
+
+  // Use Arr's own metadata lookup for canonical TMDb identity, then map it
+  // back to an already configured record. No second TMDb credential is needed.
   const lookup = await fetchArrEntities(route, `${endpoint}/lookup?term=${encodeURIComponent(parsed.title || filename)}`);
-  const yearMatches = lookup.filter((candidate) => !parsed.year || !candidate.year || Number(candidate.year) === parsed.year);
+  const yearMatches = lookup.filter((candidate) => {
+    if (!parsed.year || !candidate.year) return true;
+    return Math.abs(Number(candidate.year) - parsed.year) <= 1;
+  });
   const tmdbIds = new Set(yearMatches.map((candidate) => String(candidate.tmdbId || '')).filter(Boolean));
   const tmdbMatches = records.filter((record) => record.id && tmdbIds.has(String(record.tmdbId || '')));
   if (tmdbMatches.length === 1) return tmdbMatches[0];
@@ -282,6 +305,11 @@ async function resolveCanonicalMetadata(title: string, kind: 'movie' | 'tv', yea
  * target is deliberately a symlink into the shared SchröDrive mount.
  */
 async function exposeAsSymlink(route: ArrRoute, event: DirectFileEvent, providerPath: string, arrPath: string): Promise<string> {
+  const libraryRoot = path.resolve(route.symlinkLibraryPath!);
+  const authoritativeRoot = path.resolve(arrPath);
+  if (authoritativeRoot !== libraryRoot && !authoritativeRoot.startsWith(`${libraryRoot}${path.sep}`)) {
+    throw new Error(`Refusing Arr path outside configured symlink library: ${arrPath}`);
+  }
   const filename = path.basename(event.path);
   const parsed = parseMediaFilename(filename, event.path);
   const destination = event.sourceCategory === 'Shows' && parsed.season
