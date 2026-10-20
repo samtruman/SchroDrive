@@ -161,6 +161,9 @@ function IdentityResolver({
   initialQuery,
   initialType,
   initialYear,
+  reviewEpisodes,
+  reviewItems,
+  versionItems,
   existingOverride,
   onSaved,
   actionLabel,
@@ -174,6 +177,9 @@ function IdentityResolver({
   initialQuery?: string;
   initialType?: "movie" | "tv";
   initialYear?: number;
+  reviewEpisodes?: number[];
+  reviewItems?: Array<{ id: string; sourcePath: string; parsed?: { episode?: number } }>;
+  versionItems?: Array<{ id: string; sourcePath: string; parsed?: { episode?: number } }>;
   existingOverride?: Record<string, unknown>;
   onSaved?: () => void;
   actionLabel?: string;
@@ -182,8 +188,25 @@ function IdentityResolver({
   const [query, setQuery] = useState(prefill.query);
   const [type, setType] = useState<"movie" | "tv">(initialType || "movie");
   const [year, setYear] = useState(prefill.year ? String(prefill.year) : "");
+  const [season, setSeason] = useState(identity?.season !== undefined ? String(identity.season) : "");
+  const [episode, setEpisode] = useState(identity?.episode !== undefined ? String(identity.episode) : "");
+  const assignmentItems = reviewItems?.length ? reviewItems : (versionItems || []);
+  // Never accept an incomplete preview as a complete season. A mixed group
+  // requires all version paths to have a corresponding organizer source.
+  const sourceKey = (path: string) => path.replace(/^.*\/alldebrid\/(?:__all__|shows|movies)\//i, "");
+  const previewComplete = !versionIds?.length || (versionItems || []).filter((item) => versionIds.includes(item.id)).length === new Set(versionIds).size;
+  const reviewSources = new Set((reviewItems || []).map((item) => sourceKey(item.sourcePath)));
+  const mixedCovered = !reviewItems?.length || (versionItems || []).every((item) => reviewSources.has(sourceKey(item.sourcePath)));
+  const uniqueFiles = Array.from(new Set(assignmentItems.map((item) => item.sourcePath.replace(/\/alldebrid\/(?:__all__|shows|movies)\//i, "/alldebrid/__provider__/"))));
+  const multiEpisode = uniqueFiles.length > 1;
+  const [fileEpisodes, setFileEpisodes] = useState<Record<string, string>>(() => Object.fromEntries(assignmentItems.map((item) => [item.id, item.parsed?.episode !== undefined ? String(item.parsed.episode) : ""])));
+  const validFileEpisodes = assignmentItems.length > 0 && assignmentItems.every((item) => /^\d{1,4}$/.test(fileEpisodes[item.id] || "") && Number(fileEpisodes[item.id]) <= 9999);
+  const validSeason = /^\d{1,2}$/.test(season) && Number(season) <= 99;
+  const validEpisode = /^\d{1,4}$/.test(episode) && Number(episode) <= 9999;
+
   const [results, setResults] = useState<any[]>([]);
   const [selected, setSelected] = useState<any>(null);
+  const validTvSelection = selected?.mediaType !== "tv" || (previewComplete && mixedCovered && validSeason && (multiEpisode ? validFileEpisodes : validEpisode));
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [open, setOpen] = useState(Boolean(existingOverride));
@@ -204,23 +227,26 @@ function IdentityResolver({
   }
 
   async function saveMatch() {
-    if (!selected || (!reviewId && !reviewIds?.length && !identity)) return;
+    if (!selected || !validTvSelection || (!reviewId && !reviewIds?.length && !identity)) return;
     setBusy(true); setMessage("");
     try {
       const override = {
         title: selected.title, originalTitle: selected.originalTitle, year: selected.year,
         kind: selected.mediaType === "movie" ? "movie" : "episode", tmdbId: selected.tmdbId,
         imdbId: selected.imdbId, tvdbId: selected.tvdbId, originalLanguage: selected.originalLanguage,
+        ...(selected.mediaType === "tv" ? { season: Number(season), ...(!multiEpisode ? { episode: Number(episode) } : {}) } : {}),
       };
       const useBatch = Boolean(reviewIds && reviewIds.length > 1);
-      const response = await fetch(useBatch ? "/api/organizer/review/batch" : reviewId ? `/api/organizer/review/${encodeURIComponent(reviewId)}` : "/api/version-manager/identity/override", {
+      const mixed = Boolean(reviewIds?.length && versionIds?.length && identity);
+      const episodeFor = (item: { id: string; sourcePath: string }) => multiEpisode ? Number(fileEpisodes[(assignmentItems.find((candidate) => sourceKey(candidate.sourcePath) === sourceKey(item.sourcePath)) || item).id]) : Number(episode);
+      const response = await fetch(mixed ? "/api/version-manager/identity/override" : useBatch ? "/api/organizer/review/batch" : reviewId ? `/api/organizer/review/${encodeURIComponent(reviewId)}` : "/api/version-manager/identity/override", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify(useBatch ? { ids: reviewIds, decision: "accepted", override } : reviewId ? { decision: "accepted", override } : { provider: providerId, identity, versionGroupId, versionIds, override }),
+        body: JSON.stringify(mixed ? { provider: providerId, identity, versionIds, reviewIds, override, ...(selected.mediaType === "tv" ? { episodeAssignments: (reviewItems || []).map((item) => ({ id: item.id, episode: episodeFor(item) })), versionAssignments: (versionItems || []).map((item) => ({ id: item.id, episode: episodeFor(item) })) } : {}) } : useBatch ? { ids: reviewIds, decision: "accepted", override, ...(selected.mediaType === "tv" && multiEpisode ? { episodeAssignments: (reviewItems || []).map((item) => ({ id: item.id, episode: Number(fileEpisodes[item.id]) })) } : {}) } : reviewId ? { decision: "accepted", override } : { provider: providerId, identity, ...(versionIds?.length ? {} : { versionGroupId }), versionIds, override, ...(selected.mediaType === "tv" && multiEpisode ? { versionAssignments: assignmentItems.map((item) => ({ id: item.id, episode: Number(fileEpisodes[item.id]) })) } : {}) }),
       });
       const body = await readJsonResponse<any>(response, "Saving identity match");
       let evaluation = body;
-      if ((reviewId || reviewIds?.length) && identity) {
-        const reevaluate = await fetch("/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: providerId, identity, override }) });
+      if (!mixed && (reviewId || reviewIds?.length) && identity && !multiEpisode) {
+        const reevaluate = await fetch("/api/version-manager/identity/override", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider: providerId, identity, versionIds, override }) });
         evaluation = await readJsonResponse<any>(reevaluate, "Re-evaluating identity");
       }
       setMessage(evaluation.reevaluated ? "Manual match saved and policy reevaluated." : "Manual match saved; it will be applied on the next cached evaluation.");
@@ -265,7 +291,14 @@ function IdentityResolver({
         <p className="text-xs text-muted-foreground">IMDb: {candidate.imdbId || "—"} · TVDb: {candidate.tvdbId || "—"}</p>
         {candidate.overview && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{candidate.overview}</p>}
       </button>)}
-      <Button size="sm" onClick={() => setConfirmMatchOpen(true)} disabled={busy || !selected || (!reviewId && !reviewIds?.length && !identity)}>Confirm manual match</Button>
+      {selected?.mediaType === "tv" && <div className="rounded border p-3 space-y-2">
+        {!previewComplete && <p className="text-sm text-amber-700">Waiting for all version details before assigning episodes.</p>}
+        {previewComplete && !mixedCovered && <p className="text-sm text-amber-700">This group contains versions without matching organizer files; refresh Review before assigning episodes.</p>}
+        <p className="text-sm font-medium">{multiEpisode ? "Season for the listed episodes" : "Episode identification"}</p>
+        <div className="flex flex-wrap gap-2"><label className="text-sm">Season <Input className="w-24" value={season} onChange={(event) => setSeason(event.target.value)} inputMode="numeric" placeholder="Season" /></label>{!multiEpisode && <label className="text-sm">Episode <Input className="w-24" value={episode} onChange={(event) => setEpisode(event.target.value)} inputMode="numeric" placeholder="Episode" /></label>}</div>
+        {multiEpisode && <div className="space-y-2">{assignmentItems.map((item) => <label key={item.id} className="flex items-center gap-2 text-xs"><span className="break-all flex-1">{item.sourcePath}</span><Input className="w-24" value={fileEpisodes[item.id] || ""} inputMode="numeric" placeholder="Episode" onChange={(event) => setFileEpisodes((old) => ({ ...old, [item.id]: event.target.value }))} /></label>)}<p className="text-xs text-muted-foreground">Assign a number to each file; the same file in different provider views must have the same number.</p></div>}
+      </div>}
+      <Button size="sm" onClick={() => setConfirmMatchOpen(true)} disabled={busy || !selected || !validTvSelection || (!reviewId && !reviewIds?.length && !identity)}>Confirm manual match</Button>
       {existingOverride && <Button size="sm" variant="destructive" onClick={() => setClearMatchOpen(true)} disabled={busy}>Clear manual match</Button>}
     </div>}
     </div>}
@@ -274,7 +307,7 @@ function IdentityResolver({
       onOpenChange={setConfirmMatchOpen}
       title="Confirm manual identity?"
       description="This identity will override automatic matching until the manual match is cleared."
-      context={selected && <div className="space-y-1"><p><b>Title:</b> {selected.title || "—"}</p><p><b>Year:</b> {selected.year || "—"}</p><p><b>Type:</b> {selected.mediaType === "tv" ? "TV" : "Movie"}</p><p><b>TMDb ID:</b> {selected.tmdbId || "—"}</p></div>}
+      context={selected && <div className="space-y-1"><p><b>Title:</b> {selected.title || "—"}</p><p><b>Year:</b> {selected.year || "—"}</p><p><b>Type:</b> {selected.mediaType === "tv" ? "TV" : "Movie"}</p><p><b>TMDb ID:</b> {selected.tmdbId || "—"}</p>{selected.mediaType === "tv" && <p><b>Season:</b> {season} · <b>Episodes:</b> {multiEpisode ? assignmentItems.map((item) => fileEpisodes[item.id] || "?").join(", ") : episode}</p>}</div>}
       confirmLabel="Confirm match"
       onConfirm={saveMatch}
     />
@@ -1323,7 +1356,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
                         const requirements = failedRequirementText(version);
                         return <div key={version.id} className="rounded border p-3 text-xs"><p className="break-all font-medium">{String(storage.path || version.releaseName || version.filename || version.id).split(/[\\/]/).pop()}</p><p className="mt-1 text-muted-foreground">{video.resolution || "resolution unknown"} · {video.codec || "codec unknown"} · audio {uniqueLanguages(fingerprint.audio || []) || "unknown"} · {formatSize(storage.size)} · {storage.provider || "provider unknown"} · ProviderItem {storage.torrentId || "unknown"}</p>{requirements.map((reason, index) => <p key={index} className="mt-1 text-amber-700">{reason}</p>)}</div>;
                       })}
-                      {entry.issueTypes?.includes("IDENTITY_ISSUE") && entry.decision !== "dismissed" && <IdentityResolver reviewId={entry.organizerReview?.id} reviewIds={(entry.organizerReviews || []).map((item: any) => item.id)} versionGroupId={entry.versionGroupId} versionIds={entry.versionIds} providerId={provider.providerId} identity={entry.identity} initialQuery={entry.title || entry.sourceBasename} initialType={entry.kind === "episode" ? "tv" : "movie"} initialYear={entry.year} existingOverride={entry.organizerReview?.override} actionLabel={entry.organizerReview?.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />}
+                      {entry.issueTypes?.includes("IDENTITY_ISSUE") && entry.decision !== "dismissed" && <IdentityResolver reviewId={entry.organizerReview?.id} reviewIds={(entry.organizerReviews || []).map((item: any) => item.id)} versionGroupId={entry.versionGroupId} versionIds={entry.versionIds} providerId={provider.providerId} identity={entry.identity} initialQuery={entry.title || entry.sourceBasename} initialType={entry.kind === "episode" ? "tv" : "movie"} initialYear={entry.year} reviewEpisodes={entry.episodes} reviewItems={entry.organizerReviews} versionItems={(enriched.versions || []).map((version: any) => ({ id: version.id, sourcePath: version.fingerprint?.storage?.path || version.id, parsed: { episode: version.fingerprint?.identity?.episode } }))} existingOverride={entry.organizerReview?.override} actionLabel={entry.organizerReview?.override ? "Change Match" : "Resolve Identity"} onSaved={() => void loadReview()} />}
                       <div className="flex flex-wrap gap-2">
                         {entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <><Button size="sm" variant="destructive" onClick={() => requestReviewAction(entry.organizerReview.id, { decision: "dismissed" }, entry)}><X className="mr-2 h-4 w-4" />Dismiss group</Button><Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.organizerReview.id, { action: "retry" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Retry group</Button></>)}
                         {!entry.organizerReview && (entry.decision === "dismissed" ? <Button size="sm" onClick={() => requestReviewAction(entry.key, { action: "restore" }, entry)}><RefreshCw className="mr-2 h-4 w-4" />Restore to Review</Button> : <Button size="sm" variant="outline" onClick={() => requestReviewAction(entry.key, { action: "dismiss" }, entry)}><X className="mr-2 h-4 w-4" />Dismiss</Button>)}

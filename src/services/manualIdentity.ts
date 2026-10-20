@@ -10,6 +10,8 @@ export interface ManualIdentityOverride {
   originalTitle?: string;
   year?: number;
   kind?: "movie" | "episode";
+  season?: number;
+  episode?: number;
   originalLanguage?: string;
 }
 
@@ -27,6 +29,30 @@ function readOverride(row: any): ManualIdentityOverride | undefined {
 
 function versionOverrideKey(versionId: string): string {
   return `version:${versionId}`;
+}
+
+/** Source key uses the full provider-relative path, never a basename or inferred title. */
+export function sourceOverrideKey(provider: string, sourcePath: string): string | undefined {
+  if (!provider || !sourcePath) return undefined;
+  const normalized = sourcePath.replace(/\\/g, "/");
+  const marker = `/${provider.toLowerCase()}/`;
+  const markerIndex = normalized.toLowerCase().indexOf(marker);
+  let relative = markerIndex >= 0 ? normalized.slice(markerIndex + marker.length) : normalized;
+  if (markerIndex >= 0) relative = relative.replace(/^(?:__all__|shows|movies)\//i, "");
+  else if (relative.startsWith("/")) return undefined;
+  if (!relative || relative.split("/").some((part) => part === "..")) return undefined;
+  return `source:${provider.toLowerCase()}:${relative}`;
+}
+
+export function saveManualIdentityOverrideForSource(provider: string, sourcePath: string, override: ManualIdentityOverride): string {
+  const key = sourceOverrideKey(provider, sourcePath);
+  if (!key) throw new Error("Provider source path cannot be identified safely");
+  return saveOverrideByKey(key, override);
+}
+
+export function clearManualIdentityOverrideForSource(provider: string, sourcePath: string): void {
+  const key = sourceOverrideKey(provider, sourcePath);
+  if (key) getDb().prepare("DELETE FROM version_manager_identity_overrides WHERE identity_key = ?").run(key);
 }
 
 function saveOverrideByKey(key: string, override: ManualIdentityOverride): string {
@@ -73,6 +99,8 @@ export function applyManualIdentityOverride(identity: ContentIdentity, override:
     ...(override.originalTitle ? { originalTitle: override.originalTitle } : {}),
     ...(override.year !== undefined ? { year: override.year } : {}),
     ...(override.kind ? { kind: override.kind } : {}),
+    ...(override.season !== undefined ? { season: override.season } : {}),
+    ...(override.episode !== undefined ? { episode: override.episode } : {}),
     ...(override.originalLanguage ? { originalLanguage: override.originalLanguage } : {}),
     confidence: 1,
     source: "manual",
@@ -91,7 +119,10 @@ export function applyManualIdentityOverrides(versions: VersionRecord[]): Version
   const database = getDb();
   return versions.map((version) => {
     const versionOverride = readOverride(database.prepare("SELECT override_json FROM version_manager_identity_overrides WHERE identity_key = ?").get(versionOverrideKey(version.id)));
-    const override = versionOverride || getManualIdentityOverride(version.fingerprint.identity);
+    const storage = version.fingerprint.storage;
+    const sourceKey = sourceOverrideKey(storage.provider, storage.path);
+    const sourceOverride = sourceKey ? readOverride(database.prepare("SELECT override_json FROM version_manager_identity_overrides WHERE identity_key = ?").get(sourceKey)) : undefined;
+    const override = versionOverride || sourceOverride || getManualIdentityOverride(version.fingerprint.identity);
     return override ? { ...version, fingerprint: { ...version.fingerprint, identity: applyManualIdentityOverride(version.fingerprint.identity, override) } } : version;
   });
 }

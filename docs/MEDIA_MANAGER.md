@@ -85,6 +85,20 @@ enabled. This lets Jellyfin group and identify media through the folder
 structure without rewriting release names. Existing obsolete symlinks are
 reconciled during the normal organizer scan; provider media is never renamed.
 
+### Manual TV identity resolution
+
+In Library → Review, select the series and confirm the season and episode
+for a single file. When a review represents multiple files, provide an episode
+number for each file; provider views of the same file must agree. The identity
+and episode are stored per source/version rather than by title alone, so one
+episode cannot silently overwrite another. If version details have not loaded,
+or a mixed Organizer/Media Manager group cannot be matched by source path, the
+GUI prevents confirmation. Organizer and version assignments for a covered
+mixed group are saved together in a database transaction. The resulting cached
+policy evaluation is read-only; no provider file is deleted by this action.
+The organizer uses its accepted review on a subsequent organizer pass; saving
+the identity does not itself promise an immediate library scan.
+
 ## User-visible behavior
 
 The feature exposes four complementary views:

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { getDb } from "../../../src/core/db";
-import { applyManualIdentityOverride, applyManualIdentityOverrides, clearManualIdentityOverride, clearManualIdentityOverrideForVersion, saveManualIdentityOverride, saveManualIdentityOverrideForVersion } from "../../../src/services/manualIdentity";
+import { applyManualIdentityOverride, applyManualIdentityOverrides, clearManualIdentityOverride, clearManualIdentityOverrideForVersion, saveManualIdentityOverride, saveManualIdentityOverrideForVersion, saveManualIdentityOverrideForSource } from "../../../src/services/manualIdentity";
 import { evaluateVersionGroups, fingerprintTorrent, type ContentIdentity } from "../../../src/services/versionManager";
 
 function version(name: string, size: number) {
@@ -57,6 +57,29 @@ describe("manual identity overrides", () => {
     expect(applied[1].fingerprint.identity.tmdbId).toBeUndefined();
     clearManualIdentityOverrideForVersion(first.id);
     expect(applyManualIdentityOverrides([first])[0].fingerprint.identity.tmdbId).toBeUndefined();
+  });
+
+  test("manual episode numbers replace incorrect classifications, including season zero", () => {
+    const original: ContentIdentity = { title: "Unknown", kind: "movie", confidence: 0.4, source: "unknown" };
+    const applied = applyManualIdentityOverride(original, { title: "Series", tmdbId: "123", kind: "episode", season: 0, episode: 3 });
+    expect(applied).toMatchObject({ title: "Series", kind: "episode", season: 0, episode: 3, tmdbId: "123" });
+  });
+
+  test("season-wide override preserves each already identified episode", () => {
+    const first: ContentIdentity = { title: "Old", kind: "episode", season: 1, episode: 1, confidence: 0.5, source: "unknown" };
+    const second: ContentIdentity = { ...first, episode: 2 };
+    const override = { title: "Series", tmdbId: "123", kind: "episode" as const, season: 3 };
+    expect(applyManualIdentityOverride(first, override)).toMatchObject({ season: 3, episode: 1 });
+    expect(applyManualIdentityOverride(second, override)).toMatchObject({ season: 3, episode: 2 });
+  });
+
+  test("source overrides distinguish files and match provider views", () => {
+    const first = version("release/episode-1.mkv", 1000);
+    const second = version("release/episode-2.mkv", 1000);
+    saveManualIdentityOverrideForSource("alldebrid", "/mnt/schrodrive/alldebrid/shows/release/episode-1.mkv", { title: "Series", kind: "episode", season: 3, episode: 1 });
+    const applied = applyManualIdentityOverrides([first, second]);
+    expect(applied[0].fingerprint.identity).toMatchObject({ title: "Series", season: 3, episode: 1 });
+    expect(applied[1].fingerprint.identity.title).not.toBe("Series");
   });
 
   test("legacy identity override without TMDb ID remains a valid compatibility path", () => {

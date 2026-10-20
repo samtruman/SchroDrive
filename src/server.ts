@@ -42,7 +42,9 @@ import { getLatestVersionManagerRecords, getLatestVersionManagerScan, getLatestV
 import { probeVersionRecords } from "./services/versionManagerProbe";
 import { enrichVersionMetadata } from "./services/versionManagerMetadata";
 import { searchTmdbCandidates } from "./services/tmdbService";
-import { applyManualIdentityOverrides, clearManualIdentityOverride, clearManualIdentityOverrideForVersion, identityOverrideKey, saveManualIdentityOverride, saveManualIdentityOverrideForVersion, type ManualIdentityOverride } from "./services/manualIdentity";
+import { validateReviewEpisodeAssignments } from "./services/reviewEpisodeAssignments";
+import { getDb } from "./core/db";
+import { applyManualIdentityOverrides, clearManualIdentityOverride, clearManualIdentityOverrideForVersion, identityOverrideKey, saveManualIdentityOverride, saveManualIdentityOverrideForVersion, sourceOverrideKey, type ManualIdentityOverride } from "./services/manualIdentity";
 import { exportMigrationLibrary, normalizeMigrationExportMode, resolveProviderItemRecoverability } from "./services/migrationExporter";
 import { analyzeMigrationImport, executeMigrationImportBulk, executeMigrationImportItem, getRecoverableManifestItem, migrationAuditOutcome } from "./services/migrationImporter";
 import { aggregateMigrationJobs, effectiveMigrationStatus } from "./services/migrationState";
@@ -936,6 +938,27 @@ export function startServer() {
     try { override = validateReviewOverride(req.body?.override); }
     catch (err: any) { return res.status(400).json({ ok: false, error: err?.message || 'Invalid override' }); }
     if (decision === 'accepted' && !override) return res.status(400).json({ ok: false, error: 'A canonical identity is required before accepting an aggregated review' });
+    if (decision === 'accepted' && override?.kind === 'episode' && Array.isArray(req.body?.episodeAssignments)) {
+      if (override.season === undefined) return res.status(400).json({ ok: false, error: 'A season number is required' });
+      const selected = listOrganizerReviews(true).filter((entry) => ids.includes(entry.id));
+      let assignments: Map<string, number>;
+      try { assignments = validateReviewEpisodeAssignments(selected, req.body.episodeAssignments); }
+      catch (error: any) { return res.status(400).json({ ok: false, error: error?.message || 'Invalid episode assignments' }); }
+      try {
+        const entries = getDb().transaction(() => ids.map((id) => decideOrganizerReview(id, decision, { ...override, episode: assignments.get(id) })).filter(Boolean))();
+        return res.json({ ok: true, entries });
+      } catch (error: any) { return res.status(400).json({ ok: false, error: error?.message || 'Unable to save episode assignments' }); }
+    }
+    if (decision === 'accepted' && override?.kind === 'episode') {
+      const selected = listOrganizerReviews(true).filter((entry) => ids.includes(entry.id));
+      if (override.season === undefined) return res.status(400).json({ ok: false, error: 'A season number is required' });
+      if (override.episode === undefined && selected.some((entry) => entry.parsed.episode === undefined)) {
+        return res.status(400).json({ ok: false, error: 'Each item in a season must have a known episode number; resolve unknown episodes separately' });
+      }
+      if (override.episode !== undefined && new Set(selected.map((entry) => entry.sourceBasename)).size > 1) {
+        return res.status(400).json({ ok: false, error: 'A single episode number cannot be applied to different files' });
+      }
+    }
     return res.json({ ok: true, entries: ids.map((id) => decideOrganizerReview(id, decision, override)).filter(Boolean) });
   });
 
@@ -1011,7 +1034,47 @@ export function startServer() {
       else clearManualIdentityOverride(identityValue);
     } else {
       if (!override) return res.status(400).json({ ok: false, error: 'override is required' });
-      if (targetVersionIds.length) targetVersionIds.forEach((versionId: string) => saveManualIdentityOverrideForVersion(versionId, override!));
+      if (Array.isArray(req.body?.reviewIds) && req.body.reviewIds.length) {
+        const reviewIds: string[] = req.body.reviewIds;
+        if (new Set(reviewIds).size !== reviewIds.length || reviewIds.some((id) => typeof id !== 'string')) return res.status(400).json({ ok: false, error: 'Invalid review ids' });
+        const reviews = listOrganizerReviews(true).filter((entry) => reviewIds.includes(entry.id));
+        if (reviews.length !== reviewIds.length) return res.status(409).json({ ok: false, error: 'Review changed; refresh and retry' });
+        const records = getLatestVersionManagerRecords(provider.id).filter((record) => targetVersionIds.includes(record.id));
+        if (records.length !== targetVersionIds.length || !targetVersionIds.length) return res.status(409).json({ ok: false, error: 'Version details changed; refresh and retry' });
+        let reviewMapping: Map<string, number> | undefined;
+        let versionMapping: Map<string, number> | undefined;
+        if (override.kind === 'episode') {
+          if (override.season === undefined) return res.status(400).json({ ok: false, error: 'Season is required' });
+          try {
+            reviewMapping = validateReviewEpisodeAssignments(reviews, req.body.episodeAssignments || []);
+            versionMapping = validateReviewEpisodeAssignments(records.map((record) => ({ id: record.id, sourcePath: record.fingerprint.storage.path })), req.body.versionAssignments || []);
+            const sources = new Map<string, number>();
+            for (const row of reviews) {
+              const key = sourceOverrideKey(provider.id, row.sourcePath);
+              if (!key) throw new Error('Cannot identify review source');
+              sources.set(key, reviewMapping.get(row.id)!);
+            }
+            for (const record of records) {
+              const key = sourceOverrideKey(provider.id, record.fingerprint.storage.path);
+              if (!key || sources.get(key) !== versionMapping.get(record.id)) throw new Error('Review and version episode assignments do not match');
+            }
+          } catch (error: any) { return res.status(400).json({ ok: false, error: error?.message || 'Invalid episode assignments' }); }
+        }
+        try {
+          getDb().transaction(() => {
+            for (const row of reviews) decideOrganizerReview(row.id, 'accepted', { ...override!, ...(reviewMapping ? { episode: reviewMapping.get(row.id) } : {}) });
+            for (const id of targetVersionIds) saveManualIdentityOverrideForVersion(id, { ...override!, ...(versionMapping ? { episode: versionMapping.get(id) } : {}) });
+          })();
+        } catch (error: any) { return res.status(400).json({ ok: false, error: error?.message || 'Unable to save review' }); }
+      } else if (Array.isArray(req.body?.versionAssignments)) {
+        if (override.kind !== "episode" || override.season === undefined || !targetVersionIds.length) return res.status(400).json({ ok: false, error: "A season and explicit versions are required" });
+        const records = getLatestVersionManagerRecords(provider.id).filter((record) => targetVersionIds.includes(record.id));
+        let assignments: Map<string, number>;
+        try { assignments = validateReviewEpisodeAssignments(records.map((record) => ({ id: record.id, sourcePath: record.fingerprint.storage.path })), req.body.versionAssignments); }
+        catch (error: any) { return res.status(400).json({ ok: false, error: error?.message || "Invalid version assignments" }); }
+        if (records.length !== targetVersionIds.length) return res.status(409).json({ ok: false, error: "One or more versions are unavailable" });
+        getDb().transaction(() => targetVersionIds.forEach((versionId: string) => saveManualIdentityOverrideForVersion(versionId, { ...override!, episode: assignments.get(versionId) })))();
+      } else if (targetVersionIds.length) targetVersionIds.forEach((versionId: string) => saveManualIdentityOverrideForVersion(versionId, override!));
       else saveManualIdentityOverride(identityValue, override);
     }
     const records = applyManualIdentityOverrides(getLatestVersionManagerRecords(provider.id));

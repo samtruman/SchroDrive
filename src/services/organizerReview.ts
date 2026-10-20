@@ -3,7 +3,7 @@
 import type { ParsedMediaIdentity } from "./mediaParser";
 import { getDb } from "../core/db";
 import { createHash } from "node:crypto";
-import { clearManualIdentityOverride, manualOverrideFromReview, saveManualIdentityOverride } from "./manualIdentity";
+import { clearManualIdentityOverride, manualOverrideFromReview, saveManualIdentityOverride, saveManualIdentityOverrideForSource, clearManualIdentityOverrideForSource, sourceOverrideKey } from "./manualIdentity";
 
 export type ReviewDecision = "pending" | "accepted" | "dismissed";
 
@@ -168,11 +168,20 @@ export function decideOrganizerReview(
   if (!row) return undefined;
   const updatedAt = new Date().toISOString();
   const effectiveOverride = override || parseStoredJson<ReviewOverride>(row.override_json);
+  // Reject unsupported paths before changing the review state.
+  if (decision === "accepted" && effectiveOverride?.kind === "episode" && effectiveOverride.episode !== undefined) {
+    const provider = /\/(alldebrid)\//i.exec(row.source_path)?.[1];
+    if (!provider || !sourceOverrideKey(provider, row.source_path)) throw new Error("Cannot safely identify the provider source for this episode");
+  }
   database.prepare("UPDATE organizer_reviews SET decision = ?, override_json = ?, updated_at = ? WHERE id = ?")
     .run(decision, effectiveOverride ? JSON.stringify(effectiveOverride) : null, updatedAt, id);
   if (decision === "accepted" && effectiveOverride) {
     const parsed = parseStoredJson<ParsedMediaIdentity>(row.parsed_json);
-    if (parsed) saveManualIdentityOverride(parsed, manualOverrideFromReview(effectiveOverride));
+    if (parsed && effectiveOverride.kind === "episode" && effectiveOverride.episode !== undefined) {
+      const provider = /\/(alldebrid)\//i.exec(row.source_path)?.[1];
+      if (!provider) throw new Error("Cannot safely identify the provider source for this episode");
+      saveManualIdentityOverrideForSource(provider, row.source_path, manualOverrideFromReview(effectiveOverride));
+    } else if (parsed) saveManualIdentityOverride(parsed, manualOverrideFromReview(effectiveOverride));
   }
   database.prepare("INSERT INTO organizer_review_audit (review_id, action, payload_json, created_at) VALUES (?, ?, ?, ?)")
     .run(id, decision, effectiveOverride ? JSON.stringify(effectiveOverride) : null, updatedAt);
@@ -207,6 +216,8 @@ export function clearOrganizerReviewOverride(id: string): OrganizerReviewEntry |
   const now = new Date().toISOString();
   database.prepare("UPDATE organizer_reviews SET decision = 'pending', override_json = NULL, updated_at = ? WHERE id = ?").run(now, id);
   const parsed = parseStoredJson<ParsedMediaIdentity>(row.parsed_json);
+  const provider = /\/(alldebrid)\//i.exec(row.source_path)?.[1];
+  if (provider) clearManualIdentityOverrideForSource(provider, row.source_path);
   if (parsed) clearManualIdentityOverride(parsed);
   database.prepare("INSERT INTO organizer_review_audit (review_id, action, payload_json, created_at) VALUES (?, ?, ?, ?)").run(id, "cleared_override", null, now);
   if (!parsed) return undefined;
