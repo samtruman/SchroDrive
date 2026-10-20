@@ -361,6 +361,46 @@ describe("version manager", () => {
     expect(versions.find((version) => version.decision === "KEEP")?.id).toBe(cyber.id);
   });
 
+  test("lets a complete homogeneous set of larger singles beat a complete pack", () => {
+    const configured = profile({ sizePreference: "LARGER", minimumSizeDifferencePercent: 0, releaseGroupConsistency: "SEASON" });
+    const versions = [1, 2].flatMap((episode) => {
+      const pack = fingerprintTorrent(torrent("Pack.Show.S01E0" + episode + ".2160p.WEB-DL.ITA.HEVC-G66.mkv", 8000000000), "alldebrid")[0];
+      const single = fingerprintTorrent(torrent("Pack.Show.S01E0" + episode + ".2160p.WEB-DL.ITA.HEVC-MeM.GP.mkv", 12000000000), "alldebrid")[0];
+      pack.fingerprint.storage.torrentId = "complete-pack";
+      for (const version of [pack, single]) {
+        version.fingerprint.identity = { ...version.fingerprint.identity, tmdbId: "pack-show", title: "Pack Show", normalizedTitle: "pack show", year: 2025, kind: "episode", season: 1, episode, resolutionStatus: "resolved", confidence: 1 };
+      }
+      pack.fingerprint.release.group = "G66";
+      single.fingerprint.release.group = "MeM.GP";
+      return [pack, single];
+    });
+    const groups = evaluateVersionGroups(versions, [configured]);
+    for (const group of groups) {
+      expect(group.versions.find((version) => version.fingerprint.release.group === "MeM.GP")?.decision).toBe("KEEP");
+      expect(group.versions.find((version) => version.fingerprint.release.group === "G66")?.decision).not.toBe("KEEP");
+    }
+  });
+
+  test("prefers a complete pack when standalone episodes come from mixed groups", () => {
+    const configured = profile({ sizePreference: "LARGER", minimumSizeDifferencePercent: 0, releaseGroupConsistency: "SEASON" });
+    const versions = [1, 2].flatMap((episode) => {
+      const pack = fingerprintTorrent(torrent("Pack.Show.S01E0" + episode + ".2160p.WEB-DL.ITA.HEVC-G66.mkv", 8000000000), "alldebrid")[0];
+      const single = fingerprintTorrent(torrent("Pack.Show.S01E0" + episode + ".2160p.WEB-DL.ITA.HEVC-" + (episode === 1 ? "Alpha" : "Beta") + ".mkv", 12000000000), "alldebrid")[0];
+      pack.fingerprint.storage.torrentId = "complete-pack";
+      for (const version of [pack, single]) {
+        version.fingerprint.identity = { ...version.fingerprint.identity, tmdbId: "mixed-show", title: "Mixed Show", normalizedTitle: "mixed show", year: 2025, kind: "episode", season: 1, episode, resolutionStatus: "resolved", confidence: 1 };
+      }
+      pack.fingerprint.release.group = "G66";
+      single.fingerprint.release.group = episode === 1 ? "Alpha" : "Beta";
+      return [pack, single];
+    });
+    const groups = evaluateVersionGroups(versions, [configured]);
+    for (const group of groups) {
+      expect(group.versions.find((version) => version.fingerprint.release.group === "G66")?.decision).toBe("KEEP");
+      expect(group.versions.find((version) => version.fingerprint.release.group !== "G66")?.decision).not.toBe("KEEP");
+    }
+  });
+
   test("uses release-group preference only when it does not lose to a better episode", () => {
     const names = [
       ["S01E01", "Alpha", 20_000_000_000],
