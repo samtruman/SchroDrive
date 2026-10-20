@@ -477,6 +477,49 @@ function groupKey(version) {
         return `review:${version.id}`;
     return [identity.kind, identity.normalizedTitle, identity.year || "", identity.season ?? "", identity.episode ?? ""].join(":");
 }
+function seasonEpisodeKey(group) {
+    return String(group.identity.season ?? "") + ":" + String(group.identity.episode ?? "");
+}
+function releaseGroup(value) {
+    const group = value.fingerprint.release?.group?.trim();
+    return group || undefined;
+}
+function seasonPackPreference(seasonGroups, profile) {
+    const episodeKeys = new Set(seasonGroups.map(seasonEpisodeKey));
+    const torrentEpisodes = new Map();
+    for (const group of seasonGroups) {
+        for (const version of group.versions) {
+            const torrentId = version.fingerprint.storage.torrentId;
+            if (!torrentId)
+                continue;
+            torrentEpisodes.set(torrentId, new Set([...(torrentEpisodes.get(torrentId) || []), seasonEpisodeKey(group)]));
+        }
+    }
+    const packTorrents = new Set([...torrentEpisodes.entries()]
+        .filter(([, episodes]) => episodes.size > 1)
+        .map(([torrentId]) => torrentId));
+    const coverageByGroup = new Map();
+    const packCoverageByGroup = new Map();
+    for (const group of seasonGroups) {
+        for (const version of group.versions) {
+            const release = releaseGroup(version);
+            if (!release)
+                continue;
+            const evaluation = version.evaluations.find((candidate) => candidate.profileId === profile.id);
+            if (!evaluation?.eligible)
+                continue;
+            const target = packTorrents.has(version.fingerprint.storage.torrentId) ? packCoverageByGroup : coverageByGroup;
+            target.set(release, new Set([...(target.get(release) || []), seasonEpisodeKey(group)]));
+        }
+    }
+    const hasCompleteHomogeneousSingles = [...coverageByGroup.values()].some((episodes) => episodes.size === episodeKeys.size);
+    if (hasCompleteHomogeneousSingles)
+        return { hasCompleteHomogeneousSingles };
+    const preferredGroup = [...packCoverageByGroup.entries()]
+        .filter(([, episodes]) => episodes.size === episodeKeys.size)
+        .sort((left, right) => left[0].localeCompare(right[0]))[0]?.[0];
+    return { preferredGroup, hasCompleteHomogeneousSingles };
+}
 function applyReleaseGroupConsistency(groups, profiles) {
     const profile = profiles.find((candidate) => candidate.enabled && candidate.target === "QUALITY" && candidate.releaseGroupConsistency === "SEASON");
     if (!profile)
@@ -490,6 +533,12 @@ function applyReleaseGroupConsistency(groups, profiles) {
         seasons.set(key, [...(seasons.get(key) || []), group]);
     }
     for (const seasonGroups of seasons.values()) {
+        const packPreference = seasonPackPreference(seasonGroups, profile);
+        // A complete homogeneous set of standalone episodes is a valid unit for
+        // technical comparison. Do not replace it with a pack merely to make the
+        // season use one release group.
+        if (packPreference.hasCompleteHomogeneousSingles)
+            continue;
         const counts = new Map();
         for (const group of seasonGroups) {
             const kept = group.versions.find((version) => version.decision === "KEEP" && version.satisfiesProfiles?.includes(profile.id));
@@ -498,9 +547,10 @@ function applyReleaseGroupConsistency(groups, profiles) {
                 counts.set(releaseGroup, (counts.get(releaseGroup) || 0) + 1);
         }
         const ordered = [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
-        if (!ordered.length || (ordered.length > 1 && ordered[0][1] === ordered[1][1]))
+        const preferredGroup = packPreference.preferredGroup || (ordered.length && (ordered.length === 1 || ordered[0][1] !== ordered[1][1]) ? ordered[0][0] : undefined);
+        if (!preferredGroup)
             continue;
-        const preferredGroup = ordered[0][0];
+        const forcedPackPreference = Boolean(packPreference.preferredGroup);
         for (const group of seasonGroups) {
             const eligible = group.versions.filter((version) => version.fingerprint.release?.group?.trim() === preferredGroup && version.evaluations.some((evaluation) => evaluation.profileId === profile.id && evaluation.eligible));
             if (!eligible.length)
@@ -509,12 +559,10 @@ function applyReleaseGroupConsistency(groups, profiles) {
             const current = group.versions.find((version) => version.decision === "KEEP" && version.satisfiesProfiles?.includes(profile.id));
             if (current?.id === winner.id)
                 continue;
-            // Season consistency is a tie-breaker, not an unconditional override.
-            // Keep the preferred release group when it is equal or better, but do
-            // not replace a larger/better individual episode merely to homogenize
-            // the season. Complete-pack coverage is handled separately by the
-            // deletion-impact safety layer.
-            if (current && compareForSeasonConsistency(winner, current, profile) > 0)
+            // A complete homogeneous standalone source is handled by normal
+            // technical ranking. When standalone episodes come from mixed sources,
+            // a complete pack is intentionally authoritative for season consistency.
+            if (current && !forcedPackPreference && compareForSeasonConsistency(winner, current, profile) > 0)
                 continue;
             if (current) {
                 current.decision = "DELETE_CANDIDATE";
