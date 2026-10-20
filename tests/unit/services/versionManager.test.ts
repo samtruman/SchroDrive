@@ -418,6 +418,23 @@ describe("version manager", () => {
     expect(episode3?.versions.find((version) => version.decision === "KEEP")?.fingerprint.release.group).toBe("Beta");
   });
 
+  test("uses FFprobe bitrate before source ranking for same-resolution releases", () => {
+    const higherBitrate = fingerprintTorrent(torrent("Example.Movie.2025.2160p.WEB-DL.ITA.HEVC-HIGH.mkv", 8_000_000_000), "alldebrid")[0];
+    const lowerBitrate = fingerprintTorrent(torrent("Example.Movie.2025.2160p.BluRay.ITA.HEVC-LOW.mkv", 12_000_000_000), "alldebrid")[0];
+    for (const version of [higherBitrate, lowerBitrate]) {
+      version.fingerprint.identity = { ...version.fingerprint.identity, tmdbId: "bitrate-movie", resolutionStatus: "resolved", confidence: 1 };
+      version.fingerprint.video.bitrate = version === higherBitrate ? 30_000_000 : 10_000_000;
+    }
+    const configured = profile({ sizePreference: "LARGER", minimumSizeDifferencePercent: 10 });
+    const versions = evaluateVersionGroups([higherBitrate, lowerBitrate], [configured])[0].versions;
+    expect(versions.find((version) => version.decision === "KEEP")?.id).toBe(higherBitrate.id);
+  });
+
+  test("preserves dotted release-group names from provider filenames", () => {
+    const [version] = fingerprintTorrent(torrent("Twisted.Metal.S01E05.2160p.WEB-DL.ITA.ENG-MeM.GP.mkv", 10_000), "alldebrid");
+    expect(version.fingerprint.release.group).toBe("MeM.GP");
+  });
+
   test("applies the exact manual TMDb identity before grouping and preserves safety blockers", () => {
     const versions = fingerprintTorrent(torrent("Ambiguous.Release.2024.1080p.WEB-DL.ITA.mkv", 10_000), "alldebrid");
     const original = versions[0].fingerprint.identity;

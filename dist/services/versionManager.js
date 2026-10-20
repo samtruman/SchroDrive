@@ -203,6 +203,11 @@ function inferSource(name) {
 function inferCodec(name) {
     return firstMatch(name, [/(av1)/i, /(x265|h\.265|h265|hevc)/i, /(x264|h\.264|h264|avc)/i])?.replace("X265", "HEVC").replace("H.265", "HEVC").replace("H265", "HEVC").replace("X264", "H264").replace("H.264", "H264");
 }
+function inferReleaseGroup(name) {
+    const withoutExtension = name.replace(/\.[^.]+$/, "");
+    const match = withoutExtension.match(/-([A-Za-z0-9][A-Za-z0-9.]*)$/);
+    return match?.[1] || undefined;
+}
 function inferAudio(name) {
     const upper = name.toUpperCase();
     return {
@@ -252,7 +257,7 @@ function fingerprintTorrent(torrent, provider = "unknown") {
                     provenance: { resolution: "FILENAME", codec: "FILENAME", hdr10: "FILENAME", hdr10Plus: "FILENAME", dolbyVision: "FILENAME" },
                 },
                 audio: (languages.length > 0 ? languages : ["eng"]).map((language) => ({ language, ...audio, provenance: { language: "FILENAME", codec: "FILENAME", channels: "FILENAME", atmos: "FILENAME" } })),
-                subtitles: [], release: { source: inferSource(name), group: name.match(/-([A-Za-z0-9]+)(?:\.[^.]+)?$/)?.[1], provenance: { source: "FILENAME", group: "FILENAME" } },
+                subtitles: [], release: { source: inferSource(name), group: inferReleaseGroup(name), provenance: { source: "FILENAME", group: "FILENAME" } },
                 storage: { provider, torrentId: torrent.id, fileId: file.id, path, size: file.size || torrent.bytes, infoHash: torrent.infoHash || torrent.raw?.infoHash || torrent.raw?.infohash || torrent.raw?.hash || torrent.raw?.hashString, recoverability, addedAt: torrent.addedAt?.toISOString(), provenance: { provider: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", torrentId: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", path: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", size: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN", infoHash: provider === "alldebrid" ? "ALLDEBRID" : "UNKNOWN" } },
                 probe: { status: "not_requested", tool: "filename" },
             },
@@ -429,12 +434,23 @@ function compareForProfile(left, right, profile) {
             .filter(([criterion]) => sourceComparable || criterion !== "source")
             .reduce((sum, [, value]) => sum + value, 0);
     };
+    const preference = profile.sizePreference || "IGNORE";
+    const sameResolution = left.fingerprint.video.resolution === right.fingerprint.video.resolution;
+    // FFprobe bitrate is the first technical tie-breaker for same-resolution
+    // releases. It must be evaluated before source labels: a smaller Blu-ray
+    // encode must not automatically beat a substantially higher-bitrate WEB-DL.
+    if (preference !== "IGNORE" && sameResolution) {
+        const leftBitrate = Number(left.fingerprint.video.bitrate || 0);
+        const rightBitrate = Number(right.fingerprint.video.bitrate || 0);
+        if (leftBitrate && rightBitrate && leftBitrate !== rightBitrate) {
+            return preference === "LARGER" ? rightBitrate - leftBitrate : leftBitrate - rightBitrate;
+        }
+    }
     const leftScore = comparisonScore(left);
     const rightScore = comparisonScore(right);
     if (leftScore !== rightScore)
         return rightScore - leftScore;
-    const preference = profile.sizePreference || "IGNORE";
-    if (preference === "IGNORE" || left.fingerprint.video.resolution !== right.fingerprint.video.resolution)
+    if (preference === "IGNORE" || !sameResolution)
         return 0;
     const leftSize = Number(left.fingerprint.storage.size || 0);
     const rightSize = Number(right.fingerprint.storage.size || 0);
@@ -482,7 +498,7 @@ function seasonEpisodeKey(group) {
 }
 function releaseGroup(value) {
     const group = value.fingerprint.release?.group?.trim();
-    return group || undefined;
+    return group || inferReleaseGroup(value.fingerprint.storage.path);
 }
 function seasonPackPreference(seasonGroups, profile) {
     const episodeKeys = new Set(seasonGroups.map(seasonEpisodeKey));
@@ -542,9 +558,9 @@ function applyReleaseGroupConsistency(groups, profiles) {
         const counts = new Map();
         for (const group of seasonGroups) {
             const kept = group.versions.find((version) => version.decision === "KEEP" && version.satisfiesProfiles?.includes(profile.id));
-            const releaseGroup = kept?.fingerprint.release?.group?.trim();
-            if (releaseGroup)
-                counts.set(releaseGroup, (counts.get(releaseGroup) || 0) + 1);
+            const keptReleaseGroup = kept ? releaseGroup(kept) : undefined;
+            if (keptReleaseGroup)
+                counts.set(keptReleaseGroup, (counts.get(keptReleaseGroup) || 0) + 1);
         }
         const ordered = [...counts.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
         const preferredGroup = packPreference.preferredGroup || (ordered.length && (ordered.length === 1 || ordered[0][1] !== ordered[1][1]) ? ordered[0][0] : undefined);
@@ -552,7 +568,7 @@ function applyReleaseGroupConsistency(groups, profiles) {
             continue;
         const forcedPackPreference = Boolean(packPreference.preferredGroup);
         for (const group of seasonGroups) {
-            const eligible = group.versions.filter((version) => version.fingerprint.release?.group?.trim() === preferredGroup && version.evaluations.some((evaluation) => evaluation.profileId === profile.id && evaluation.eligible));
+            const eligible = group.versions.filter((version) => releaseGroup(version) === preferredGroup && version.evaluations.some((evaluation) => evaluation.profileId === profile.id && evaluation.eligible));
             if (!eligible.length)
                 continue;
             const winner = [...eligible].sort((left, right) => compareForProfile(left, right, profile))[0];
