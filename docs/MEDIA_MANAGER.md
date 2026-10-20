@@ -752,11 +752,12 @@ Base resolution, source, codec, audio, Atmos, HDR, HDR10+ and Dolby Vision
 weights are persisted profile settings editable in the GUI and included in the
 policy hash. Structured advanced scoring rules remain additive.
 
-Policy Delete defaults to **All duplicates and review items**. Operators can
-filter to physically eliminable items, protected items, pack-protected items,
-identity review, or incomplete/provider-unavailable items. The full view must
-not hide a duplicate merely because deleting its physical ProviderItem is
-unsafe.
+Policy Delete defaults to physically eligible deletion candidates and also
+offers a separate view of protected candidates, including candidates blocked by
+season-pack safety. General identity, recoverability and provider problems do
+not belong in the Policy Delete filter; use the review and provider views for
+those issues. A protected physical ProviderItem is never presented as safe to
+delete merely because it contains a logical candidate.
 
 A season pack is one physical unit. When retained standalone episodes cover
 every episode in the pack, normal profile/size ranking can retain the singles

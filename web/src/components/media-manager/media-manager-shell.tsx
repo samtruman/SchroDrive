@@ -837,7 +837,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
   const [decision, setDecision] = useState("all");
   const [multipleVersions, setMultipleVersions] = useState(false);
   const [sort, setSort] = useState("title");
-  const [deleteScope, setDeleteScope] = useState("all");
+  const [deleteScope, setDeleteScope] = useState("candidates");
   const [selected, setSelected] = useState<any>(null);
   const [reviewStatus, setReviewStatus] = useState<"pending" | "dismissed" | "all">("pending");
   const [reviewIssueFilter, setReviewIssueFilter] = useState<"all" | "identity" | "recoverability">("all");
@@ -1171,7 +1171,7 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
       )}
       {(preset === "delete" || preset === "delete-preview") && (
         <>
-          <div className="flex flex-wrap items-center gap-2"><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, release, filename or provider item…" /><select value={deleteScope} onChange={(event) => setDeleteScope(event.target.value)} className="rounded border bg-background p-2 text-sm"><option value="all">All duplicates and review items</option><option value="candidates">Eliminable · physically eligible</option><option value="protected">Protected / Not deletable</option><option value="pack-protected">Protected by season pack</option><option value="identity-review">Identity review</option><option value="incomplete">Incomplete / provider unavailable</option><option value="attention">Needs attention · policy / restore safety</option></select></div>
+          <div className="flex flex-wrap items-center gap-2"><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search title, release, filename or provider item…" /><select value={deleteScope} onChange={(event) => setDeleteScope(event.target.value)} className="rounded border bg-background p-2 text-sm"><option value="candidates">Deletion candidates · physically eligible</option><option value="protected">Protected candidates · not deletable</option></select></div>
           <ErrorBox error={deletePreview.error || deleteImpact.error || deleteError} />
           {deleteNotice && <p className="rounded border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm">{deleteNotice}</p>}
           {deletePreview.loading ? <p className="text-sm text-muted-foreground">Evaluating policy…</p> : (
