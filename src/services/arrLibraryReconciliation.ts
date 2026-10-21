@@ -5,6 +5,7 @@ import { parseMediaFilename } from "./mediaParser";
 import { recordOrganizerReview, resolveOrganizerReviewAutomatically } from "./organizerReview";
 import { searchTmdb } from "./tmdbService";
 import { arrTitleAliases, normalizeArrTitle } from "./arrTitleIdentity";
+import { getManualIdentityOverride } from "./manualIdentity";
 
 type ArrAlternateTitle = string | { title?: string };
 type ArrMovie = { id?: number; title?: string; originalTitle?: string; alternateTitles?: ArrAlternateTitle[]; year?: number; tmdbId?: number | string; imdbId?: string; path?: string };
@@ -163,6 +164,19 @@ function findArrRecord(candidate: Candidate, records: Array<ArrMovie | ArrSeries
   return findArrRecordByTitle(candidate, records) || findArrRecordByTmdb(tmdbId, records);
 }
 
+function findArrRecordWithManualIdentity(candidate: Candidate, records: Array<ArrMovie | ArrSeries>): ArrMovie | ArrSeries | undefined {
+  const manual = getManualIdentityOverride({
+    kind: candidate.category === "movie" ? "movie" : "episode",
+    title: candidate.title,
+    year: candidate.year,
+    season: candidate.season,
+  });
+  const manualMatch = candidate.category === "movie" && manual?.tmdbId
+    ? findArrRecordByTmdb(String(manual.tmdbId), records)
+    : undefined;
+  return manualMatch || findArrRecord(candidate, records);
+}
+
 function recordArrIdentityReview(candidate: Candidate, link: string, reason: string): void {
   const parsed = parseMediaFilename(path.basename(link), link);
   recordOrganizerReview(link, {
@@ -304,7 +318,7 @@ export async function reconcileOrganizedLibraryWithArr(): Promise<Reconciliation
     const candidate = candidateFor(link, organizedBase);
     if (!candidate) continue;
     const records = candidate.category === "movie" ? movies : series;
-    const arrTitleRecord = findArrRecordByTitle(candidate, records);
+    const arrTitleRecord = findArrRecordWithManualIdentity(candidate, records);
     const parserRecord = arrTitleRecord ? undefined : await resolveArrRecordByParser(candidate, link, records);
     const tmdbId = arrTitleRecord || parserRecord ? undefined : await resolveTmdbId(candidate).catch(() => undefined);
     const record = arrTitleRecord || parserRecord || findArrRecord(candidate, records, tmdbId);
