@@ -108,7 +108,10 @@ export async function executeVersionManagerDeleteBatch(request: Omit<DeleteExecu
   for (const id of providerItemIds) {
     try {
       await request.provider.deleteTorrent(id);
-      try { results.find((result) => result.providerItemId === id)!.propagation = await request.afterDelete?.(impactById.get(id)!); }
+      try {
+        const propagated = await request.afterDelete?.(impactById.get(id)!);
+        if (propagated) results.find((result) => result.providerItemId === id)!.propagation = propagated;
+      }
       catch (error: any) { results.find((result) => result.providerItemId === id)!.propagation = { removedSymlinks: 0, warning: error?.message || "ARR delete propagation failed" }; }
       completedIds.push(id);
     } catch (error: any) {
