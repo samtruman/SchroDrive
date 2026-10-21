@@ -9,6 +9,7 @@ exports.saveManualIdentityOverrideForVersion = saveManualIdentityOverrideForVers
 exports.clearManualIdentityOverrideForVersion = clearManualIdentityOverrideForVersion;
 exports.clearManualIdentityOverride = clearManualIdentityOverride;
 exports.getManualIdentityOverride = getManualIdentityOverride;
+exports.getManualIdentityOverrideForProviderSource = getManualIdentityOverrideForProviderSource;
 exports.applyManualIdentityOverride = applyManualIdentityOverride;
 exports.applyManualIdentityOverrides = applyManualIdentityOverrides;
 exports.manualOverrideFromReview = manualOverrideFromReview;
@@ -83,6 +84,34 @@ function clearManualIdentityOverride(identity) {
 }
 function getManualIdentityOverride(identity) {
     return readOverride((0, db_1.getDb)().prepare("SELECT override_json FROM version_manager_identity_overrides WHERE identity_key = ?").get(identityOverrideKey(identity)));
+}
+/**
+ * Resolves a manual identity for provider reconciliation. Source overrides are
+ * authoritative; the unique title-compatible override is only a fallback for
+ * release files whose embedded year/title differs from the resolved identity.
+ */
+function getManualIdentityOverrideForProviderSource(provider, sourcePath, identity) {
+    const database = (0, db_1.getDb)();
+    const sourceKey = sourceOverrideKey(provider, sourcePath);
+    if (sourceKey) {
+        const sourceOverride = readOverride(database.prepare("SELECT override_json FROM version_manager_identity_overrides WHERE identity_key = ?").get(sourceKey));
+        if (sourceOverride)
+            return sourceOverride;
+    }
+    const direct = getManualIdentityOverride(identity);
+    if (direct)
+        return direct;
+    const title = (0, mediaParser_1.normalizeMediaTitle)(identity.title || "");
+    if (!title || identity.kind !== "movie")
+        return undefined;
+    const candidates = database.prepare("SELECT override_json FROM version_manager_identity_overrides WHERE identity_key NOT LIKE 'version:%' AND identity_key NOT LIKE 'source:%'").all()
+        .map((row) => readOverride(row))
+        .filter((override) => Boolean(override?.tmdbId && (override.kind || "movie") === "movie"))
+        .filter((override) => {
+        const candidateTitles = [override.title, override.originalTitle].filter(Boolean).map((value) => (0, mediaParser_1.normalizeMediaTitle)(String(value)));
+        return candidateTitles.some((candidate) => candidate && (title.includes(candidate) || candidate.includes(title)));
+    });
+    return candidates.length === 1 ? candidates[0] : undefined;
 }
 function applyManualIdentityOverride(identity, override) {
     const title = override.title || identity.title;

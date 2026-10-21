@@ -44,7 +44,16 @@ async function executeVersionManagerDelete(request) {
     if (request.confirmation !== request.providerItemId)
         throw new Error("Live deletion confirmation does not match the ProviderItem");
     await request.provider.deleteTorrent(request.providerItemId);
-    return { status: "DELETED", executed: true, provider: request.provider.id, providerItemId: request.providerItemId, impact };
+    let propagation;
+    try {
+        const propagated = await request.afterDelete?.(impact);
+        if (propagated)
+            propagation = propagated;
+    }
+    catch (error) {
+        propagation = { removedSymlinks: 0, warning: error?.message || "ARR delete propagation failed" };
+    }
+    return { status: "DELETED", executed: true, provider: request.provider.id, providerItemId: request.providerItemId, impact, propagation };
 }
 /** Preflights the complete selection, then deletes sequentially and stops on the first provider error. */
 async function executeVersionManagerDeleteBatch(request) {
@@ -79,6 +88,14 @@ async function executeVersionManagerDeleteBatch(request) {
     for (const id of providerItemIds) {
         try {
             await request.provider.deleteTorrent(id);
+            try {
+                const propagated = await request.afterDelete?.(impactById.get(id));
+                if (propagated)
+                    results.find((result) => result.providerItemId === id).propagation = propagated;
+            }
+            catch (error) {
+                results.find((result) => result.providerItemId === id).propagation = { removedSymlinks: 0, warning: error?.message || "ARR delete propagation failed" };
+            }
             completedIds.push(id);
         }
         catch (error) {

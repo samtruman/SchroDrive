@@ -500,7 +500,7 @@ function startServer() {
             const provider = providers_1.registry.get(providerId);
             if (!provider)
                 return res.status(400).json({ ok: false, error: `Provider ${providerId} is not configured` });
-            const result = await (0, deleteExecutor_1.executeVersionManagerDelete)({ groups: snapshot.groups, provider, providerItemId, dryRun, confirmation: req.body?.confirmation, selection });
+            const result = await (0, deleteExecutor_1.executeVersionManagerDelete)({ groups: snapshot.groups, provider, providerItemId, dryRun, confirmation: req.body?.confirmation, selection, afterDelete: providerReconciliationRuntime_1.propagateProviderDeletion });
             (0, db_2.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId, snapshotId: snapshot.snapshotId, mode, status: result.status, detail: dryRun ? "ProviderItem revalidated; provider delete was not called" : "ProviderItem deleted after final revalidation" });
             return res.json({ ok: true, policyDryRun, mode, ...result });
         }
@@ -531,7 +531,7 @@ function startServer() {
             const provider = providers_1.registry.get(providerId);
             if (!provider)
                 return res.status(400).json({ ok: false, error: `Provider ${providerId} is not configured` });
-            const result = await (0, deleteExecutor_1.executeVersionManagerDeleteBatch)({ groups: snapshot.groups, provider, providerItemIds, dryRun, confirmation: req.body?.confirmation, selection });
+            const result = await (0, deleteExecutor_1.executeVersionManagerDeleteBatch)({ groups: snapshot.groups, provider, providerItemIds, dryRun, confirmation: req.body?.confirmation, selection, afterDelete: providerReconciliationRuntime_1.propagateProviderDeletion });
             result.results.forEach((item) => (0, db_2.recordVersionManagerDeleteAudit)({ provider: providerId, providerItemId: item.providerItemId, snapshotId: snapshot.snapshotId, mode, status: item.status, detail: dryRun ? "Batch ProviderItem revalidated; provider delete was not called" : "ProviderItem deleted by confirmed batch after final revalidation" }));
             return res.json({ ok: true, policyDryRun, mode, ...result });
         }

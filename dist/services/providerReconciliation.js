@@ -12,6 +12,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ProviderReconciliationWorker = exports.ProviderReconciliationIntake = exports.ProviderSnapshotSource = exports.HttpArrClient = exports.SqliteIntakeStateStore = exports.InMemoryIntakeStateStore = void 0;
+exports.propagateDeletedFile = propagateDeletedFile;
 exports.isMediaFile = isMediaFile;
 const node_crypto_1 = require("node:crypto");
 const node_fs_1 = require("node:fs");
@@ -21,6 +22,7 @@ const mediaClassifier_1 = require("../core/mediaClassifier");
 const mediaParser_1 = require("./mediaParser");
 const tmdbService_1 = require("./tmdbService");
 const arrTitleIdentity_1 = require("./arrTitleIdentity");
+const manualIdentity_1 = require("./manualIdentity");
 class InMemoryIntakeStateStore {
     constructor() {
         this.items = new Map();
@@ -137,6 +139,13 @@ exports.HttpArrClient = HttpArrClient;
 async function findArrEntity(route, event) {
     const filename = node_path_1.default.basename(event.path);
     const parsed = (0, mediaParser_1.parseMediaFilename)(filename, event.path);
+    const manual = (0, manualIdentity_1.getManualIdentityOverrideForProviderSource)(event.provider, event.path, {
+        kind: route.kind === 'radarr' ? 'movie' : 'episode',
+        title: parsed.title,
+        year: parsed.year,
+        season: parsed.season,
+        episode: parsed.episode,
+    });
     const title = (0, arrTitleIdentity_1.normalizeArrTitle)(parsed.title || event.path.split('/').filter(Boolean).slice(-2, -1)[0] || '');
     const endpoint = route.kind === 'radarr' ? 'movie' : 'series';
     const kind = route.kind === 'radarr' ? 'movie' : 'tv';
@@ -146,6 +155,11 @@ async function findArrEntity(route, event) {
     if (!response.ok)
         throw new Error(`Arr ${endpoint} lookup failed: HTTP ${response.status}`);
     const records = await response.json();
+    if (manual?.tmdbId) {
+        const manualMatch = records.find((record) => record.id && String(record.tmdbId || '') === String(manual.tmdbId));
+        if (manualMatch)
+            return manualMatch;
+    }
     const titleMatches = records.filter((record) => {
         if (!record.id || !(0, arrTitleIdentity_1.arrTitleAliases)(record).includes(title))
             return false;
@@ -205,6 +219,56 @@ async function exposeAsSymlink(route, event, providerPath, arrPath) {
     // and Arr containers.
     await node_fs_1.promises.symlink(providerPath, destination);
     return destination;
+}
+async function removeMatchingSymlinks(root, targets) {
+    let removed = 0;
+    async function visit(current) {
+        const entries = await node_fs_1.promises.readdir(current, { withFileTypes: true }).catch(() => []);
+        for (const entry of entries) {
+            const candidate = node_path_1.default.join(current, entry.name);
+            if (entry.isSymbolicLink()) {
+                const link = await node_fs_1.promises.readlink(candidate).catch(() => undefined);
+                if (link && targets.has(node_path_1.default.normalize(link))) {
+                    await node_fs_1.promises.unlink(candidate);
+                    removed += 1;
+                }
+            }
+            else if (entry.isDirectory()) {
+                await visit(candidate);
+            }
+        }
+    }
+    await visit(root);
+    return removed;
+}
+async function propagateDeletedFile(route, event, options = {}) {
+    const providerPath = route.sourcePathPrefix
+        ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${event.path.replace(/^\/+/, '')}`
+        : event.path;
+    const targets = new Set([node_path_1.default.normalize(providerPath)]);
+    const removedSymlinks = route.symlinkLibraryPath
+        ? await removeMatchingSymlinks(route.symlinkLibraryPath, targets)
+        : 0;
+    if (options.refreshArr === false)
+        return { removedSymlinks };
+    if (!route.baseUrl || !route.apiKey)
+        return { removedSymlinks, warning: 'ARR route is not configured' };
+    const arrEntity = await findArrEntity(route, event);
+    if (!arrEntity?.id)
+        return { removedSymlinks, warning: `No unambiguous ${route.kind} entity matched deleted path` };
+    const commandName = route.kind === 'radarr' ? 'RescanMovie' : 'RescanSeries';
+    const commandBody = { name: commandName, [route.kind === 'radarr' ? 'movieId' : 'seriesId']: arrEntity.id };
+    const response = await fetch(`${route.baseUrl.replace(/\/$/, '')}/api/v3/command`, {
+        method: 'POST',
+        headers: { 'X-Api-Key': route.apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify(commandBody),
+    });
+    if (!response.ok)
+        throw new Error(`Arr delete reconciliation failed: HTTP ${response.status}`);
+    const body = await response.json();
+    if (!body.id)
+        throw new Error('Arr delete reconciliation response did not include an id');
+    return { removedSymlinks, arrEntityId: arrEntity.id, arrCommandId: String(body.id) };
 }
 /** Adapts SchröDrive's common provider contract to reconciliation snapshots. */
 class ProviderSnapshotSource {
