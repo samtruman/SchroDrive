@@ -69,7 +69,10 @@ export async function executeVersionManagerDelete(request: DeleteExecutionReques
   if (request.confirmation !== request.providerItemId) throw new Error("Live deletion confirmation does not match the ProviderItem");
   await request.provider.deleteTorrent(request.providerItemId);
   let propagation: DeletePropagationResult | undefined;
-  try { propagation = await request.afterDelete?.(impact); }
+  try {
+    const propagated = await request.afterDelete?.(impact);
+    if (propagated) propagation = propagated;
+  }
   catch (error: any) { propagation = { removedSymlinks: 0, warning: error?.message || "ARR delete propagation failed" }; }
   return { status: "DELETED", executed: true, provider: request.provider.id, providerItemId: request.providerItemId, impact, propagation };
 }
@@ -91,7 +94,7 @@ export async function executeVersionManagerDeleteBatch(request: Omit<DeleteExecu
   const staleProviderItemIds = providerItemIds.filter((id) => !current.has(id));
   if (staleProviderItemIds.length > 0) throw new ProviderInventoryDriftError(staleProviderItemIds);
 
-  const results = providerItemIds.map((id) => ({
+  const results: DeleteExecutionResult[] = providerItemIds.map((id) => ({
     status: "VALIDATED" as const,
     executed: false,
     provider: request.provider.id,
