@@ -16,6 +16,7 @@ import { classifyTorrent } from '../core/mediaClassifier';
 import { parseMediaFilename } from './mediaParser';
 import { searchTmdb } from './tmdbService';
 import { arrTitleAliases, normalizeArrTitle } from './arrTitleIdentity';
+import { getManualIdentityOverrideForProviderSource } from './manualIdentity';
 
 export type DirectFileAction = 'added' | 'changed' | 'deleted';
 export type SourceCategory = 'Movies' | 'Shows';
@@ -64,6 +65,13 @@ export interface ArrCommandResult {
 export interface ArrClient {
   submitScan(route: ArrRoute, event: DirectFileEvent): Promise<ArrCommandResult>;
   getCommand(route: ArrRoute, commandId: string): Promise<ArrCommandResult>;
+}
+
+export interface ArrDeletePropagationResult {
+  removedSymlinks: number;
+  arrEntityId?: number;
+  arrCommandId?: string;
+  warning?: string;
 }
 
 export interface IntakeStateStore {
@@ -199,6 +207,13 @@ type ArrEntity = { id?: number; title?: string; originalTitle?: string; alternat
 async function findArrEntity(route: ArrRoute, event: DirectFileEvent): Promise<ArrEntity | undefined> {
   const filename = path.basename(event.path);
   const parsed = parseMediaFilename(filename, event.path);
+  const manual = getManualIdentityOverrideForProviderSource(event.provider, event.path, {
+    kind: route.kind === 'radarr' ? 'movie' : 'episode',
+    title: parsed.title,
+    year: parsed.year,
+    season: parsed.season,
+    episode: parsed.episode,
+  });
   const title = normalizeArrTitle(parsed.title || event.path.split('/').filter(Boolean).slice(-2, -1)[0] || '');
   const endpoint = route.kind === 'radarr' ? 'movie' : 'series';
   const kind = route.kind === 'radarr' ? 'movie' : 'tv';
@@ -207,6 +222,10 @@ async function findArrEntity(route: ArrRoute, event: DirectFileEvent): Promise<A
   });
   if (!response.ok) throw new Error(`Arr ${endpoint} lookup failed: HTTP ${response.status}`);
   const records = await response.json() as ArrEntity[];
+  if (manual?.tmdbId) {
+    const manualMatch = records.find((record) => record.id && String(record.tmdbId || '') === String(manual.tmdbId));
+    if (manualMatch) return manualMatch;
+  }
   const titleMatches = records.filter((record) => {
     if (!record.id || !arrTitleAliases(record).includes(title)) return false;
     return route.kind === 'sonarr' || !parsed.year || !record.year || Number(record.year) === parsed.year;
@@ -266,6 +285,52 @@ async function exposeAsSymlink(route: ArrRoute, event: DirectFileEvent, provider
   // and Arr containers.
   await fsp.symlink(providerPath, destination);
   return destination;
+}
+
+async function removeMatchingSymlinks(root: string, targets: Set<string>): Promise<number> {
+  let removed = 0;
+  async function visit(current: string): Promise<void> {
+    const entries = await fsp.readdir(current, { withFileTypes: true }).catch(() => [] as import('node:fs').Dirent[]);
+    for (const entry of entries) {
+      const candidate = path.join(current, entry.name);
+      if (entry.isSymbolicLink()) {
+        const link = await fsp.readlink(candidate).catch(() => undefined);
+        if (link && targets.has(path.normalize(link))) {
+          await fsp.unlink(candidate);
+          removed += 1;
+        }
+      } else if (entry.isDirectory()) {
+        await visit(candidate);
+      }
+    }
+  }
+  await visit(root);
+  return removed;
+}
+
+export async function propagateDeletedFile(route: ArrRoute, event: DirectFileEvent, options: { refreshArr?: boolean } = {}): Promise<ArrDeletePropagationResult> {
+  const providerPath = route.sourcePathPrefix
+    ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${event.path.replace(/^\/+/, '')}`
+    : event.path;
+  const targets = new Set([path.normalize(providerPath)]);
+  const removedSymlinks = route.symlinkLibraryPath
+    ? await removeMatchingSymlinks(route.symlinkLibraryPath, targets)
+    : 0;
+  if (options.refreshArr === false) return { removedSymlinks };
+  if (!route.baseUrl || !route.apiKey) return { removedSymlinks, warning: 'ARR route is not configured' };
+  const arrEntity = await findArrEntity(route, event);
+  if (!arrEntity?.id) return { removedSymlinks, warning: `No unambiguous ${route.kind} entity matched deleted path` };
+  const commandName = route.kind === 'radarr' ? 'RescanMovie' : 'RescanSeries';
+  const commandBody = { name: commandName, [route.kind === 'radarr' ? 'movieId' : 'seriesId']: arrEntity.id };
+  const response = await fetch(`${route.baseUrl.replace(/\/$/, '')}/api/v3/command`, {
+    method: 'POST',
+    headers: { 'X-Api-Key': route.apiKey, 'Content-Type': 'application/json' },
+    body: JSON.stringify(commandBody),
+  });
+  if (!response.ok) throw new Error(`Arr delete reconciliation failed: HTTP ${response.status}`);
+  const body = await response.json() as { id?: number };
+  if (!body.id) throw new Error('Arr delete reconciliation response did not include an id');
+  return { removedSymlinks, arrEntityId: arrEntity.id, arrCommandId: String(body.id) };
 }
 
 export interface ProviderReadOnlySource {

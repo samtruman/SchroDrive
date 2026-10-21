@@ -10,13 +10,45 @@ import {
   HttpArrClient,
   SqliteIntakeStateStore,
   type ArrRoute,
+  type ArrDeletePropagationResult,
+  type DirectFileEvent,
+  propagateDeletedFile,
 } from "./providerReconciliation";
+import type { DeleteImpact } from "./deleteImpact";
 
 export function providerReconciliationRoutes(providerId = "alldebrid"): { movies: ArrRoute; shows: ArrRoute } {
   const sourcePathPrefix = `${config.providerReconciliationMountBase.replace(/\/$/, '')}/${providerId}`;
   return {
     movies: { kind: "radarr", baseUrl: config.providerReconciliationRadarrUrl, apiKey: config.providerReconciliationRadarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config.providerReconciliationMoviesLibraryPath || undefined },
     shows: { kind: "sonarr", baseUrl: config.providerReconciliationSonarrUrl, apiKey: config.providerReconciliationSonarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config.providerReconciliationShowsLibraryPath || undefined },
+  };
+}
+
+export async function propagateProviderDeletion(impact: DeleteImpact): Promise<ArrDeletePropagationResult> {
+  const routes = providerReconciliationRoutes(impact.provider);
+  const paths = impact.versions.flatMap((version) => version.files.map((file) => file.path).filter((value): value is string => Boolean(value)));
+  if (paths.length === 0) return { removedSymlinks: 0, warning: "Deleted ProviderItem has no tracked media paths" };
+  const isShow = impact.versions.some((version) => version.identity.kind === "episode" || version.identity.season !== undefined || version.identity.episode !== undefined);
+  const route = isShow ? routes.shows : routes.movies;
+  const results: ArrDeletePropagationResult[] = [];
+  for (const [index, filePath] of [...new Set(paths)].entries()) {
+    const event: DirectFileEvent = {
+      provider: impact.provider,
+      providerItemId: impact.providerItemId,
+      action: "deleted",
+      path: filePath,
+      tree: [],
+      sourceCategory: isShow ? "Shows" : "Movies",
+      observedAt: new Date().toISOString(),
+      stableDedupeKey: `delete:${impact.provider}:${impact.providerItemId}:${filePath}`,
+    };
+    results.push(await propagateDeletedFile(route, event, { refreshArr: index === 0 }));
+  }
+  return {
+    removedSymlinks: results.reduce((sum, result) => sum + result.removedSymlinks, 0),
+    arrEntityId: results.find((result) => result.arrEntityId)?.arrEntityId,
+    arrCommandId: results.find((result) => result.arrCommandId)?.arrCommandId,
+    warning: results.find((result) => result.warning)?.warning,
   };
 }
 

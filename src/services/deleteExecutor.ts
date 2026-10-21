@@ -9,6 +9,14 @@ export interface DeleteExecutionRequest {
   dryRun: boolean;
   confirmation?: string;
   selection?: SelectedDeleteItem[];
+  afterDelete?: (impact: DeleteImpact) => Promise<DeletePropagationResult | void>;
+}
+
+export interface DeletePropagationResult {
+  removedSymlinks: number;
+  arrEntityId?: number;
+  arrCommandId?: string;
+  warning?: string;
 }
 
 export interface DeleteExecutionResult {
@@ -17,6 +25,7 @@ export interface DeleteExecutionResult {
   provider: string;
   providerItemId: string;
   impact: DeleteImpact;
+  propagation?: DeletePropagationResult;
 }
 
 export interface BatchDeleteExecutionResult {
@@ -59,7 +68,10 @@ export async function executeVersionManagerDelete(request: DeleteExecutionReques
   if (request.dryRun) return { status: "VALIDATED", executed: false, provider: request.provider.id, providerItemId: request.providerItemId, impact };
   if (request.confirmation !== request.providerItemId) throw new Error("Live deletion confirmation does not match the ProviderItem");
   await request.provider.deleteTorrent(request.providerItemId);
-  return { status: "DELETED", executed: true, provider: request.provider.id, providerItemId: request.providerItemId, impact };
+  let propagation: DeletePropagationResult | undefined;
+  try { propagation = await request.afterDelete?.(impact); }
+  catch (error: any) { propagation = { removedSymlinks: 0, warning: error?.message || "ARR delete propagation failed" }; }
+  return { status: "DELETED", executed: true, provider: request.provider.id, providerItemId: request.providerItemId, impact, propagation };
 }
 
 /** Preflights the complete selection, then deletes sequentially and stops on the first provider error. */
@@ -93,6 +105,8 @@ export async function executeVersionManagerDeleteBatch(request: Omit<DeleteExecu
   for (const id of providerItemIds) {
     try {
       await request.provider.deleteTorrent(id);
+      try { results.find((result) => result.providerItemId === id)!.propagation = await request.afterDelete?.(impactById.get(id)!); }
+      catch (error: any) { results.find((result) => result.providerItemId === id)!.propagation = { removedSymlinks: 0, warning: error?.message || "ARR delete propagation failed" }; }
       completedIds.push(id);
     } catch (error: any) {
       throw new BatchDeleteExecutionError(error?.message || `Provider deletion failed for ${id}`, completedIds, id, error);

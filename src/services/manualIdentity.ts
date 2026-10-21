@@ -88,6 +88,32 @@ export function getManualIdentityOverride(identity: IdentityKeyInput): ManualIde
   return readOverride(getDb().prepare("SELECT override_json FROM version_manager_identity_overrides WHERE identity_key = ?").get(identityOverrideKey(identity)));
 }
 
+/**
+ * Resolves a manual identity for provider reconciliation. Source overrides are
+ * authoritative; the unique title-compatible override is only a fallback for
+ * release files whose embedded year/title differs from the resolved identity.
+ */
+export function getManualIdentityOverrideForProviderSource(provider: string, sourcePath: string, identity: IdentityKeyInput): ManualIdentityOverride | undefined {
+  const database = getDb();
+  const sourceKey = sourceOverrideKey(provider, sourcePath);
+  if (sourceKey) {
+    const sourceOverride = readOverride(database.prepare("SELECT override_json FROM version_manager_identity_overrides WHERE identity_key = ?").get(sourceKey));
+    if (sourceOverride) return sourceOverride;
+  }
+  const direct = getManualIdentityOverride(identity);
+  if (direct) return direct;
+  const title = normalizeMediaTitle(identity.title || "");
+  if (!title || identity.kind !== "movie") return undefined;
+  const candidates = (database.prepare("SELECT override_json FROM version_manager_identity_overrides WHERE identity_key NOT LIKE 'version:%' AND identity_key NOT LIKE 'source:%'").all() as any[])
+    .map((row) => readOverride(row))
+    .filter((override): override is ManualIdentityOverride => Boolean(override?.tmdbId && (override.kind || "movie") === "movie"))
+    .filter((override) => {
+      const candidateTitles = [override.title, override.originalTitle].filter(Boolean).map((value) => normalizeMediaTitle(String(value)));
+      return candidateTitles.some((candidate) => candidate && (title.includes(candidate) || candidate.includes(title)));
+    });
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
 export function applyManualIdentityOverride(identity: ContentIdentity, override: ManualIdentityOverride): ContentIdentity {
   const title = override.title || identity.title;
   return {
