@@ -41,6 +41,7 @@ const mediaParser_1 = require("./mediaParser");
 const organizerReview_1 = require("./organizerReview");
 const tmdbService_1 = require("./tmdbService");
 const arrTitleIdentity_1 = require("./arrTitleIdentity");
+const manualIdentity_1 = require("./manualIdentity");
 function normalize(value) {
     return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
 }
@@ -178,6 +179,18 @@ function findArrRecord(candidate, records, tmdbId) {
     // match first, then use TMDB only as a fallback when ARR metadata is enough
     // to identify the media but not enough to match its title spelling.
     return findArrRecordByTitle(candidate, records) || findArrRecordByTmdb(tmdbId, records);
+}
+function findArrRecordWithManualIdentity(candidate, records) {
+    const manual = (0, manualIdentity_1.getManualIdentityOverride)({
+        kind: candidate.category === "movie" ? "movie" : "episode",
+        title: candidate.title,
+        year: candidate.year,
+        season: candidate.season,
+    });
+    const manualMatch = candidate.category === "movie" && manual?.tmdbId
+        ? findArrRecordByTmdb(String(manual.tmdbId), records)
+        : undefined;
+    return manualMatch || findArrRecord(candidate, records);
 }
 function recordArrIdentityReview(candidate, link, reason) {
     const parsed = (0, mediaParser_1.parseMediaFilename)(path.basename(link), link);
@@ -332,7 +345,7 @@ async function reconcileOrganizedLibraryWithArr() {
         if (!candidate)
             continue;
         const records = candidate.category === "movie" ? movies : series;
-        const arrTitleRecord = findArrRecordByTitle(candidate, records);
+        const arrTitleRecord = findArrRecordWithManualIdentity(candidate, records);
         const parserRecord = arrTitleRecord ? undefined : await resolveArrRecordByParser(candidate, link, records);
         const tmdbId = arrTitleRecord || parserRecord ? undefined : await resolveTmdbId(candidate).catch(() => undefined);
         const record = arrTitleRecord || parserRecord || findArrRecord(candidate, records, tmdbId);
