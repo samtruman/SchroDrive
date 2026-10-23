@@ -310,9 +310,18 @@ export class AllDebridProvider implements DebridProvider {
    * @returns An array of normalised torrent info objects.
    */
   async listTorrents(requireFresh = false): Promise<TorrentInfo[]> {
+    return (await this.listTorrentsWithStatus(requireFresh)).torrents;
+  }
+
+  /**
+   * Status-aware variant used by the Arr bridge. Cached or empty responses
+   * returned during rate limits/errors are deliberately marked incomplete so
+   * callers never interpret them as proof that a submitted magnet vanished.
+   */
+  async listTorrentsWithStatus(requireFresh = false): Promise<{ torrents: TorrentInfo[]; complete: boolean }> {
     if (!this.isConfigured()) {
       if (requireFresh) throw new Error('Provider not configured');
-      return [];
+      return { torrents: [], complete: false };
     }
 
     // Return cached data if rate-limited
@@ -322,16 +331,16 @@ export class AllDebridProvider implements DebridProvider {
       const cached = rateLimiter.getCache<any[]>(this.torrentListCacheKey());
       if (cached) {
         console.warn(`[${new Date().toISOString()}][ad] rate limited, returning cached list (${cached.length} items, wait ${waitTime}s)`);
-        return this.normaliseTorrents(cached);
+        return { torrents: this.normaliseTorrents(cached), complete: false };
       }
       console.warn(`[${new Date().toISOString()}][ad] rate limited, no cache available (wait ${waitTime}s)`);
-      return [];
+      return { torrents: [], complete: false };
     }
 
     try {
       const magnets = await this.fetchMagnetStatus(requireFresh);
       console.log(`[${new Date().toISOString()}][ad] fetched ${magnets.length} magnets`);
-      return this.normaliseTorrents(magnets);
+      return { torrents: this.normaliseTorrents(magnets), complete: true };
     } catch (err: any) {
       this.handleError(err, 'list torrents');
       if (requireFresh) throw err;
@@ -339,9 +348,9 @@ export class AllDebridProvider implements DebridProvider {
       const cached = rateLimiter.getCache<any[]>(this.torrentListCacheKey());
       if (cached) {
         console.log(`[${new Date().toISOString()}][ad] returning cached list on error (${cached.length} items)`);
-        return this.normaliseTorrents(cached);
+        return { torrents: this.normaliseTorrents(cached), complete: false };
       }
-      return [];
+      return { torrents: [], complete: false };
     }
   }
 

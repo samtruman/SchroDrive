@@ -156,8 +156,13 @@ export interface DebridProvider {
 
   // --- Torrent Operations ---------------------------------------------------
 
-  /** Fetches inventory. AD/RD/TorBox requireFresh propagates outages instead of cached/empty fallback. */
+  /** Fetches the complete list of torrents from the provider. */
   listTorrents(requireFresh?: boolean): Promise<TorrentInfo[]>;
+  /**
+   * Optional status-aware listing for providers that can distinguish a
+   * complete inventory from a cached, partial, or unavailable response.
+   */
+  listTorrentsWithStatus?(requireFresh?: boolean): Promise<{ torrents: TorrentInfo[]; complete: boolean }>;
   /** Async generator yielding torrent pages for SSE streaming (optional). */
   listTorrentsStream?(): AsyncGenerator<TorrentInfo[], void, unknown>;
   /** Adds a magnet link to the provider for downloading. */

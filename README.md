@@ -913,12 +913,22 @@ All configuration is done via environment variables. Below is the complete refer
 
 ### 🔄 Provider Reconciliation
 
+The bridge matches tracked downloads by provider and persisted torrent ID.
+An ID is considered deleted only when every submitted provider has returned a
+complete, authoritative inventory and the corresponding ID is absent from all
+of them. Provider outages, rate limits, cached responses, empty partial
+listings, and downloads that are still present are not treated as failures; no
+timeout is applied to the download duration.
+
 After the initial historical library import performed in Radarr/Sonarr,
 provider reconciliation detects newly completed files added directly to a
 configured debrid provider. It compares snapshots in SQLite, creates
 mount-backed symlinks in the existing Arr library, and asks Radarr/Sonarr to
 rescan the affected movie or series. It does not copy media locally and does
 not delete or repair provider content.
+
+### Provider reconciliation configuration
+
 
 | Variable | Default | Description |
 | --- | --- | --- |
