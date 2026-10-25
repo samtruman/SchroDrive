@@ -219,6 +219,42 @@ class TorBoxProvider {
         }
     }
     /**
+     * Looks up one torrent directly by its persisted TorBox ID.
+     * Only an explicit 404 is treated as authoritative absence.
+     */
+    async getTorrentStatus(torrentId) {
+        if (apiDisabled)
+            return { status: 'unknown', reason: apiDisabledReason || 'provider API disabled' };
+        if (!this.isConfigured())
+            return { status: 'unknown', reason: 'provider not configured' };
+        if (this.isRateLimited())
+            return { status: 'unknown', reason: 'provider rate limited' };
+        await rateLimiter_1.rateLimiter.throttle(PROVIDER_NAME);
+        try {
+            const base = getBaseUrl();
+            const res = await httpClient_1.axiosIPv4.get(`${base}/v1/api/torrents/torrentstatus?id=${encodeURIComponent(torrentId)}`, {
+                headers: torboxHeaders(),
+                timeout: 20000,
+            });
+            rateLimiter_1.rateLimiter.recordSuccess(PROVIDER_NAME);
+            const raw = res.data?.data;
+            if (!raw || typeof raw !== 'object') {
+                return { status: 'unknown', reason: 'provider returned an invalid torrent payload' };
+            }
+            const torrent = this.normaliseTorrents([raw])[0];
+            return torrent?.id === String(torrentId)
+                ? { status: 'present', torrent }
+                : { status: 'unknown', reason: 'provider returned a mismatched torrent ID' };
+        }
+        catch (err) {
+            if (err?.response?.status === 404)
+                return { status: 'missing' };
+            checkPlanError(err);
+            this.handleError(err, `get torrent status ${torrentId}`);
+            return { status: 'unknown', reason: err?.message || 'provider lookup failed' };
+        }
+    }
+    /**
      * Adds a magnet link to TorBox for downloading.
      *
      * Throws if the API is disabled (plan limitation), rate-limited,

@@ -155,6 +155,35 @@ class RealDebridProvider {
         }
     }
     /**
+     * Looks up one torrent directly by its persisted Real-Debrid ID.
+     * A 404 is authoritative; transport, rate-limit and server errors are not.
+     */
+    async getTorrentStatus(torrentId) {
+        if (!this.isConfigured())
+            return { status: 'unknown', reason: 'provider not configured' };
+        if (this.isRateLimited())
+            return { status: 'unknown', reason: 'provider rate limited' };
+        await rateLimiter_1.rateLimiter.throttle(PROVIDER_NAME);
+        try {
+            const base = getBaseUrl();
+            const res = await httpClient_1.axiosIPv4.get(`${base}/torrents/info/${encodeURIComponent(torrentId)}`, {
+                headers: rdHeaders(),
+                timeout: 20000,
+            });
+            rateLimiter_1.rateLimiter.recordSuccess(PROVIDER_NAME);
+            const torrent = this.normaliseTorrents([res.data])[0];
+            return torrent?.id === String(torrentId)
+                ? { status: 'present', torrent }
+                : { status: 'unknown', reason: 'provider returned an invalid torrent payload' };
+        }
+        catch (err) {
+            if (err?.response?.status === 404)
+                return { status: 'missing' };
+            this.handleError(err, `get torrent status ${torrentId}`);
+            return { status: 'unknown', reason: err?.message || 'provider lookup failed' };
+        }
+    }
+    /**
      * Async generator that yields torrent pages as they are fetched from RealDebrid.
      * Uses smaller page sizes (100) for faster initial delivery in SSE streaming contexts.
      *

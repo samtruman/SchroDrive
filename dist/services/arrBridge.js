@@ -174,8 +174,43 @@ async function pollDebridStatus() {
     // Provider listings are discovery signals; absence is not proof of failure.
     const providers = providers_1.registry.ordered();
     const inventories = [];
+    const submittedIdsByProvider = new Map();
+    for (const torrent of pending) {
+        for (const result of torrent.providerResults) {
+            if (!result.success || !result.id)
+                continue;
+            const ids = submittedIdsByProvider.get(result.provider) || [];
+            if (!ids.includes(String(result.id)))
+                ids.push(String(result.id));
+            submittedIdsByProvider.set(result.provider, ids);
+        }
+    }
+    const toProviderTorrent = (provider, torrent) => ({
+        id: String(torrent.id),
+        provider,
+        status: torrent.status,
+        progress: torrent.progress,
+        bytes: torrent.bytes,
+        name: torrent.name,
+    });
     for (const p of providers) {
         try {
+            const submittedIds = submittedIdsByProvider.get(p.id) || [];
+            if (p.getTorrentStatus && submittedIds.length > 0) {
+                const items = [];
+                let complete = true;
+                for (const id of submittedIds) {
+                    const result = await p.getTorrentStatus(id);
+                    if (result.status === 'present') {
+                        items.push(toProviderTorrent(p.id, result.torrent));
+                    }
+                    else if (result.status === 'unknown') {
+                        complete = false;
+                    }
+                }
+                inventories.push({ provider: p.id, items, complete });
+                continue;
+            }
             const result = p.listTorrentsWithStatus
                 ? await p.listTorrentsWithStatus()
                 // The legacy listing API cannot distinguish an authoritative empty
@@ -183,17 +218,7 @@ async function pollDebridStatus() {
                 // as evidence that a persisted provider ID was deleted.
                 : { torrents: await p.listTorrents(), complete: false };
             const torrents = result.torrents;
-            const items = [];
-            for (const t of torrents) {
-                items.push({
-                    id: String(t.id),
-                    provider: p.id,
-                    status: t.status,
-                    progress: t.progress,
-                    bytes: t.bytes,
-                    name: t.name,
-                });
-            }
+            const items = torrents.map((torrent) => toProviderTorrent(p.id, torrent));
             inventories.push({ provider: p.id, items, complete: result.complete });
         }
         catch (err) {
