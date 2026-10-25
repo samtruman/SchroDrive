@@ -136,6 +136,24 @@ class HttpArrClient {
     }
 }
 exports.HttpArrClient = HttpArrClient;
+async function fetchArrEntities(route, endpoint) {
+    const response = await fetch(`${route.baseUrl.replace(/\/$/, '')}/api/v3/${endpoint}`, {
+        headers: { 'X-Api-Key': route.apiKey },
+    });
+    if (!response.ok)
+        throw new Error(`Arr ${endpoint} lookup failed: HTTP ${response.status}`);
+    const body = await response.json();
+    return Array.isArray(body) ? body : [];
+}
+async function parseArrEntity(route, filename) {
+    const endpoint = route.kind === 'radarr' ? 'movie' : 'series';
+    const response = await fetch(route.baseUrl.replace(/\/$/, '') + '/api/v3/parse?title=' + encodeURIComponent(filename), { headers: { 'X-Api-Key': route.apiKey } });
+    if (!response.ok)
+        return undefined;
+    const body = await response.json();
+    const entity = body[endpoint];
+    return entity && typeof entity === 'object' ? entity : undefined;
+}
 async function findArrEntity(route, event) {
     const filename = node_path_1.default.basename(event.path);
     const parsed = (0, mediaParser_1.parseMediaFilename)(filename, event.path);
@@ -149,12 +167,7 @@ async function findArrEntity(route, event) {
     const title = (0, arrTitleIdentity_1.normalizeArrTitle)(parsed.title || event.path.split('/').filter(Boolean).slice(-2, -1)[0] || '');
     const endpoint = route.kind === 'radarr' ? 'movie' : 'series';
     const kind = route.kind === 'radarr' ? 'movie' : 'tv';
-    const response = await fetch(`${route.baseUrl.replace(/\/$/, '')}/api/v3/${endpoint}`, {
-        headers: { 'X-Api-Key': route.apiKey },
-    });
-    if (!response.ok)
-        throw new Error(`Arr ${endpoint} lookup failed: HTTP ${response.status}`);
-    const records = await response.json();
+    const records = await fetchArrEntities(route, endpoint);
     if (manual?.tmdbId) {
         const manualMatch = records.find((record) => record.id && String(record.tmdbId || '') === String(manual.tmdbId));
         if (manualMatch)
@@ -163,10 +176,35 @@ async function findArrEntity(route, event) {
     const titleMatches = records.filter((record) => {
         if (!record.id || !(0, arrTitleIdentity_1.arrTitleAliases)(record).includes(title))
             return false;
-        return route.kind === 'sonarr' || !parsed.year || !record.year || Number(record.year) === parsed.year;
+        return true;
     });
-    if (titleMatches.length === 1)
-        return titleMatches[0];
+    // Let Arr parse the release first. If it identifies an entity that is not
+    // configured in this Arr instance, fail closed instead of guessing by title.
+    const parsedEntity = await parseArrEntity(route, filename);
+    if (parsedEntity?.id) {
+        return records.find((record) => String(record.id) === String(parsedEntity.id));
+    }
+    // The year is secondary evidence: it disambiguates duplicate ARR titles,
+    // but a distant remake must not be accepted as a unique match.
+    const nearYearMatches = titleMatches.filter((record) => {
+        if (!parsed.year || !record.year)
+            return true;
+        return Math.abs(Number(record.year) - parsed.year) <= 1;
+    });
+    if (nearYearMatches.length === 1)
+        return nearYearMatches[0];
+    // Use Arr's own metadata lookup for canonical TMDb identity, then map it
+    // back to an already configured record. No second TMDb credential is needed.
+    const lookup = await fetchArrEntities(route, `${endpoint}/lookup?term=${encodeURIComponent(parsed.title || filename)}`);
+    const yearMatches = lookup.filter((candidate) => {
+        if (!parsed.year || !candidate.year)
+            return true;
+        return Math.abs(Number(candidate.year) - parsed.year) <= 1;
+    });
+    const tmdbIds = new Set(yearMatches.map((candidate) => String(candidate.tmdbId || '')).filter(Boolean));
+    const tmdbMatches = records.filter((record) => record.id && tmdbIds.has(String(record.tmdbId || '')));
+    if (tmdbMatches.length === 1)
+        return tmdbMatches[0];
     // ARR is authoritative. TMDB is only a fallback when ARR title aliases do
     // not produce one unambiguous result.
     const canonical = parsed.title ? await resolveCanonicalMetadata(parsed.title, kind, parsed.year) : undefined;
@@ -195,6 +233,11 @@ async function resolveCanonicalMetadata(title, kind, year) {
  * target is deliberately a symlink into the shared SchröDrive mount.
  */
 async function exposeAsSymlink(route, event, providerPath, arrPath) {
+    const libraryRoot = node_path_1.default.resolve(route.symlinkLibraryPath);
+    const authoritativeRoot = node_path_1.default.resolve(arrPath);
+    if (authoritativeRoot !== libraryRoot && !authoritativeRoot.startsWith(`${libraryRoot}${node_path_1.default.sep}`)) {
+        throw new Error(`Refusing Arr path outside configured symlink library: ${arrPath}`);
+    }
     const filename = node_path_1.default.basename(event.path);
     const parsed = (0, mediaParser_1.parseMediaFilename)(filename, event.path);
     const destination = event.sourceCategory === 'Shows' && parsed.season

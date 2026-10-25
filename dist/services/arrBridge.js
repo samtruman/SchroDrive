@@ -27,7 +27,6 @@ exports.scanDirRecursive = scanDirRecursive;
 exports.clearTrackedForTests = clearTrackedForTests;
 exports.startArrBridge = startArrBridge;
 exports.stopArrBridge = stopArrBridge;
-const arrBridgeStatus_1 = require("./arrBridgeStatus");
 const express_1 = __importDefault(require("express"));
 const busboy_1 = __importDefault(require("busboy"));
 const promises_1 = __importDefault(require("fs/promises"));
@@ -36,6 +35,7 @@ const config_1 = require("../core/config");
 const db_1 = require("../core/db");
 const providers_1 = require("../providers");
 const utils_1 = require("../core/utils");
+const arrBridgeStatus_1 = require("./arrBridgeStatus");
 // ===========================================================================
 // Constants
 // ===========================================================================
@@ -173,12 +173,19 @@ async function pollDebridStatus() {
         return;
     // Provider listings are discovery signals; absence is not proof of failure.
     const providers = providers_1.registry.ordered();
-    const allTorrents = [];
+    const inventories = [];
     for (const p of providers) {
         try {
-            const torrents = await p.listTorrents(true);
+            const result = p.listTorrentsWithStatus
+                ? await p.listTorrentsWithStatus()
+                // The legacy listing API cannot distinguish an authoritative empty
+                // inventory from a cached, partial, or failed response.  Never use it
+                // as evidence that a persisted provider ID was deleted.
+                : { torrents: await p.listTorrents(), complete: false };
+            const torrents = result.torrents;
+            const items = [];
             for (const t of torrents) {
-                allTorrents.push({
+                items.push({
                     id: String(t.id),
                     provider: p.id,
                     status: t.status,
@@ -187,15 +194,18 @@ async function pollDebridStatus() {
                     name: t.name,
                 });
             }
+            inventories.push({ provider: p.id, items, complete: result.complete });
         }
         catch (err) {
-            // Non-fatal — provider might be temporarily unavailable
+            // An unavailable provider cannot prove that a submitted torrent is gone.
+            inventories.push({ provider: p.id, items: [], complete: false });
         }
     }
     for (const torrent of pending) {
         const before = stateFingerprint(torrent);
         // Try to find this torrent across providers
-        const info = (0, arrBridgeStatus_1.findProviderTorrent)(torrent, allTorrents);
+        const lookup = (0, arrBridgeStatus_1.findProviderTorrentWithStatus)(torrent, inventories);
+        const info = lookup.match;
         if (info) {
             torrent.pollAttempts = 0;
             torrent.progress = info.progress / 100; // Normalise to 0.0–1.0
@@ -220,6 +230,9 @@ async function pollDebridStatus() {
             else {
                 torrent.state = 'downloading';
             }
+        }
+        else if (lookup.authoritativeMissing) {
+            torrent.state = 'error';
         }
         if (before !== stateFingerprint(torrent))
             persistTrackedTorrent(torrent);
@@ -304,31 +317,49 @@ function normaliseMountName(value) {
         .replace(/\s+/g, ' ')
         .trim();
 }
+const MIN_FUZZY_MOUNT_NAME_LENGTH = 20;
+function mountNameScore(target, candidate) {
+    if (!target || !candidate)
+        return -1;
+    if (target === candidate)
+        return 100000;
+    if (candidate.length < MIN_FUZZY_MOUNT_NAME_LENGTH)
+        return -1;
+    const shorter = Math.min(target.length, candidate.length);
+    const longer = Math.max(target.length, candidate.length);
+    const overlap = Math.round((shorter / longer) * 1000);
+    if (target.includes(candidate) || candidate.includes(target))
+        return 5000 + overlap;
+    const targetTokens = new Set(target.split(' '));
+    const sharedTokens = candidate.split(' ').filter(token => targetTokens.has(token)).length;
+    return sharedTokens >= 3 ? 1000 + sharedTokens * 100 + overlap : -1;
+}
 /** Resolve a completed torrent to its best mount entry. */
 async function findBestMountMatch(searchDir, torrentName) {
     const entries = await promises_1.default.readdir(searchDir, { withFileTypes: true });
     const target = normaliseMountName(torrentName);
     if (!target)
         return null;
-    const targetPrefix = target.slice(0, 20);
     const directories = [];
     const files = [];
     for (const entry of entries) {
         const fullPath = path_1.default.join(searchDir, entry.name);
         const candidate = normaliseMountName(entry.name);
-        const exact = candidate === target;
-        const prefix = candidate.startsWith(targetPrefix) || target.startsWith(candidate.slice(0, 20));
-        if (!exact && !prefix && !candidate.includes(target) && !target.includes(candidate))
-            continue;
         if (entry.isDirectory()) {
             const discovered = await scanDirRecursive(fullPath);
             if (!discovered.length)
                 continue;
-            directories.push({ path: fullPath, files: discovered, score: (exact ? 100000 : 1000) + discovered.length });
+            const directoryScore = mountNameScore(target, candidate);
+            const fileScore = Math.max(...discovered.map(file => mountNameScore(target, normaliseMountName(file.name))));
+            const score = Math.max(directoryScore, fileScore);
+            if (score >= 0)
+                directories.push({ path: fullPath, files: discovered, score });
         }
         else if (entry.isFile() && isVideoFile(entry.name)) {
             const stat = await promises_1.default.stat(fullPath);
-            files.push({ path: searchDir, files: [{ name: entry.name, size: stat.size, path: fullPath }], score: exact ? 100000 : 1 });
+            const score = mountNameScore(target, candidate);
+            if (score >= 0)
+                files.push({ path: searchDir, files: [{ name: entry.name, size: stat.size, path: fullPath }], score });
         }
     }
     return [...directories, ...files].sort((a, b) => b.score - a.score)[0] || null;
