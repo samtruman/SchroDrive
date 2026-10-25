@@ -442,7 +442,8 @@ export function startServer() {
       const policyHash = versionManagerPolicyHash(policy, profiles);
       saveVersionManagerPreviewAudit({ policyHash, evaluatedAt, contentCount: counts.contents, versionGroupCount: counts.versionGroups, versionCount: counts.versions, keepCount: counts.KEEP, deleteCandidateCount: counts.DELETE_CANDIDATE, reviewCount: counts.REVIEW, primaryMissing: counts.primaryMissing, remoteMissing: counts.remoteMissing });
       const dryRun = policy.safety?.deleteDryRun !== false;
-      return res.json({ ok: true, provider: provider.id, readOnly: dryRun, mode: dryRun ? "DRY_RUN" : "LIVE", deleteExecutor: "enabled", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, evaluatedAt, policyVersion: policy.policyVersion || "1", policyHash, counts, groups, performance: { totalMs: Date.now() - startedAt, source: "persisted-snapshot" } });
+      const organizedAudit = auditOrganizedLibrary();
+      return res.json({ ok: true, provider: provider.id, readOnly: dryRun, mode: dryRun ? "DRY_RUN" : "LIVE", deleteExecutor: "enabled", snapshotId: snapshot.snapshotId, snapshotCreatedAt: snapshot.snapshotCreatedAt, evaluatedAt, policyVersion: policy.policyVersion || "1", policyHash, counts: { ...counts, organizedDuplicateCandidates: organizedAudit.summary.issues }, organizedAudit, groups, performance: { totalMs: Date.now() - startedAt, source: "persisted-snapshot+organized-audit" } });
     } catch (err: any) {
       res.status(500).json({ ok: false, error: err?.message || "Delete preview failed" });
     }

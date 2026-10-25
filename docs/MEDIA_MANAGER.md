@@ -1,5 +1,12 @@
 # Media Manager - upstream proposal
 
+## Unified duplicate visibility
+
+The Delete view includes both provider-version candidates and duplicates found
+in the organized Movies/TV symlink tree. The organized audit is read-only
+and review-only until an operator identifies the obsolete local link; provider
+deletion must never be used to remove a local symlink.
+
 ## Proposal summary
 
 This proposal adds a policy-aware Media Manager to SchroDrive. It gives

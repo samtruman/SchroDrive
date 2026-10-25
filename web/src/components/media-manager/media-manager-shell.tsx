@@ -1212,6 +1212,16 @@ function Library({ initialPreset = "all" }: { initialPreset?: string }) {
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
                 {Object.entries(deletePreview.data?.counts || {}).map(([label, value]) => <Stat key={label} label={label.replaceAll("_", " ")} value={String(value)} />)}
               </div>
+              {(deletePreview.data?.organizedAudit?.issues?.length ?? 0) > 0 && <Card className="border-amber-500/40">
+                <CardHeader><CardTitle className="text-base">Organized duplicate candidates</CardTitle><p className="text-sm text-muted-foreground">These duplicates were found in Movies/TV by SchroDrive’s organized-library audit. They are shown in the same Delete view, but remain review-only until the exact obsolete link is selected; provider deletion cannot safely remove a local symlink.</p></CardHeader>
+                <CardContent className="space-y-3">
+                  {deletePreview.data.organizedAudit.issues.map((issue: any, index: number) => <div key={`${issue.type}-${index}`} className="rounded border p-3 text-sm">
+                    <div className="flex flex-wrap items-start justify-between gap-2"><div><p className="font-medium">{issue.title}</p><p className="text-xs text-muted-foreground">{issue.type === "DUPLICATE_SOURCE_LINK" ? "Same source exposed by multiple organized links" : "Equivalent organized folder variants"}</p></div><Badge variant="destructive">REVIEW</Badge></div>
+                    <ul className="mt-2 space-y-1 text-xs text-muted-foreground">{issue.paths.map((item: string) => <li key={item} className="break-all">{item}</li>)}</ul>
+                  </div>)}
+                  <Link className="text-sm underline" href="/media-manager/audit-cleanup">Open organized duplicate details</Link>
+                </CardContent>
+              </Card>}
               {deleteScope === "candidates" && visibleDeleteItems.length > 0 && <div className="flex flex-wrap items-center justify-end gap-2 rounded-lg border p-3"><Button size="sm" variant="outline" disabled={Boolean(deleteBusy) || visibleRecommendedDeleteRefs.length === 0} onClick={() => changeDeleteSelection(visibleRecommendedDeleteRefs, [...selectedDeleteItems.keys()])}>Select all recommended</Button><Button size="sm" variant="ghost" disabled={Boolean(deleteBusy) || selectedDeleteItems.size === 0} onClick={() => setSelectedDeleteItems(new Map())}>Clear selection</Button><span className="text-sm text-muted-foreground">{selectedDeleteItems.size} physical item{selectedDeleteItems.size === 1 ? "" : "s"} selected</span><Button size="sm" variant="destructive" disabled={Boolean(deleteBusy) || selectedDeleteItems.size === 0} onClick={requestBulkDelete}>{deleteBusy === "batch" ? "Deleting selection…" : deleteBusy === "refresh" ? "Refreshing library…" : "Delete selected"}</Button></div>}
               <DeleteImpactCards items={visibleDeleteItems} scope={deleteScope} busyId={deleteBusy} selectedIds={new Set(selectedDeleteItems.keys())} onChangeSelection={changeDeleteSelection} />
             </>
