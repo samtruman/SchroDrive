@@ -40,7 +40,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/moderniselife/schrodrive
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/schrodrive
           tags: |
             type=raw,value=develop
             type=raw,value=develop:${{ steps.version.outputs.version }}-dev
