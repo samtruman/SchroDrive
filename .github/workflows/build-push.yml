@@ -34,7 +34,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/moderniselife/schrodrive
+          images: ${{ env.REGISTRY }}/${{ github.repository_owner }}/schrodrive
           tags: |
             type=ref,event=branch
             type=ref,event=pr
@@ -48,3 +48,7 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            SCHRODRIVE_BUILD_COMMIT=${{ github.sha }}
+            SCHRODRIVE_BUILD_TIME=${{ github.run_started_at }}
+            SCHRODRIVE_IMAGE=${{ env.REGISTRY }}/${{ github.repository_owner }}/schrodrive:${{ github.sha }}
