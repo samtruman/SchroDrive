@@ -157,7 +157,7 @@ export function recommendedDeleteRefs(items: any[]): PhysicalRef[] {
     groupDeleteItems(items)
       .flatMap((group) => group.episodes)
       .flatMap((episode) => episode.versions)
-      .filter((version: any) => version.decision === "DELETE_CANDIDATE"),
+      .filter((version: any) => version.decision === "DELETE_CANDIDATE" && version.providerItem?.state === "READY"),
   );
 }
 
@@ -165,7 +165,7 @@ export function DeleteImpactCards({ items, scope, busyId, selectedIds, onChangeS
   const groups = groupDeleteItems(items);
   const selectable = scope === "candidates";
   return <section className="space-y-3" aria-label={scope === "protected" ? "Protected resources" : scope === "attention" ? "Resources needing attention" : "Deletion candidates"}>
-    <div><h2 className="font-semibold">{scope === "protected" ? "Protected / Not deletable" : scope === "attention" ? "Needs review" : "Deletion candidates"}</h2><p className="text-sm text-muted-foreground">{scope === "protected" ? "These resources contain a logical candidate, but physical deletion is blocked by a KEEP/shared item, missing replacement, review, or recoverability requirement." : scope === "attention" ? "These resources have no actionable removal candidate. Resolve the review, identity, replacement, or recoverability blocker before reassessing them." : "Select complete physical releases. A season pack is one box and one selection containing all linked episodes; independently stored episodes remain separate boxes."}</p></div>
+    <div><h2 className="font-semibold">{scope === "protected" ? "Protected / Not deletable" : scope === "attention" ? "Needs review" : "Deletion candidates"}</h2><p className="text-sm text-muted-foreground">{scope === "protected" ? "These resources contain a logical candidate, but physical deletion is blocked by a KEEP/shared item, missing replacement, review, or recoverability requirement." : scope === "attention" ? "These resources have no actionable removal candidate. Resolve the review, identity, replacement, or recoverability blocker before reassessing them." : "All logical candidates are shown, including blocked packs and incomplete physical releases. Only READY physical releases can be selected; blocked candidates remain visible with the exact missing alternative or safety reason."}</p></div>
     {!items.length && <p className="rounded border p-4 text-sm">No resources match this view.</p>}
     {groups.map((group) => {
       const allVersions = group.episodes.flatMap((episode) => episode.versions);

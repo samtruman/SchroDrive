@@ -151,7 +151,12 @@ function matchesScope(item: DeleteImpact, scope: string): boolean {
   const hasReview = item.versions.some((version) => version.decision === "REVIEW");
   // Policy Delete exposes only physical ProviderItems that are safe to remove.
   // Blocked candidates remain available in the protected/attention views.
-  if (scope === "candidates") return item.state === "READY" && hasCandidate;
+  // Keep blocked movie collections visible in the candidate view. The UI
+  // renders them as disabled physical releases with the exact missing title;
+  // ordinary blocked TV/review items remain in the protected view so the
+  // existing season-pack workflow is not duplicated.
+  const isMovieCollection = isCollectionPack(item) && item.versions.every((version) => version.identity.kind === "movie");
+  if (scope === "candidates") return item.state === "READY" || (hasCandidate && isMovieCollection);
   if (scope === "protected") return hasCandidate && item.state !== "READY";
   if (scope === "attention") return !hasCandidate && hasReview;
   if (scope === "pack-protected") return item.versions.some((version) => version.reasons?.some((reason) => /pack/i.test(reason))) || item.alternativeVersions.some((version) => version.reasons?.some((reason) => /pack/i.test(reason)));
