@@ -62,8 +62,11 @@ function itemKey(provider, providerItemId) {
 function logicalKeys(item) {
     return new Set(item.versions.map((version) => version.logicalKey));
 }
-function isEpisodePack(item) {
-    return item.versions.every((version) => version.identity.kind === "episode") && logicalKeys(item).size > 1;
+function isCollectionPack(item) {
+    const kinds = new Set(item.versions.map((version) => version.identity.kind));
+    return logicalKeys(item).size > 1
+        && kinds.size === 1
+        && (kinds.has("episode") || kinds.has("movie"));
 }
 function resolutionValue(version) {
     const resolution = String(version.fingerprint?.video?.resolution || "").toLowerCase();
@@ -165,11 +168,13 @@ function buildDeleteImpact(groups, query = "", scope = "all") {
         }
     }
     const physicalItems = [...result.values()];
-    const packItems = physicalItems.filter(isEpisodePack);
+    const packItems = physicalItems.filter(isCollectionPack);
     const forcedRetainedPacks = new Set();
-    // Coverage is a safety rule, not a profile preference. A pack only forces
-    // the overlapping singles out when the retained singles do not collectively
-    // cover the whole pack; otherwise the normal profile ranking decides.
+    // Coverage is a safety rule, not a profile preference. A collection
+    // torrent (season pack or multi-movie pack) only forces overlapping
+    // standalone versions out when the retained standalone files do not
+    // collectively cover the whole collection; otherwise normal profile
+    // ranking decides.
     for (const item of physicalItems) {
         for (const version of item.versions) {
             if (version.decision !== "KEEP")

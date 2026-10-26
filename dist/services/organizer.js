@@ -1206,7 +1206,8 @@ async function organizeOnce(opts) {
             desiredBySource.set(await organizerSourceKey(src), safeDst);
         processed++;
     }
-    if (!dryRun && desiredBySource.size > 0) {
+    const discoveryComplete = !dryRun && files.length > 0 && !hasUnavailableSource && processed === files.length && unknownCount === 0;
+    if (discoveryComplete && desiredBySource.size > 0) {
         let removedLinks = 0;
         let removedDirs = 0;
         for (const dir of [movieDir, tvDir, animeDir]) {
