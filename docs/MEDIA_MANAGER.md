@@ -304,8 +304,9 @@ The canonical flow is:
         -> optional explicit action
 
 A ProviderItem is the physical provider-side deletion and recoverability unit.
-A media file inside that item is a logical Version. A season pack may contain
-many logical Versions but remains one physical deletion unit.
+A media file inside that item is a logical Version. A season pack or movie
+collection pack may contain many logical Versions but remains one physical
+deletion unit.
 
 The Web UI consumes the persisted snapshot and policy APIs. It must not invent
 a second inventory or silently alter provider state while rendering a view.
@@ -326,8 +327,8 @@ a second inventory or silently alter provider state while rendering a view.
   VersionProfile.
 - VersionDecision: KEEP, DELETE_CANDIDATE, or REVIEW.
 - Physical release: one ProviderItem shown as one selectable delete unit. A
-  season pack is one physical release containing all linked episodes; separate
-  episode ProviderItems remain separate releases.
+  season pack or movie collection pack is one physical release containing all
+  linked media; separate ProviderItems remain separate releases.
 - Snapshot: an atomically persisted evaluated inventory with ID, creation time,
   policy hash, groups, profiles, and scan metadata.
 - Audit record: persisted evidence for scans, acquisition previews/requests,
@@ -501,22 +502,31 @@ the required language can therefore be retained over a larger or higher quality
 release that lacks it. Missing required language can produce a candidate only
 when DELETE_IF_REPLACED is configured and an admissible replacement is kept.
 
-### 9. Season packs and incomplete alternatives
+### 9. Season packs, movie collection packs and incomplete alternatives
 
 A season pack is compared at episode level, not by total pack size. Every
 episode in the pack must map to the corresponding episode identity and be
-evaluated for language, quality, and completeness.
+evaluated for language, quality, and completeness. The same coverage rule
+applies to a movie collection pack: each movie file is compared with its
+individual alternatives.
 
 The pack preference setting can prefer a complete pack over incomplete
-independent releases, but it cannot authorize deletion of episodes that would
-lose the required language or leave an episode without an admissible
+independent releases, but it cannot authorize deletion of media that would
+lose the required language or leave a title/episode without an admissible
 alternative. A smaller complete pack can be retained over a larger partial
 set, while an incomplete or language-ineligible pack remains review-blocked or
-becomes a candidate only when every affected episode has a safe replacement.
+becomes a candidate only when every affected title or episode has a safe
+replacement.
+
+When a collection pack must survive because one contained title has no
+replacement, overlapping standalone movie or episode releases become deletion
+candidates. This prevents the protected pack from causing both versions to be
+kept. Conversely, when all pack contents have valid replacements, the pack
+itself can be the deletion candidate and the independent versions are retained.
 
 The UI groups the physical pack as one deletion selection while preserving
-episode-level explanations. It must never show a pack as a replacement for
-episodes that it does not contain.
+title/episode-level explanations. It must never show a pack as a replacement
+for media that it does not contain.
 
 ### 10. UI projections and actions
 
@@ -780,12 +790,12 @@ not belong in the Policy Delete filter; use the review and provider views for
 those issues. A protected physical ProviderItem is never presented as safe to
 delete merely because it contains a logical candidate.
 
-A season pack is one physical unit. When retained standalone episodes cover
-every episode in the pack, normal profile/size ranking can retain the singles
-and propose the pack. When singles are incomplete, the pack survives and
-overlapping singles become candidates even if an individual single scores
-higher; otherwise both physical releases would remain while the pack cannot be
-removed.
+A season pack or movie collection pack is one physical unit. When retained
+standalone releases cover every item in the pack, normal profile/size ranking
+can retain the singles and propose the pack. When the standalone set is
+incomplete, the pack survives and overlapping standalone releases become
+candidates even if an individual release scores higher; otherwise both
+physical releases would remain while the pack cannot be removed.
 
 Organizer review entries for the same series and season form one UI task. The
 task lists every episode and source path, displays identity provenance, and

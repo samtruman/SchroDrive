@@ -74,6 +74,27 @@ describe("physical delete impact projection", () => {
     expect(items).toEqual([]);
   });
 
+  test("reclassifies standalone movie duplicates when a collection pack must survive", () => {
+    const packOne = version("pack-one", "mission-pack", "KEEP", "Mission One", { kind: "movie", normalizedTitle: "mission one", year: 1996 });
+    const singleOne = version("single-one", "mission-one", "KEEP", "Mission One", { kind: "movie", normalizedTitle: "mission one", year: 1996 });
+    const packTwo = version("pack-two", "mission-pack", "KEEP", "Mission Two", { kind: "movie", normalizedTitle: "mission two", year: 2000 });
+
+    const items = buildDeleteImpact([
+      group("movie-one", { title: "Mission One", normalizedTitle: "mission one", kind: "movie", year: 1996 }, [packOne, singleOne]),
+      group("movie-two", { title: "Mission Two", normalizedTitle: "mission two", kind: "movie", year: 2000 }, [packTwo]),
+    ], "", "candidates");
+
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      providerItemId: "mission-one",
+      state: "READY",
+      protectedByKeep: false,
+      onlyCopy: false,
+    });
+    expect(items[0].versions.map((candidate) => candidate.decision)).toEqual(["DELETE_CANDIDATE"]);
+    expect(items[0].alternativeVersions.map((candidate) => candidate.providerItemId)).toEqual(["mission-pack"]);
+  });
+
   test("protects a mixed season pack and keeps episode identities separate", () => {
     const items = buildDeleteImpact([
       group("show-s01e01", { title: "Neagley", normalizedTitle: "neagley", kind: "episode", year: 2026, season: 1, episode: 1 }, [
