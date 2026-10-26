@@ -4,14 +4,14 @@ SchröDrive's provider reconciliation layer is provider-agnostic. It consumes
 the existing `DebridProvider` contract and never calls provider delete, repair,
 or dead-scanner operations.
 
-The organizer performs an Arr path-reconciliation phase after every provider
-organization pass. This covers the initial AllDebrid library bootstrap and
-later AllDebrid manifest additions without requiring a manual migration. When
-Radarr/Sonarr are available, existing SchroDrive symlinks are moved to the
-authoritative Arr `path`, and the affected movie/series is rescanned. When Arr
-is unavailable or not configured, the standalone SchroDrive canonical path is
-kept and reconciliation is retried on a later pass.
-
+The organizer resolves the Arr path before creating each provider
+symlink. This covers the initial AllDebrid library bootstrap and later
+AllDebrid manifest additions without requiring a manual migration. When
+Radarr/Sonarr are available, the existing library path is authoritative from
+the first placement and the affected movie/series is rescanned. Existing links
+are also reconciled on later passes for migration safety. When Arr is
+unavailable or not configured, the standalone SchroDrive canonical path is
+used and Arr resolution is retried on a later pass.
 ```text
 provider listTorrents/fetchDirectories
   -> normalized snapshot and local SQLite diff
@@ -34,6 +34,16 @@ This prevents a localized Arr title such as `Wolfs - Lupi Solitari (2024)`
 from becoming a second library folder beside the Organizer's
 `Wolfs (2024)`. Existing links are reconciled automatically and only the
 symlink is moved; provider-backed media is never copied or deleted.
+The initial-placement rule is important: ARR reconciliation is not a cleanup
+phase that runs after generic canonical placement. The organizer loads the
+configured Radarr/Sonarr library records once per pass, resolves each media
+item by ARR title/alias, parser identity, or the existing TMDb fallback, and
+uses the resolved ARR library directory before writing the symlink. This
+prevents repeated scans from alternating between a generic canonical folder
+and the ARR folder, which could make Sonarr/Radarr lose file associations.
+Only paths below the configured organized/Movies or organized/TV roots are
+accepted; release-like or unsafe ARR paths fall back to normal review.
+
 
 When both Radarr and Sonarr are configured with a URL and API key, the worker
 starts automatically. `PROVIDER_RECONCILIATION_ENABLED=true` can still be used

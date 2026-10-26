@@ -33,6 +33,8 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.loadArrLibraryRecords = loadArrLibraryRecords;
+exports.resolveAuthoritativeArrLibraryPath = resolveAuthoritativeArrLibraryPath;
 exports.reconcileOrganizedLibraryWithArr = reconcileOrganizedLibraryWithArr;
 const fsp = __importStar(require("node:fs/promises"));
 const path = __importStar(require("node:path"));
@@ -87,6 +89,51 @@ async function fetchArr(baseUrl, apiKey, endpoint) {
         throw new Error(`Arr ${endpoint} lookup failed: HTTP ${response.status}`);
     const body = await response.json();
     return Array.isArray(body) ? body : [];
+}
+async function loadArrLibraryRecords() {
+    let movies = [];
+    let series = [];
+    if (config_1.config.providerReconciliationRadarrUrl && config_1.config.providerReconciliationRadarrApiKey) {
+        try {
+            movies = await fetchArr(config_1.config.providerReconciliationRadarrUrl, config_1.config.providerReconciliationRadarrApiKey, "movie");
+        }
+        catch (error) {
+            console.warn(`[${new Date().toISOString()}][organize] Radarr path lookup unavailable`, {
+                err: error?.message || String(error),
+            });
+        }
+    }
+    if (config_1.config.providerReconciliationSonarrUrl && config_1.config.providerReconciliationSonarrApiKey) {
+        try {
+            series = await fetchArr(config_1.config.providerReconciliationSonarrUrl, config_1.config.providerReconciliationSonarrApiKey, "series");
+        }
+        catch (error) {
+            console.warn(`[${new Date().toISOString()}][organize] Sonarr path lookup unavailable`, {
+                err: error?.message || String(error),
+            });
+        }
+    }
+    return { movies, series };
+}
+function isSafeArrLibraryPath(value, candidate, organizedBase) {
+    if (looksLikeReleasePath(value))
+        return false;
+    const relative = path.relative(path.resolve(organizedBase), path.resolve(value));
+    const [root] = relative.split(path.sep);
+    return (candidate.category === "movie" && root === "Movies") ||
+        (candidate.category === "series" && root === "TV");
+}
+async function resolveAuthoritativeArrLibraryPath(candidate, link, records) {
+    const pool = candidate.category === "movie" ? records.movies : records.series;
+    if (!pool.length)
+        return undefined;
+    const titleRecord = findArrRecordWithManualIdentity(candidate, pool);
+    const parserRecord = titleRecord ? undefined : await resolveArrRecordByParser(candidate, link, pool);
+    const tmdbId = titleRecord || parserRecord ? undefined : await resolveTmdbId(candidate).catch(() => undefined);
+    const record = titleRecord || parserRecord || findArrRecord(candidate, pool, tmdbId);
+    if (!record?.path || !isSafeArrLibraryPath(record.path, candidate, config_1.config.organizedBase))
+        return undefined;
+    return record.path;
 }
 async function resolveArrRecordByParser(candidate, link, records) {
     const baseUrl = candidate.category === "movie" ? config_1.config.providerReconciliationRadarrUrl : config_1.config.providerReconciliationSonarrUrl;
@@ -311,24 +358,7 @@ async function reconcileOrganizedLibraryWithArr() {
     for (const category of ["Movies", "TV", "Anime"]) {
         links.push(...await walkSymlinks(path.join(organizedBase, category)));
     }
-    let movies = [];
-    let series = [];
-    if (config_1.config.providerReconciliationRadarrUrl && config_1.config.providerReconciliationRadarrApiKey) {
-        try {
-            movies = await fetchArr(config_1.config.providerReconciliationRadarrUrl, config_1.config.providerReconciliationRadarrApiKey, "movie");
-        }
-        catch (error) {
-            console.warn(`[${new Date().toISOString()}][organize] Radarr path reconciliation unavailable`, { err: error?.message || String(error) });
-        }
-    }
-    if (config_1.config.providerReconciliationSonarrUrl && config_1.config.providerReconciliationSonarrApiKey) {
-        try {
-            series = await fetchArr(config_1.config.providerReconciliationSonarrUrl, config_1.config.providerReconciliationSonarrApiKey, "series");
-        }
-        catch (error) {
-            console.warn(`[${new Date().toISOString()}][organize] Sonarr path reconciliation unavailable`, { err: error?.message || String(error) });
-        }
-    }
+    const { movies, series } = await loadArrLibraryRecords();
     let moved = 0;
     let unresolved = 0;
     const unresolvedByReason = {};

@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readlink, symlink, writeFile, lstat, rm } from "node:fs
 import path from "node:path";
 import { tmpdir } from "node:os";
 import { config } from "../../../src/core/config";
-import { reconcileOrganizedLibraryWithArr } from "../../../src/services/arrLibraryReconciliation";
+import { reconcileOrganizedLibraryWithArr, resolveAuthoritativeArrLibraryPath } from "../../../src/services/arrLibraryReconciliation";
 
 const originalFetch = globalThis.fetch;
 const original = {
@@ -220,5 +220,35 @@ describe("Arr library path reconciliation", () => {
 
 
 
+  test("resolves the ARR library path before an organizer symlink is created", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "arr-path-before-organize-"));
+    try {
+      const organizedBase = path.join(root, "organized");
+      const arrDir = path.join(organizedBase, "TV", "Foundation (2021)");
+      config.organizedBase = organizedBase;
+      config.providerReconciliationRadarrUrl = "";
+      config.providerReconciliationRadarrApiKey = "";
+      config.providerReconciliationSonarrUrl = "";
+      config.providerReconciliationSonarrApiKey = "";
+
+      const resolved = await resolveAuthoritativeArrLibraryPath(
+        {
+          source: "/mnt/provider/Foundation.S01E01.mkv",
+          currentLink: "/mnt/provider/Foundation.S01E01.mkv",
+          category: "series",
+          title: "Foundation",
+          titleCandidates: ["Foundation"],
+          year: 2021,
+          season: 1,
+        },
+        "/mnt/provider/Foundation.S01E01.mkv",
+        { movies: [], series: [{ id: 17, title: "Foundation (2021)", year: 2021, path: arrDir }] },
+      );
+
+      expect(resolved).toBe(arrDir);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 
 });

@@ -1104,6 +1104,10 @@ async function organizeOnce(opts) {
     let unknownCount = 0;
     const unknownSamples = [];
     const desiredBySource = new Map();
+    let arrRecords;
+    if (!dryRun && (config_1.config.providerReconciliationRadarrUrl || config_1.config.providerReconciliationSonarrUrl)) {
+        arrRecords = await (0, arrLibraryReconciliation_1.loadArrLibraryRecords)();
+    }
     for (const src of files) {
         const base = path.basename(src);
         const structuredIdentity = (0, mediaParser_1.parseMediaFilename)(base, src);
@@ -1193,7 +1197,25 @@ async function organizeOnce(opts) {
             if (unknownSamples.length < 10)
                 unknownSamples.push(src);
         }
-        const dst = computeTarget(parsed, base, src);
+        const arrCandidate = parsed.type === "movie" || parsed.type === "tv"
+            ? {
+                source: src,
+                currentLink: src,
+                category: parsed.type === "movie" ? "movie" : "series",
+                title: parsed.type === "movie" ? parsed.title : parsed.show,
+                titleCandidates: [parsed.type === "movie" ? parsed.title : parsed.show].filter((value) => Boolean(value)),
+                year: parsed.year,
+                season: parsed.type === "tv" ? parsed.season : undefined,
+            }
+            : undefined;
+        const arrLibraryPath = arrCandidate && arrRecords
+            ? await (0, arrLibraryReconciliation_1.resolveAuthoritativeArrLibraryPath)(arrCandidate, src, arrRecords)
+            : undefined;
+        const dst = arrLibraryPath
+            ? parsed.type === "tv" && typeof parsed.season === "number"
+                ? path.join(arrLibraryPath, `Season ${pad2(parsed.season)}`, base)
+                : path.join(arrLibraryPath, base)
+            : computeTarget(parsed, base, src);
         if (!dst)
             continue;
         const safeDst = dryRun ? dst : await resolveCollisionTarget(src, dst);

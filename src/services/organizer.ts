@@ -29,7 +29,7 @@ import { searchTmdb } from "./tmdbService";
 import { refreshJellyfinLibrary } from "../integrations/jellyfin";
 import { refreshPlexLibrary } from "../integrations/plex";
 import { canonicalLibraryPath } from "./canonicalLibraryPath";
-import { reconcileOrganizedLibraryWithArr } from "./arrLibraryReconciliation";
+import { loadArrLibraryRecords, reconcileOrganizedLibraryWithArr, resolveAuthoritativeArrLibraryPath, type ArrLibraryRecords, type Candidate } from "./arrLibraryReconciliation";
 
 // ===========================================================================
 // Types & Constants
@@ -1161,6 +1161,10 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
   let unknownCount = 0;
   const unknownSamples: string[] = [];
   const desiredBySource = new Map<string, string>();
+  let arrRecords: ArrLibraryRecords | undefined;
+  if (!dryRun && (config.providerReconciliationRadarrUrl || config.providerReconciliationSonarrUrl)) {
+    arrRecords = await loadArrLibraryRecords();
+  }
   for (const src of files) {
     const base = path.basename(src);
     const structuredIdentity = parseMediaFilename(base, src);
@@ -1242,7 +1246,25 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
       if (unknownSamples.length < 10) unknownSamples.push(src);
     }
 
-    const dst = computeTarget(parsed, base, src);
+    const arrCandidate: Candidate | undefined = parsed.type === "movie" || parsed.type === "tv"
+      ? {
+          source: src,
+          currentLink: src,
+          category: parsed.type === "movie" ? "movie" : "series",
+          title: parsed.type === "movie" ? parsed.title : parsed.show,
+          titleCandidates: [parsed.type === "movie" ? parsed.title : parsed.show].filter((value): value is string => Boolean(value)),
+          year: parsed.year,
+          season: parsed.type === "tv" ? parsed.season : undefined,
+        }
+      : undefined;
+    const arrLibraryPath = arrCandidate && arrRecords
+      ? await resolveAuthoritativeArrLibraryPath(arrCandidate, src, arrRecords)
+      : undefined;
+    const dst = arrLibraryPath
+      ? parsed.type === "tv" && typeof parsed.season === "number"
+        ? path.join(arrLibraryPath, `Season ${pad2(parsed.season)}`, base)
+        : path.join(arrLibraryPath, base)
+      : computeTarget(parsed, base, src);
     if (!dst) continue;
 
     const safeDst = dryRun ? dst : await resolveCollisionTarget(src, dst);
