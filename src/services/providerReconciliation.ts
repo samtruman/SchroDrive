@@ -421,7 +421,7 @@ async function refreshProviderMount(route: ArrRoute, event?: DirectFileEvent): P
     const response = await fetch(rcUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dir: directory, recursive: false }),
+      body: JSON.stringify({ fs: `${providerName}:`, dir: directory, recursive: false }),
     });
     if (!response.ok) console.warn("[provider-reconciliation] rclone VFS refresh returned HTTP " + response.status);
   } catch (error) {
