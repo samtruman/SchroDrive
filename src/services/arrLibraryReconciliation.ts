@@ -393,7 +393,11 @@ export async function reconcileOrganizedLibraryWithArr(): Promise<Reconciliation
         continue;
       }
     }
-    const destination = candidate.category === "series" && candidate.season
+    // Season 0 is a real ARR season for specials and must remain visible as
+    // Season 00.  Treating it as falsy makes the reconciler move specials to
+    // the series root on every pass, while the organizer puts them back in
+    // Season 00 on the next pass.
+    const destination = candidate.category === "series" && candidate.season !== undefined
       ? path.join(authoritativePath, `Season ${String(candidate.season).padStart(2, "0")}`, path.basename(link))
       : path.join(authoritativePath, path.basename(link));
     const movedThisLink = await moveSymlink(link, destination);

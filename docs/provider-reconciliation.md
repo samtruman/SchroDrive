@@ -38,6 +38,8 @@ The periodic organizer/reconciliation pass is idempotent: Sonarr/Radarr is
 asked to rescan only when a symlink was created or moved, or when the
 authoritative ARR library path was repaired. A pass that finds everything
 already in the correct location does not enqueue another ARR scan.
+TV specials are treated as season `0` and remain under `Season 00` in both
+organizer and ARR reconciliation paths.
 ```text
 provider listTorrents/fetchDirectories
   -> normalized snapshot and local SQLite diff

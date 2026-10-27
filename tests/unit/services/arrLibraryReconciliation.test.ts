@@ -97,6 +97,41 @@ describe("Arr library path reconciliation", () => {
     }
   });
 
+  test("keeps TV specials in Season 00 instead of moving them to the series root", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "arr-specials-season-zero-"));
+    try {
+      const source = path.join(root, "provider", "The.Penguin.S00E01.Special.mkv");
+      const arrDir = path.join(root, "organized", "TV", "The Penguin");
+      const link = path.join(arrDir, "Season 00", path.basename(source));
+      await mkdir(path.dirname(source), { recursive: true });
+      await mkdir(path.dirname(link), { recursive: true });
+      await writeFile(source, "fixture");
+      await symlink(path.relative(path.dirname(link), source), link);
+
+      config.organizedBase = path.join(root, "organized");
+      config.providerReconciliationRadarrUrl = "";
+      config.providerReconciliationRadarrApiKey = "";
+      config.providerReconciliationSonarrUrl = "http://sonarr.fixture";
+      config.providerReconciliationSonarrApiKey = "fixture-key";
+
+      const requests: Array<{ url: string; body?: any }> = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        requests.push({ url: String(input), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        if (String(input).endsWith("/api/v3/series")) {
+          return new Response(JSON.stringify([{ id: 38, title: "The Penguin", tmdbId: 000, path: arrDir }]), { status: 200 });
+        }
+        return new Response(JSON.stringify({ id: 1, status: "queued" }), { status: 201 });
+      }) as typeof fetch;
+
+      const result = await reconcileOrganizedLibraryWithArr();
+      expect(result.moved).toBe(0);
+      expect((await lstat(link)).isSymbolicLink()).toBe(true);
+      expect(requests.some((request) => request.body?.name === "RescanSeries")).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("repairs a release-like Radarr path from the verified library directory", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "arr-path-repair-"));
     try {
