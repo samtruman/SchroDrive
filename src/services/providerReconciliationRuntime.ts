@@ -103,7 +103,10 @@ export function createProviderReconciliationWorker(): ProviderReconciliationWork
         resolveOrganizerReviewAutomatically(event.path, `Provider reconciliation (${event.provider}) matched ARR and completed`);
       },
       onDeleted: async (event) => {
-        await scheduleOrganizerRefresh();
+        const route = event.sourceCategory === "Movies"
+          ? providerReconciliationRoutes(event.provider).movies
+          : providerReconciliationRoutes(event.provider).shows;
+        await propagateDeletedFile(route, event, { refreshArr: true });
         resolveOrganizerReviewAutomatically(event.path, `Provider reconciliation (${event.provider}) item is no longer present`);
       },
       shouldRetry: (event) => isOrganizerReviewPending(event.path),

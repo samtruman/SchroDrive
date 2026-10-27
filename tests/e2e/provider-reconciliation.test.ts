@@ -79,7 +79,7 @@ describe('provider reconciliation direct intake', () => {
     const source = new ProviderSnapshotSource(provider as any, false);
     const recent = await source.listRecentSnapshot!(1);
     const full = await source.listSnapshot();
-    expect(recent.map((item) => item.providerItemId)).toEqual(['new']);
+    expect(recent.map((item) => item.providerItemId)).toEqual(['old', 'new']);
     expect(recentRequests).toEqual([['new']]);
     expect(full.map((item) => item.providerItemId)).toEqual(['old', 'new']);
     expect(fullCalls).toBe(1);
@@ -117,8 +117,32 @@ describe('provider reconciliation direct intake', () => {
     await intake.reconcile('full');
     requested.length = 0;
     await intake.reconcile('recent', 1);
-    expect(requested).toEqual([['new', 'old']]);
+    expect(requested).toEqual([[]]);
     expect(arr.submitted.some((item) => item.event.providerItemId === 'alldebrid:old' && item.event.action === 'changed')).toBe(false);
+  });
+
+  test('detects provider removals during the recent ID-only scan', async () => {
+    let round = 0;
+    const provider = {
+      id: 'alldebrid',
+      async listTorrents() {
+        const items = [
+          { id: 'old', name: 'Old Movie', status: 'finished', progress: 100, bytes: 1, files: [], addedAt: new Date('2026-09-16T00:00:00Z') },
+          { id: 'new', name: 'New Movie', status: 'finished', progress: 100, bytes: 1, files: [], addedAt: new Date('2026-09-17T00:00:00Z') },
+        ];
+        return round++ === 0 ? items : items.slice(1);
+      },
+      async fetchDirectoriesForIds(items: Array<{ id: string }>) {
+        return items.map((item) => ({ id: item.id, name: item.id, originalName: item.id, files: [{ id: `${item.id}.mkv`, name: `${item.id}.mkv`, size: 1 }] }));
+      },
+    };
+    const store = new InMemoryIntakeStateStore();
+    const arr = new FakeArr();
+    const intake = new ProviderReconciliationIntake(new ProviderSnapshotSource(provider as any), arr, store, { routeFor });
+    await intake.reconcile('recent', 30);
+    const events = await intake.reconcile('recent', 30);
+    expect(events.some((event) => event.providerItemId === 'alldebrid:old' && event.action === 'deleted')).toBe(true);
+    expect(events.find((event) => event.providerItemId === 'alldebrid:old')?.tree).toEqual([{ path: 'old.mkv', size: 1 }]);
   });
 
   test('emits add and routes Movies to Radarr and Shows to Sonarr', async () => {

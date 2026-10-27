@@ -102,7 +102,10 @@ function createProviderReconciliationWorker() {
                     (0, organizerReview_1.resolveOrganizerReviewAutomatically)(event.path, `Provider reconciliation (${event.provider}) matched ARR and completed`);
                 },
                 onDeleted: async (event) => {
-                    await scheduleOrganizerRefresh();
+                    const route = event.sourceCategory === "Movies"
+                        ? providerReconciliationRoutes(event.provider).movies
+                        : providerReconciliationRoutes(event.provider).shows;
+                    await (0, providerReconciliation_1.propagateDeletedFile)(route, event, { refreshArr: true });
                     (0, organizerReview_1.resolveOrganizerReviewAutomatically)(event.path, `Provider reconciliation (${event.provider}) item is no longer present`);
                 },
                 shouldRetry: (event) => (0, organizerReview_1.isOrganizerReviewPending)(event.path),

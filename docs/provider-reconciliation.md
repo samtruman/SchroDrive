@@ -41,12 +41,17 @@ already in the correct location does not enqueue another ARR scan.
 TV specials are treated as season `0` and remain under `Season 00` in both
 organizer and ARR reconciliation paths.
 
-Normal provider additions are event-driven. The provider snapshot diff and the
-ARR bridge pass only the changed provider paths to the organizer, which then
-reads those paths without walking the complete mount or pruning unrelated
-links. `RUN_ORGANIZER_WATCH` is disabled by default in Docker and should only
-be enabled for an intentional full recovery scan; direct additions made
-outside SchroDrive are discovered by the explicit Dashboard/provider refresh.
+Normal provider additions are handled by the automatic reconciliation worker.
+Every recent pass reads the lightweight provider torrent/ID list and compares
+it with the persisted intake state: IDs present only in the provider are
+additions, IDs missing from the provider are removals, and active known items
+are eligible for a changed-tree check. Directory trees are fetched only for
+new or active items; completed, unchanged items are not deep-scanned again.
+The changed provider paths are then passed to the organizer without walking
+the complete mount or pruning unrelated links. `RUN_ORGANIZER_WATCH` is
+disabled by default in Docker and is reserved for intentional full recovery
+scans. The Dashboard/provider refresh remains an explicit on-demand trigger,
+not a prerequisite for normal automatic processing.
 ```text
 provider listTorrents/fetchDirectories
   -> normalized snapshot and local SQLite diff

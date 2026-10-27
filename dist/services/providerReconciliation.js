@@ -472,19 +472,20 @@ class ProviderSnapshotSource {
             const separator = text.indexOf(":");
             return separator >= 0 ? text.slice(separator + 1) : text;
         }));
-        const recent = allTorrents
+        // Always inspect the lightweight status/ID list so additions and removals
+        // are visible. Only fetch directory trees for unknown items and torrents
+        // that are still active; completed known items are stable physical data.
+        const unknown = allTorrents
+            .filter((torrent) => !knownIds.has(String(torrent.id)))
             .sort((a, b) => (b.addedAt?.getTime() || 0) - (a.addedAt?.getTime() || 0))
             .slice(0, Math.max(0, limit));
-        const selected = new Map(recent.map((torrent) => [String(torrent.id), torrent]));
-        for (const torrent of allTorrents) {
-            if (knownIds.has(String(torrent.id)))
-                selected.set(String(torrent.id), torrent);
-        }
-        const torrents = [...selected.values()];
+        const activeKnown = allTorrents.filter((torrent) => knownIds.has(String(torrent.id)) && !isFinished({ status: torrent.status, progress: torrent.progress }));
+        const selected = new Map([...unknown, ...activeKnown].map((torrent) => [String(torrent.id), torrent]));
+        const selectedTorrents = [...selected.values()];
         const directories = this.provider.fetchDirectoriesForIds
-            ? await this.provider.fetchDirectoriesForIds(torrents)
+            ? await this.provider.fetchDirectoriesForIds(selectedTorrents)
             : await this.provider.fetchDirectories();
-        return this.toSnapshots(torrents, new Map(directories.map((directory) => [String(directory.id), directory])), observedAt);
+        return this.toSnapshots(allTorrents, new Map(directories.map((directory) => [String(directory.id), directory])), observedAt);
     }
     toSnapshots(torrents, trees, observedAt) {
         return torrents.map((torrent) => {
@@ -555,12 +556,14 @@ class ProviderReconciliationIntake {
             events.push(event);
         }
         // A missing status-list item is a removal, but an item still processing is not.
-        for (const previous of mode === 'full' ? this.store.listItems().filter((item) => item.lastAction !== 'deleted') : []) {
+        // Recent scans include every persisted provider ID in their lightweight
+        // status listing, so removals can be detected without a directory deep scan.
+        for (const previous of this.store.listItems().filter((item) => item.lastAction !== 'deleted')) {
             if (seen.has(previous.providerItemId))
                 continue;
             const event = {
                 provider: previous.provider || 'alldebrid', providerItemId: previous.providerItemId, action: 'deleted',
-                path: previous.path, tree: [], sourceCategory: previous.sourceCategory,
+                path: previous.path, tree: previous.tree || [], sourceCategory: previous.sourceCategory,
                 observedAt: new Date().toISOString(), stableDedupeKey: eventKey(previous.provider || 'alldebrid', previous.providerItemId, 'deleted', previous.fingerprint),
             };
             if (!this.store.hasEvent(event.stableDedupeKey)) {
