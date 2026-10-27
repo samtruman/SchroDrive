@@ -708,13 +708,13 @@ export class ProviderReconciliationIntake {
     const syntheticSingleFileDirectory = item.files.length === 1 &&
       !!directoryName &&
       (directoryName === providerPath || directoryName === path.basename(providerPath));
-    const path = item.directoryName
+    const eventPath = item.directoryName
       && !syntheticSingleFileDirectory
       ? `${categoryDirectory}/${directoryName}/${providerPath}`
       : providerPath;
     return {
       provider, providerItemId: item.providerItemId, action,
-      path, tree: item.files, sourceCategory: category,
+      path: eventPath, tree: item.files, sourceCategory: category,
       observedAt: item.observedAt, stableDedupeKey: eventKey(provider, item.providerItemId, action, fp),
     };
   }
