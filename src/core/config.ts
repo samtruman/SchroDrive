@@ -194,6 +194,7 @@ export const config = {
   // An explicit MOUNT_OPTIONS value is a complete rclone override. When it is
   // absent, mount.ts composes its arguments from the individual MOUNT_* values.
   mountOptions: process.env.MOUNT_OPTIONS || "",
+  mountRcloneRcPort: asNumber(process.env.MOUNT_RCLONE_RC_PORT, 0),
   // Mount permissions/ownership
   mountAllowOther: asBool(process.env.MOUNT_ALLOW_OTHER, true),
   mountUid: (() => {

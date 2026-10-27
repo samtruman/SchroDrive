@@ -18,6 +18,7 @@ const node_crypto_1 = require("node:crypto");
 const node_fs_1 = require("node:fs");
 const node_path_1 = __importDefault(require("node:path"));
 const db_1 = require("../core/db");
+const config_1 = require("../core/config");
 const mediaClassifier_1 = require("../core/mediaClassifier");
 const mediaParser_1 = require("./mediaParser");
 const tmdbService_1 = require("./tmdbService");
@@ -105,6 +106,7 @@ class HttpArrClient {
             ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${event.path.replace(/^\/+/, '')}`
             : event.path;
         if (route.stagingPath) {
+            await refreshProviderMount(route, event);
             await waitForProviderMount(route, event);
             const scanPath = await exposeAsArrStaging(route, event);
             return this.submitCommand(route, { name: commandName, path: scanPath, importMode: route.importMode || 'Copy' });
@@ -317,6 +319,37 @@ async function exposeAsArrStaging(route, event) {
         await node_fs_1.promises.symlink(providerPath, destination);
     }
     return stagingDirectory;
+}
+async function refreshProviderMount(route, event) {
+    if (route.mountRefreshUrl) {
+        try {
+            const response = await fetch(route.mountRefreshUrl, { method: "POST" });
+            if (!response.ok)
+                console.warn("[provider-reconciliation] provider mount refresh returned HTTP " + response.status);
+        }
+        catch (error) {
+            console.warn("[provider-reconciliation] provider mount refresh unavailable; continuing with rclone/readiness refresh", error);
+        }
+    }
+    if (!event || config_1.config.mountRcloneRcPort <= 0 || !route.sourcePathPrefix)
+        return;
+    const providerName = node_path_1.default.basename(route.sourcePathPrefix);
+    const providerIndex = Math.max(0, config_1.config.providers.indexOf(providerName));
+    const rcUrl = `http://127.0.0.1:${config_1.config.mountRcloneRcPort + providerIndex}/vfs/refresh`;
+    const parts = event.path.replace(/^\/+|\/+$/g, "").split("/");
+    const directory = parts.length >= 2 ? `/${parts.slice(0, 2).join("/")}` : `/${parts[0] || ""}`;
+    try {
+        const response = await fetch(rcUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ dir: directory, recursive: false }),
+        });
+        if (!response.ok)
+            console.warn("[provider-reconciliation] rclone VFS refresh returned HTTP " + response.status);
+    }
+    catch (error) {
+        console.warn("[provider-reconciliation] rclone VFS refresh unavailable; continuing with readiness polling", error);
+    }
 }
 async function waitForProviderMount(route, event) {
     if (!route.sourcePathPrefix)

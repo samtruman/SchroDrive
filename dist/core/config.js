@@ -119,6 +119,7 @@ exports.config = {
     providerReconciliationMountBase: process.env.PROVIDER_RECONCILIATION_MOUNT_BASE || "/mnt/schrodrive",
     providerReconciliationMountReadyTimeoutMs: Number(process.env.PROVIDER_RECONCILIATION_MOUNT_READY_TIMEOUT_MS || 30000),
     providerReconciliationMountReadyPollMs: Number(process.env.PROVIDER_RECONCILIATION_MOUNT_READY_POLL_MS || 500),
+    providerReconciliationMountRefreshUrl: process.env.PROVIDER_RECONCILIATION_MOUNT_REFRESH_URL || "http://127.0.0.1:8978/api/webdav/refresh",
     providerReconciliationMoviesLibraryPath: process.env.PROVIDER_RECONCILIATION_MOVIES_LIBRARY_PATH || "",
     providerReconciliationShowsLibraryPath: process.env.PROVIDER_RECONCILIATION_SHOWS_LIBRARY_PATH || "",
     // AllDebrid WebDAV (if supported)
@@ -193,6 +194,7 @@ exports.config = {
     // An explicit MOUNT_OPTIONS value is a complete rclone override. When it is
     // absent, mount.ts composes its arguments from the individual MOUNT_* values.
     mountOptions: process.env.MOUNT_OPTIONS || "",
+    mountRcloneRcPort: (0, utils_1.asNumber)(process.env.MOUNT_RCLONE_RC_PORT, 0),
     // Mount permissions/ownership
     mountAllowOther: (0, utils_1.asBool)(process.env.MOUNT_ALLOW_OTHER, true),
     mountUid: (() => {

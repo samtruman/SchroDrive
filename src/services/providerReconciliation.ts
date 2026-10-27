@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { getDb } from '../core/db';
+import { config } from '../core/config';
 import type { DebridProvider, TorrentInfo, VirtualDirectory } from '../providers';
 import { classifyTorrent } from '../core/mediaClassifier';
 import { parseMediaFilename } from './mediaParser';
@@ -182,7 +183,7 @@ export class HttpArrClient implements ArrClient {
       ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${event.path.replace(/^\/+/, '')}`
       : event.path;
     if (route.stagingPath) {
-      await refreshProviderMount(route);
+      await refreshProviderMount(route, event);
       await waitForProviderMount(route, event);
       const scanPath = await exposeAsArrStaging(route, event);
       return this.submitCommand(route, { name: commandName, path: scanPath, importMode: route.importMode || 'Copy' });
@@ -401,13 +402,30 @@ async function exposeAsArrStaging(route: ArrRoute, event: DirectFileEvent): Prom
   return stagingDirectory;
 }
 
-async function refreshProviderMount(route: ArrRoute): Promise<void> {
-  if (!route.mountRefreshUrl) return;
+async function refreshProviderMount(route: ArrRoute, event?: DirectFileEvent): Promise<void> {
+  if (route.mountRefreshUrl) {
+    try {
+      const response = await fetch(route.mountRefreshUrl, { method: "POST" });
+      if (!response.ok) console.warn("[provider-reconciliation] provider mount refresh returned HTTP " + response.status);
+    } catch (error) {
+      console.warn("[provider-reconciliation] provider mount refresh unavailable; continuing with rclone/readiness refresh", error);
+    }
+  }
+  if (!event || config.mountRcloneRcPort <= 0 || !route.sourcePathPrefix) return;
+  const providerName = path.basename(route.sourcePathPrefix);
+  const providerIndex = Math.max(0, config.providers.indexOf(providerName));
+  const rcUrl = `http://127.0.0.1:${config.mountRcloneRcPort + providerIndex}/vfs/refresh`;
+  const parts = event.path.replace(/^\/+|\/+$/g, "").split("/");
+  const directory = parts.length >= 2 ? `/${parts.slice(0, 2).join("/")}` : `/${parts[0] || ""}`;
   try {
-    const response = await fetch(route.mountRefreshUrl, { method: "POST" });
-    if (!response.ok) console.warn("[provider-reconciliation] mount refresh returned HTTP " + response.status);
+    const response = await fetch(rcUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dir: directory, recursive: false }),
+    });
+    if (!response.ok) console.warn("[provider-reconciliation] rclone VFS refresh returned HTTP " + response.status);
   } catch (error) {
-    console.warn("[provider-reconciliation] mount refresh unavailable; continuing with readiness polling", error);
+    console.warn("[provider-reconciliation] rclone VFS refresh unavailable; continuing with readiness polling", error);
   }
 }
 

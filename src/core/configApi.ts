@@ -87,6 +87,7 @@ export const CONFIG_SCHEMA = {
   // Mount Settings
   MOUNT_BASE: { type: "string", default: "/mnt/schrodrive", category: "mounts", label: "Mount Base Path" },
   RCLONE_PATH: { type: "string", default: "rclone", category: "mounts", label: "Rclone Path" },
+  MOUNT_RCLONE_RC_PORT: { type: "number", default: "0", category: "mounts", label: "Rclone RC Port" },
   MOUNT_OPTIONS: { type: "string", default: "", category: "mounts", label: "Mount Options" },
   MOUNT_ALLOW_OTHER: { type: "boolean", default: "true", category: "mounts", label: "Allow Other Users" },
   MOUNT_UID: { type: "number", default: "", category: "mounts", label: "Mount UID" },

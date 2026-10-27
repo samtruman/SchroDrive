@@ -108,6 +108,7 @@ exports.CONFIG_SCHEMA = {
     ARR_DOWNLOADS_PATH: { type: "string", default: "", category: "arr", label: "ARR Downloads Path" },
     PROVIDER_RECONCILIATION_MOUNT_READY_TIMEOUT_MS: { type: "number", default: "30000", category: "arr", label: "Provider Mount Ready Timeout (ms)" },
     PROVIDER_RECONCILIATION_MOUNT_READY_POLL_MS: { type: "number", default: "500", category: "arr", label: "Provider Mount Ready Poll (ms)" },
+    PROVIDER_RECONCILIATION_MOUNT_REFRESH_URL: { type: "string", default: "http://127.0.0.1:8978/api/webdav/refresh", category: "arr", label: "Provider Mount Refresh URL" },
     // Runtime Services
     RUN_WEBHOOK: { type: "boolean", default: "true", category: "services", label: "Run Webhook Server" },
     RUN_POLLER: { type: "boolean", default: "false", category: "services", label: "Run Seerr Poller" },
@@ -118,6 +119,7 @@ exports.CONFIG_SCHEMA = {
     // Mount Settings
     MOUNT_BASE: { type: "string", default: "/mnt/schrodrive", category: "mounts", label: "Mount Base Path" },
     RCLONE_PATH: { type: "string", default: "rclone", category: "mounts", label: "Rclone Path" },
+    MOUNT_RCLONE_RC_PORT: { type: "number", default: "0", category: "mounts", label: "Rclone RC Port" },
     MOUNT_OPTIONS: { type: "string", default: "", category: "mounts", label: "Mount Options" },
     MOUNT_ALLOW_OTHER: { type: "boolean", default: "true", category: "mounts", label: "Allow Other Users" },
     MOUNT_UID: { type: "number", default: "", category: "mounts", label: "Mount UID" },

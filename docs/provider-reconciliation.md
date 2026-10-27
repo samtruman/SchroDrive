@@ -113,3 +113,15 @@ ARR reconciliation is safe to repeat. When an existing organized destination alr
 
 The older generic `REFRESH_LIBRARY_ON_ADD` setting is not the control for this
 path. It must not be used as a substitute for the server-specific settings.
+
+
+### Mount readiness and rclone refresh
+
+Before submitting a direct file to Radarr or Sonarr, reconciliation refreshes
+the provider WebDAV bridge and requests a targeted rclone VFS refresh. Set
+`MOUNT_RCLONE_RC_PORT` (for example `5579`) to enable rclone's local RC
+endpoint; the mount process starts it on loopback only.
+`PROVIDER_RECONCILIATION_MOUNT_REFRESH_URL` refreshes the bridge, while the RC
+refresh invalidates the mount directory cache. Reconciliation then waits for
+the provider files to become readable, bounded by
+`PROVIDER_RECONCILIATION_MOUNT_READY_TIMEOUT_MS`.

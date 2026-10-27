@@ -962,7 +962,7 @@ export async function mountVirtualDrive(): Promise<void> {
     return;
   }
 
-  for (const m of mounts) {
+  for (const [mountIndex, m] of mounts.entries()) {
     // Safe to cleanup the leaf mount path only
     ensureDir(m.path, { cleanupOnStale: true });
     if (!(await testRemote(m.remote, cfg))) {
@@ -982,6 +982,12 @@ export async function mountVirtualDrive(): Promise<void> {
       console.log(`[${new Date().toISOString()}][mount] skipping --allow-other (no user_allow_other in /etc/fuse.conf)`);
     }
     args.push("--allow-non-empty");
+
+    if (config.mountRcloneRcPort > 0) {
+      const rcPort = config.mountRcloneRcPort + mountIndex;
+      args.push("--rc", `--rc-addr=127.0.0.1:${rcPort}`, "--rc-no-auth");
+      console.log(`[${new Date().toISOString()}][mount] rclone RC enabled on 127.0.0.1:${rcPort} for ${m.remote}`);
+    }
 
     // Apply user-provided mount options or fall back to configured defaults
     if (config.mountOptions && config.mountOptions.trim()) {
