@@ -166,14 +166,14 @@ export function startServer() {
   // ===========================================================================
 
   /** POST /api/dashboard/refresh — Refreshes recent provider activity and organised links. */
-  app.post("/api/dashboard/refresh", async (_req, res) => {
-    try {
-      const result = await refreshProviderActivity();
-      res.json({ ok: true, ...result });
-    } catch (error: any) {
-      console.error("[api/dashboard/refresh] Refresh failed:", error?.message || String(error));
-      res.status(503).json({ ok: false, error: error?.message || "Dashboard refresh failed" });
-    }
+  app.post("/api/dashboard/refresh", (_req, res) => {
+    // Provider refresh can legitimately take longer than the browser request
+    // timeout while AllDebrid/rclone refreshes its listing. Start it here and
+    // let the normal dashboard polling observe the new inventory.
+    void refreshProviderActivity().catch((error: any) => {
+      console.error("[api/dashboard/refresh] Background refresh failed:", error?.message || String(error));
+    });
+    res.json({ ok: true, started: true });
   });
 
   /**
