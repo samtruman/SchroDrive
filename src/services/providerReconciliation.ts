@@ -56,6 +56,10 @@ export interface ArrRoute {
   symlinkLibraryPath?: string;
   /** Optional Arr-visible download staging root. When set, ARR performs the import. */
   stagingPath?: string;
+  /** Maximum time to wait for newly-mounted provider files before notifying ARR. */
+  mountReadyTimeoutMs?: number;
+  /** Poll interval while waiting for the provider mount. */
+  mountReadyPollMs?: number;
 }
 
 export interface ArrCommandResult {
@@ -67,6 +71,13 @@ export interface ArrCommandResult {
 export interface ArrClient {
   submitScan(route: ArrRoute, event: DirectFileEvent): Promise<ArrCommandResult>;
   getCommand(route: ArrRoute, commandId: string): Promise<ArrCommandResult>;
+}
+
+class ProviderMountNotReadyError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ProviderMountNotReadyError";
+  }
 }
 
 export interface ArrDeletePropagationResult {
@@ -169,6 +180,7 @@ export class HttpArrClient implements ArrClient {
       ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${event.path.replace(/^\/+/, '')}`
       : event.path;
     if (route.stagingPath) {
+      await waitForProviderMount(route, event);
       const scanPath = await exposeAsArrStaging(route, event);
       return this.submitCommand(route, { name: commandName, path: scanPath, importMode: route.importMode || 'Copy' });
     }
@@ -384,6 +396,47 @@ async function exposeAsArrStaging(route: ArrRoute, event: DirectFileEvent): Prom
     await fsp.symlink(providerPath, destination);
   }
   return stagingDirectory;
+}
+
+async function waitForProviderMount(route: ArrRoute, event: DirectFileEvent): Promise<void> {
+  if (!route.sourcePathPrefix) return;
+  const timeoutMs = Math.max(0, route.mountReadyTimeoutMs ?? 0);
+  if (timeoutMs === 0) return;
+  const pollMs = Math.max(50, route.mountReadyPollMs ?? 500);
+  const paths = providerTreePaths(route, event);
+  if (paths.length === 0) return;
+  const deadline = Date.now() + timeoutMs;
+  let missing = paths;
+  do {
+    missing = [];
+    for (const candidate of paths) {
+      try {
+        const stat = await fsp.stat(candidate);
+        if (!stat.isFile()) missing.push(candidate);
+      } catch {
+        missing.push(candidate);
+      }
+    }
+    if (missing.length === 0) return;
+    if (Date.now() >= deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, Math.max(1, deadline - Date.now()))));
+  } while (Date.now() < deadline);
+  throw new ProviderMountNotReadyError("Provider mount not ready for " + event.provider + ":" + event.providerItemId + "; missing " + missing.length + " file(s) after " + timeoutMs + "ms");
+}
+
+function providerTreePaths(route: ArrRoute, event: DirectFileEvent): string[] {
+  if (!route.sourcePathPrefix) return [];
+  const firstTreePath = String(event.tree[0]?.path || path.basename(event.path)).replace(/^[/\\]+/, "");
+  const eventPath = event.path.replace(/^[/\\]+/, "");
+  const prefix = eventPath.endsWith(firstTreePath)
+    ? eventPath.slice(0, -firstTreePath.length)
+    : path.dirname(eventPath).replace(/\\/g, "/") + "/";
+  const files = event.tree.length > 0 ? event.tree : [{ path: path.basename(event.path), size: 0 }];
+  const sourceRoot = route.sourcePathPrefix.replace(/\/$/, "");
+  return files.map((file) => {
+    const relativeFile = String(file.path).replace(/^[/\\]+/, "");
+    return sourceRoot + "/" + (prefix + relativeFile).replace(/\\/g, "/");
+  });
 }
 
 async function removeMatchingSymlinks(root: string, targets: Set<string>): Promise<number> {
@@ -642,6 +695,10 @@ export class ProviderReconciliationIntake {
         await this.options.onSuccess?.(event);
         return;
       } catch (error) {
+        if (error instanceof ProviderMountNotReadyError) {
+          console.warn("[provider-reconciliation] mount not ready; deferring ARR scan", error.message);
+          return;
+        }
         lastError = error;
       }
     }

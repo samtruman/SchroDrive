@@ -20,8 +20,8 @@ export function providerReconciliationRoutes(providerId = "alldebrid"): { movies
   const sourcePathPrefix = `${config.providerReconciliationMountBase.replace(/\/$/, '')}/${providerId}`;
   const stagingRoot = config.arrDownloadsPath.replace(/\/$/, '');
   return {
-    movies: { kind: "radarr", baseUrl: config.providerReconciliationRadarrUrl, apiKey: config.providerReconciliationRadarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config.providerReconciliationMoviesLibraryPath || undefined, stagingPath: stagingRoot ? `${stagingRoot}/radarr` : undefined },
-    shows: { kind: "sonarr", baseUrl: config.providerReconciliationSonarrUrl, apiKey: config.providerReconciliationSonarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config.providerReconciliationShowsLibraryPath || undefined, stagingPath: stagingRoot ? `${stagingRoot}/sonarr` : undefined },
+    movies: { kind: "radarr", baseUrl: config.providerReconciliationRadarrUrl, apiKey: config.providerReconciliationRadarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config.providerReconciliationMoviesLibraryPath || undefined, stagingPath: stagingRoot ? stagingRoot + "/radarr" : undefined, mountReadyTimeoutMs: stagingRoot ? config.providerReconciliationMountReadyTimeoutMs : undefined, mountReadyPollMs: stagingRoot ? config.providerReconciliationMountReadyPollMs : undefined },
+    shows: { kind: "sonarr", baseUrl: config.providerReconciliationSonarrUrl, apiKey: config.providerReconciliationSonarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config.providerReconciliationShowsLibraryPath || undefined, stagingPath: stagingRoot ? stagingRoot + "/sonarr" : undefined, mountReadyTimeoutMs: stagingRoot ? config.providerReconciliationMountReadyTimeoutMs : undefined, mountReadyPollMs: stagingRoot ? config.providerReconciliationMountReadyPollMs : undefined },
   };
 }
 

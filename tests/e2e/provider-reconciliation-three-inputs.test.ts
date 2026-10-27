@@ -1,5 +1,5 @@
 import { describe, expect, test, afterEach } from 'bun:test';
-import { mkdtemp, readlink, lstat, mkdir, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, readlink, lstat, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { classifyTorrent } from '../../src/core/mediaClassifier';
@@ -126,7 +126,28 @@ describe('provider reconciliation fixture E2E', () => {
     }
   });
 
-  test('B3c: provider deletion removes staging/library links and requests an ARR rescan', async () => {
+  test('B3c: staging waits for a newly visible provider file before scanning ARR', async () => {
+    let body: any;
+    const root = await mkdtemp(path.join(tmpdir(), 'provider-reconciliation-mount-ready-'));
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      return new Response(JSON.stringify({ id: 23, status: 'queued' }), { status: 201 });
+    }) as typeof fetch;
+    const providerFile = path.join(root, 'Movies', 'Delayed.Movie (2025)', 'Delayed.Movie.2025.mkv');
+    await mkdir(path.dirname(providerFile), { recursive: true });
+    const configured = { ...route('radarr', root), stagingPath: path.join(root, 'downloads', 'radarr'), mountReadyTimeoutMs: 1000, mountReadyPollMs: 50 };
+    const item = { ...event('Movies', 'Movies/Delayed.Movie (2025)/Delayed.Movie.2025.mkv'), tree: [{ path: 'Delayed.Movie.2025.mkv', size: 1 }] };
+    const delayed = setTimeout(() => void writeFile(providerFile, 'fixture'), 100);
+    try {
+      await new HttpArrClient().submitScan(configured, item);
+      expect(body?.name).toBe('DownloadedMoviesScan');
+    } finally {
+      clearTimeout(delayed);
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('B3d: provider deletion removes staging/library links and requests an ARR rescan', async () => {
     let body: any;
     const root = await mkdtemp(path.join(tmpdir(), 'provider-reconciliation-delete-'));
     const providerPath = '/mnt/schrodrive/alldebrid/Movies/Big Buck Bunny (2008)/Big.Buck.Bunny.2008.mkv';

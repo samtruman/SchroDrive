@@ -117,6 +117,8 @@ export const config = {
   providerReconciliationSonarrUrl: process.env.PROVIDER_RECONCILIATION_SONARR_URL || "",
   providerReconciliationSonarrApiKey: process.env.PROVIDER_RECONCILIATION_SONARR_API_KEY || "",
   providerReconciliationMountBase: process.env.PROVIDER_RECONCILIATION_MOUNT_BASE || "/mnt/schrodrive",
+  providerReconciliationMountReadyTimeoutMs: Number(process.env.PROVIDER_RECONCILIATION_MOUNT_READY_TIMEOUT_MS || 30000),
+  providerReconciliationMountReadyPollMs: Number(process.env.PROVIDER_RECONCILIATION_MOUNT_READY_POLL_MS || 500),
   providerReconciliationMoviesLibraryPath: process.env.PROVIDER_RECONCILIATION_MOVIES_LIBRARY_PATH || "",
   providerReconciliationShowsLibraryPath: process.env.PROVIDER_RECONCILIATION_SHOWS_LIBRARY_PATH || "",
   // AllDebrid WebDAV (if supported)

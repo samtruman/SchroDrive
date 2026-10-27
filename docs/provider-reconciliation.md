@@ -12,6 +12,13 @@ or `ARR_DOWNLOADS_PATH/sonarr`, then submits `DownloadedMoviesScan` or
 rename, and import. SchroDrive does not invent a canonical folder for this
 path.
 
+Before the scan command is sent, SchröDrive waits for every file in the provider
+tree to become visible and readable through the mounted provider path. The wait
+uses PROVIDER_RECONCILIATION_MOUNT_READY_TIMEOUT_MS (default 30 seconds) and
+PROVIDER_RECONCILIATION_MOUNT_READY_POLL_MS (default 500 ms). If the mount is
+still stale after the timeout, the event is deferred instead of sending ARR an
+empty staging directory.
+
 When a provider item is deleted, both staging and any existing Arr-library
 symlinks are removed and the affected movie/series is rescanned. The standalone
 organizer fallback remains available only when Arr integration is unavailable
