@@ -170,6 +170,32 @@ function scheduleOrganizedRefreshAfterCompletion(): void {
   }, 500);
 }
 
+/**
+ * Invalidate the provider VFS after ARR submits a new magnet. The debrid API
+ * can report the item as completed before rclone has refreshed its directory
+ * cache; without this, the mount scanner keeps seeing the previous listing.
+ */
+async function refreshProviderMountCache(): Promise<void> {
+  if (config.mountRcloneRcPort <= 0) return;
+  for (const [providerIndex, providerName] of config.providers.entries()) {
+    const rcUrl = `http://127.0.0.1:${config.mountRcloneRcPort + providerIndex}/vfs/refresh`;
+    for (const directory of ['/', '/__all__', '/shows']) {
+      try {
+        const response = await fetch(rcUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fs: `${providerName}:`, dir: directory, recursive: 'false' }),
+        });
+        if (!response.ok) {
+          console.warn(`${LOG_PREFIX} provider mount refresh returned HTTP ${response.status} for ${providerName}${directory}`);
+        }
+      } catch (error: any) {
+        console.warn(`${LOG_PREFIX} provider mount refresh failed for ${providerName}${directory}: ${error?.message || String(error)}`);
+      }
+    }
+  }
+}
+
 // ===========================================================================
 // Helpers
 // ===========================================================================
@@ -725,6 +751,7 @@ async function handleAddTorrent(req: Request, res: Response): Promise<void> {
             console.error(`${LOG_PREFIX} ❌ All providers failed for "${name}"`);
           } else {
             console.log(`${LOG_PREFIX} ✅ Submitted "${name}" to ${successCount} provider(s)`);
+            void refreshProviderMountCache();
           }
           persistTrackedTorrent(torrent);
         })
