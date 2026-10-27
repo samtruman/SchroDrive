@@ -1510,8 +1510,10 @@ export function startServer() {
               send("torrents", { provider: provider.id, torrents: mapped, count: mapped.length, total: totalCount, page: pageNum });
             }
           } else {
-            // Fall back to single fetch
-            const torrents = await provider.listTorrents();
+            // Fall back to single fetch. AllDebrid's cached inventory is not
+            // invalidated when a magnet is added outside SchroDrive, so the
+            // dashboard must force a fresh provider read for that provider.
+            const torrents = await provider.listTorrents(provider.id === "alldebrid");
             const mapped = torrents.map((t: TorrentInfo) => ({
               id: t.id,
               name: t.name,
