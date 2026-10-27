@@ -342,7 +342,10 @@ async function refreshProviderMount(route, event) {
         const response = await fetch(rcUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ fs: `${providerName}:`, dir: directory, recursive: false }),
+            // rclone RC decodes JSON option values as strings. A boolean makes
+            // vfs/refresh reject the request with HTTP 500 and leaves the mount
+            // cache stale, so the completed item never reaches ARR.
+            body: JSON.stringify({ fs: `${providerName}:`, dir: directory, recursive: "false" }),
         });
         if (!response.ok)
             console.warn("[provider-reconciliation] rclone VFS refresh returned HTTP " + response.status);
