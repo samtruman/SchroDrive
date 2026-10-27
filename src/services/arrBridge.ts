@@ -150,6 +150,25 @@ let statusPoller: ReturnType<typeof setInterval> | null = null;
 
 /** Mount scanning interval handle. */
 let mountScanner: ReturnType<typeof setInterval> | null = null;
+let organizedRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * A completed ARR download is already visible on the provider mount. Queue
+ * one lightweight provider/organizer refresh so the Dashboard and organised
+ * library do not wait for the 15-minute reconciliation interval. Multiple
+ * files completed during the same mount scan share one refresh.
+ */
+function scheduleOrganizedRefreshAfterCompletion(): void {
+  if (organizedRefreshTimer) clearTimeout(organizedRefreshTimer);
+  organizedRefreshTimer = setTimeout(() => {
+    organizedRefreshTimer = null;
+    void import('./providerReconciliationRuntime')
+      .then(({ refreshProviderActivity }) => refreshProviderActivity())
+      .catch((error: any) => {
+        console.warn(`${LOG_PREFIX} automatic organised refresh failed: ${error?.message || String(error)}`);
+      });
+  }, 500);
+}
 
 // ===========================================================================
 // Helpers
@@ -331,6 +350,7 @@ export async function scanMountsForCompleted(): Promise<void> {
   if (ready.length === 0) return;
 
   await ensureDownloadsDir();
+  let completedCount = 0;
 
   for (const torrent of ready) {
     try {
@@ -385,6 +405,7 @@ export async function scanMountsForCompleted(): Promise<void> {
         torrent.contentPath = torrentDir;
         torrent.size = foundFiles.reduce((sum, f) => sum + f.size, 0);
         persistTrackedTorrent(torrent);
+        completedCount += 1;
 
         console.log(`${LOG_PREFIX} ✅ Torrent "${torrent.name}" completed — ${foundFiles.length} file(s) symlinked to ${torrentDir}`);
       }
@@ -392,6 +413,7 @@ export async function scanMountsForCompleted(): Promise<void> {
       console.error(`${LOG_PREFIX} Mount scan error for "${torrent.name}": ${err?.message}`);
     }
   }
+  if (completedCount > 0) scheduleOrganizedRefreshAfterCompletion();
 }
 
 type MountMatch = {
@@ -411,10 +433,32 @@ function normaliseMountName(value: string): string {
 
 const MIN_FUZZY_MOUNT_NAME_LENGTH = 20;
 
+function episodeKeys(value: string): Set<string> {
+  const keys = new Set<string>();
+  const normalized = value.toLowerCase().replace(/[._-]+/g, ' ');
+  for (const match of normalized.matchAll(/\bs(\d{1,2})e(\d{1,2})(?:\s*e?(\d{1,2}))?\b/g)) {
+    const season = Number(match[1]);
+    const first = Number(match[2]);
+    const last = match[3] ? Number(match[3]) : first;
+    for (let episode = first; episode <= last; episode += 1) {
+      keys.add(`s${season}e${episode}`);
+    }
+  }
+  return keys;
+}
+
 function mountNameScore(target: string, candidate: string): number {
   if (!target || !candidate) return -1;
   if (target === candidate) return 100000;
   if (candidate.length < MIN_FUZZY_MOUNT_NAME_LENGTH) return -1;
+
+  // Never use a neighbouring episode as a fuzzy match. This is especially
+  // important while a newly added item is still propagating to the mount:
+  // E08 must not be satisfied by the already visible E07 file.
+  const targetEpisodes = episodeKeys(target);
+  const candidateEpisodes = episodeKeys(candidate);
+  if (targetEpisodes.size > 0 && candidateEpisodes.size > 0 &&
+      ![...targetEpisodes].some((episode) => candidateEpisodes.has(episode))) return -1;
 
   const shorter = Math.min(target.length, candidate.length);
   const longer = Math.max(target.length, candidate.length);
