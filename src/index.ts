@@ -2,7 +2,7 @@ import { Command } from "commander";
 import { startServer } from "./server";
 import { searchIndexer, pickBestResult, getMagnet, getProviderName } from "./indexers/index";
 import { registry } from "./providers";
-import { mountVirtualDrive, unmountAll } from "./services/mount";
+import { getMountReadiness, mountVirtualDrive, unmountAll } from "./services/mount";
 import { scanDeadOnce, startDeadScanner } from "./services/deadScanner";
 import { organizeOnce, startOrganizerWatch } from "./services/organizer";
 import { startWatchlistPoller } from "./services/mediaServerWatchlist";
@@ -16,6 +16,48 @@ import { registerProviderReconciliationWorker, startProviderReconciliation } fro
 import type { ProviderReconciliationWorker } from "./services/providerReconciliation";
 
 const program = new Command();
+
+/**
+ * Wait until the configured provider mountpoints are actually readable.
+ * Starting organizer/reconciliation as soon as rclone is spawned creates a
+ * race: the mount directory exists, but ARR and the organizer still see an
+ * empty or unavailable filesystem.
+ */
+async function waitForStartupMountReady(): Promise<boolean> {
+  const timeoutMs = Math.max(0, config.startupMountReadyTimeoutMs);
+  const pollMs = Math.max(250, config.startupMountReadyPollMs);
+  const deadline = Date.now() + timeoutMs;
+  let lastReason = "unknown";
+  let lastPath = "";
+
+  while (true) {
+    const readiness = await getMountReadiness();
+    if (readiness.ready) {
+      console.log(`[${new Date().toISOString()}][serve] Mount ready; starting dependent services`);
+      return true;
+    }
+
+    lastReason = readiness.reason;
+    lastPath = readiness.path || "";
+    const remainingMs = Math.max(0, deadline - Date.now());
+    console.log(`[${new Date().toISOString()}][serve] Waiting for mount readiness`, {
+      reason: lastReason,
+      path: lastPath,
+      remainingMs,
+    });
+
+    if (Date.now() >= deadline) break;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, Math.max(1, remainingMs))));
+  }
+
+  console.warn(`[${new Date().toISOString()}][serve] Mount readiness timeout; dependent services will start with their fail-closed guards`, {
+    timeoutMs,
+    reason: lastReason,
+    path: lastPath,
+  });
+  return false;
+}
+
 program
   .name("schrodrive")
   .description("CLI/Webhook tool to integrate Overseerr with Prowlarr/Jackett and debrid providers (plus API poller mode)")
@@ -88,6 +130,8 @@ program
       await mountVirtualDrive().catch((err: any) => {
         console.error(`[${new Date().toISOString()}][serve] Virtual drive mount failed (non-fatal): ${err?.message}`);
       });
+
+      await waitForStartupMountReady();
     }
     
     if (config.runDeadScannerWatch) {

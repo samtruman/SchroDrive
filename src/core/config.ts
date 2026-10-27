@@ -207,6 +207,10 @@ export const config = {
   })(),
   mountDirPerms: process.env.MOUNT_DIR_PERMS || "",
   mountFilePerms: process.env.MOUNT_FILE_PERMS || "",
+  // Startup readiness gate: do not start organizer/reconciliation until the
+  // configured provider mounts are real, readable mountpoints.
+  startupMountReadyTimeoutMs: asNumber(process.env.STARTUP_MOUNT_READY_TIMEOUT_MS, 120000),
+  startupMountReadyPollMs: asNumber(process.env.STARTUP_MOUNT_READY_POLL_MS, 1000),
   // Mount cache flags (individually configurable)
   mountDirCacheTime: process.env.MOUNT_DIR_CACHE_TIME || "12h",
   mountVfsCacheMode: process.env.MOUNT_VFS_CACHE_MODE || "full",

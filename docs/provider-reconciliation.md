@@ -20,6 +20,15 @@ still stale after the timeout, the event is deferred instead of sending ARR an
 empty staging directory. Before polling, the local WebDAV bridge refresh endpoint
 is called so a newly-added provider item can invalidate the directory cache.
 
+At process startup, when `RUN_MOUNT=true`, SchröDrive also waits for the mount
+roots themselves to be real, readable mountpoints before starting the organizer
+watch or the provider-reconciliation worker. This prevents the first startup
+scan from racing rclone/FUSE initialization. Configure the gate with
+`STARTUP_MOUNT_READY_TIMEOUT_MS` (default 120 seconds) and
+`STARTUP_MOUNT_READY_POLL_MS` (default 1 second). If the gate expires, the
+dependent services start with their existing fail-closed guards and log the
+reason and path that were still unavailable.
+
 When a provider item is deleted, both staging and any existing Arr-library
 symlinks are removed and the affected movie/series is rescanned. The standalone
 organizer fallback remains available only when Arr integration is unavailable
