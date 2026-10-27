@@ -89,6 +89,19 @@ when it is not configured or cannot expose a complete read-only snapshot.
 The Arr library contains symlinks only. Provider content remains on the mount;
 the reconciliation layer does not download or copy media to local storage.
 
+## Mount refresh after provider additions
+
+After SchröDrive adds a torrent directly to a provider, the provider mount is
+refreshed before the reconciliation worker asks Radarr or Sonarr to scan. The
+refresh targets the configured rclone remote and waits for the new provider
+path to become visible. This prevents an ARR scan from racing the mount cache
+and reporting a newly completed file as missing.
+
+The same refresh is also performed by the dashboard/provider refresh path. A
+dashboard refresh therefore re-reads the provider inventory and refreshes the
+mount; it is not merely a client-side reload of cached cards. Existing files
+are not copied or downloaded, and the ARR-visible result remains a symlink.
+
 ## Organizer and media-server refresh
 
 After reconciliation makes a provider item available, the Organizer creates or
