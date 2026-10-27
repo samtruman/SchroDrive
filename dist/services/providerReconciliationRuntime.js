@@ -14,9 +14,10 @@ const organizer_1 = require("./organizer");
 const providerReconciliation_1 = require("./providerReconciliation");
 function providerReconciliationRoutes(providerId = "alldebrid") {
     const sourcePathPrefix = `${config_1.config.providerReconciliationMountBase.replace(/\/$/, '')}/${providerId}`;
+    const stagingRoot = config_1.config.arrDownloadsPath.replace(/\/$/, '');
     return {
-        movies: { kind: "radarr", baseUrl: config_1.config.providerReconciliationRadarrUrl, apiKey: config_1.config.providerReconciliationRadarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config_1.config.providerReconciliationMoviesLibraryPath || undefined },
-        shows: { kind: "sonarr", baseUrl: config_1.config.providerReconciliationSonarrUrl, apiKey: config_1.config.providerReconciliationSonarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config_1.config.providerReconciliationShowsLibraryPath || undefined },
+        movies: { kind: "radarr", baseUrl: config_1.config.providerReconciliationRadarrUrl, apiKey: config_1.config.providerReconciliationRadarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config_1.config.providerReconciliationMoviesLibraryPath || undefined, stagingPath: stagingRoot ? `${stagingRoot}/radarr` : undefined },
+        shows: { kind: "sonarr", baseUrl: config_1.config.providerReconciliationSonarrUrl, apiKey: config_1.config.providerReconciliationSonarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config_1.config.providerReconciliationShowsLibraryPath || undefined, stagingPath: stagingRoot ? `${stagingRoot}/sonarr` : undefined },
     };
 }
 async function propagateProviderDeletion(impact) {

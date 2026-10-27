@@ -98,6 +98,10 @@ class HttpArrClient {
         const providerPath = route.sourcePathPrefix
             ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${event.path.replace(/^\/+/, '')}`
             : event.path;
+        if (route.stagingPath) {
+            const scanPath = await exposeAsArrStaging(route, event);
+            return this.submitCommand(route, { name: commandName, path: scanPath, importMode: route.importMode || 'Copy' });
+        }
         const arrEntity = route.symlinkLibraryPath ? await findArrEntity(route, event) : undefined;
         const arrPath = arrEntity?.path;
         if (route.symlinkLibraryPath && !arrPath) {
@@ -113,6 +117,9 @@ class HttpArrClient {
                 commandBody = { name: commandName, [route.kind === 'radarr' ? 'movieId' : 'seriesId']: arrEntity.id };
             }
         }
+        return this.submitCommand(route, commandBody);
+    }
+    async submitCommand(route, commandBody) {
         const response = await fetch(`${route.baseUrl.replace(/\/$/, '')}/api/v3/command`, {
             method: 'POST',
             headers: { 'X-Api-Key': route.apiKey, 'Content-Type': 'application/json' },
@@ -216,6 +223,10 @@ async function findArrEntity(route, event) {
 function safeSegment(value) {
     return value.replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim() || 'Unknown';
 }
+function safeRelativeMediaPath(value) {
+    const segments = value.split(/[\\/]+/).filter(Boolean).filter((segment) => segment !== '.' && segment !== '..');
+    return segments.map(safeSegment).join(node_path_1.default.sep) || 'media-file';
+}
 const canonicalMetadataCache = new Map();
 async function resolveCanonicalMetadata(title, kind, year) {
     const key = `${kind}:${title.toLocaleLowerCase()}:${year || ''}`;
@@ -263,6 +274,43 @@ async function exposeAsSymlink(route, event, providerPath, arrPath) {
     await node_fs_1.promises.symlink(providerPath, destination);
     return destination;
 }
+/**
+ * Uses the same staging contract as the qBittorrent-compatible bridge.
+ * ARR receives the staging directory and is responsible for parsing the
+ * release, creating its canonical folder, and importing the media.
+ */
+async function exposeAsArrStaging(route, event) {
+    const stagingRoot = node_path_1.default.resolve(route.stagingPath);
+    const stagingDirectory = node_path_1.default.join(stagingRoot, safeSegment(`${event.provider}-${event.providerItemId}`));
+    const firstTreePath = String(event.tree[0]?.path || node_path_1.default.basename(event.path)).replace(/^[/\\]+/, '');
+    const eventPath = event.path.replace(/^[/\\]+/, '');
+    const prefix = eventPath.endsWith(firstTreePath)
+        ? eventPath.slice(0, -firstTreePath.length)
+        : `${node_path_1.default.dirname(eventPath).replace(/\\/g, '/')}/`;
+    const files = event.tree.length > 0 ? event.tree : [{ path: node_path_1.default.basename(event.path), size: 0 }];
+    await node_fs_1.promises.mkdir(stagingDirectory, { recursive: true });
+    for (const file of files) {
+        const relativeFile = String(file.path).replace(/^[/\\]+/, '');
+        const providerRelativePath = `${prefix}${relativeFile}`.replace(/\\/g, '/');
+        const providerPath = route.sourcePathPrefix
+            ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${providerRelativePath}`
+            : providerRelativePath;
+        const destination = node_path_1.default.join(stagingDirectory, safeRelativeMediaPath(relativeFile));
+        await node_fs_1.promises.mkdir(node_path_1.default.dirname(destination), { recursive: true });
+        const existing = await node_fs_1.promises.lstat(destination).catch(() => undefined);
+        if (existing?.isSymbolicLink()) {
+            const current = await node_fs_1.promises.readlink(destination);
+            if (current === providerPath)
+                continue;
+            await node_fs_1.promises.unlink(destination);
+        }
+        else if (existing) {
+            throw new Error(`Refusing to overwrite non-symlink ARR staging entry: ${destination}`);
+        }
+        await node_fs_1.promises.symlink(providerPath, destination);
+    }
+    return stagingDirectory;
+}
 async function removeMatchingSymlinks(root, targets) {
     let removed = 0;
     async function visit(current) {
@@ -289,9 +337,9 @@ async function propagateDeletedFile(route, event, options = {}) {
         ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${event.path.replace(/^\/+/, '')}`
         : event.path;
     const targets = new Set([node_path_1.default.normalize(providerPath)]);
-    const removedSymlinks = route.symlinkLibraryPath
-        ? await removeMatchingSymlinks(route.symlinkLibraryPath, targets)
-        : 0;
+    const roots = [route.symlinkLibraryPath, route.stagingPath].filter((value) => Boolean(value));
+    const removedSymlinks = (await Promise.all(roots.map((root) => removeMatchingSymlinks(root, targets))))
+        .reduce((sum, count) => sum + count, 0);
     if (options.refreshArr === false)
         return { removedSymlinks };
     if (!route.baseUrl || !route.apiKey)
