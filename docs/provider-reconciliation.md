@@ -4,45 +4,41 @@ SchröDrive's provider reconciliation layer is provider-agnostic. It consumes
 the existing `DebridProvider` contract and never calls provider delete, repair,
 or dead-scanner operations.
 
-The organizer resolves the Arr path before creating each provider
-symlink. This covers the initial AllDebrid library bootstrap and later
-AllDebrid manifest additions without requiring a manual migration. When
-Radarr/Sonarr are available, the existing library path is authoritative from
-the first placement and the affected movie/series is rescanned. Existing links
-are also reconciled on later passes for migration safety. When Arr is
-unavailable or not configured, the standalone SchroDrive canonical path is
-used and Arr resolution is retried on a later pass.
+For provider items added directly to AllDebrid, reconciliation uses the same
+download-staging contract as the qBittorrent-compatible Arr bridge. SchroDrive
+creates temporary provider-backed symlinks below `ARR_DOWNLOADS_PATH/radarr`
+or `ARR_DOWNLOADS_PATH/sonarr`, then submits `DownloadedMoviesScan` or
+`DownloadedEpisodesScan`. Radarr/Sonarr owns the title match, final folder,
+rename, and import. SchroDrive does not invent a canonical folder for this
+path.
+
+When a provider item is deleted, both staging and any existing Arr-library
+symlinks are removed and the affected movie/series is rescanned. The standalone
+organizer fallback remains available only when Arr integration is unavailable
+or not configured.
 ```text
 provider listTorrents/fetchDirectories
   -> normalized snapshot and local SQLite diff
-  -> mount-backed symlink in the Arr library
-  -> RescanMovie / RescanSeries
-  -> Radarr, Sonarr, Plex and Jellyfin see the same provider-backed file
+  -> mount-backed symlink in downloads/radarr or downloads/sonarr
+  -> DownloadedMoviesScan / DownloadedEpisodesScan
+  -> Radarr/Sonarr creates the final library path and imports the file
+  -> Jellyfin sees the ARR-managed library
 ```
 
 ## Shared TMDb identity and Arr library paths
 
-The Organizer uses a canonical TMDb-derived path as its standalone fallback
-(`Movies/<TMDb title> (year)` or `TV/<TMDb title> (year)/Season NN`) and
-preserves the original release filename. When an Arr record is found by TMDb
-ID, its existing library `path` is authoritative instead; SchroDrive creates
-the symlink there and asks the relevant Arr service to rescan it. The TMDb ID
-remains the stable identity, while the folder name remains an Arr-owned
-presentation detail when Arr integration is enabled.
+The Organizer uses a canonical TMDb-derived path only as its standalone
+fallback (`Movies/<TMDb title> (year)` or `TV/<TMDb title> (year)/Season NN`)
+and preserves the original release filename. The direct provider flow does
+not use that fallback: ARR receives the staging path and owns the identity and
+final folder decision.
 
 This prevents a localized Arr title such as `Wolfs - Lupi Solitari (2024)`
-from becoming a second library folder beside the Organizer's
-`Wolfs (2024)`. Existing links are reconciled automatically and only the
-symlink is moved; provider-backed media is never copied or deleted.
-The initial-placement rule is important: ARR reconciliation is not a cleanup
-phase that runs after generic canonical placement. The organizer loads the
-configured Radarr/Sonarr library records once per pass, resolves each media
-item by ARR title/alias, parser identity, or the existing TMDb fallback, and
-uses the resolved ARR library directory before writing the symlink. This
-prevents repeated scans from alternating between a generic canonical folder
-and the ARR folder, which could make Sonarr/Radarr lose file associations.
-Only paths below the configured organized/Movies or organized/TV roots are
-accepted; release-like or unsafe ARR paths fall back to normal review.
+from becoming a second library folder beside the ARR-managed folder. Provider
+content remains on the mount and is never copied or deleted by reconciliation;
+only the temporary staging symlink and ARR import lifecycle are involved.
+Only paths below the configured download staging root are used for the direct
+import path.
 
 
 When both Radarr and Sonarr are configured with a URL and API key, the worker
@@ -55,7 +51,6 @@ Provider mounts that expose category directories and an aggregate __all__ direct
 
 Alias reconciliation compares the complete provider-relative media path, not only the final filename. This keeps two different sources with the same leaf name from being treated as the same media item.
 
-ARR parser identity is authoritative when Arr can parse the release filename and the parsed entity is configured. Without a parser match, a title match is accepted only when its year is equal or within +/-1 year; a distant year mismatch (for example, a remake with the same title) is not linked automatically. Arr metadata lookup remains the final identity fallback. Ambiguous or unresolved items are left unlinked, never placed in a guessed folder.
 ARR parser identity is authoritative when Arr can parse the release filename and the parsed entity is configured. Without a parser match, a title match is accepted only when its year is equal or within +/-1 year; a distant year mismatch (for example, a remake with the same title) is not linked automatically. Arr metadata lookup remains the final identity fallback. Ambiguous or unresolved items are left unlinked, never placed in a guessed folder.
 ## Contract coverage
 

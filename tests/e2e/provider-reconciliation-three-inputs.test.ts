@@ -1,10 +1,10 @@
 import { describe, expect, test, afterEach } from 'bun:test';
-import { mkdtemp, readlink, lstat, rm } from 'node:fs/promises';
+import { mkdtemp, readlink, lstat, mkdir, rm, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { classifyTorrent } from '../../src/core/mediaClassifier';
 import { parseMediaFilename } from '../../src/services/mediaParser';
-import { HttpArrClient, type ArrRoute, type DirectFileEvent } from '../../src/services/providerReconciliation';
+import { HttpArrClient, propagateDeletedFile, type ArrRoute, type DirectFileEvent } from '../../src/services/providerReconciliation';
 
 const originalFetch = globalThis.fetch;
 
@@ -94,6 +94,64 @@ describe('provider reconciliation fixture E2E', () => {
       expect(await readlink(link)).toBe('/mnt/schrodrive/alldebrid/shows/Lanterns/Lanterns.S01E06.Bad.Optics.mkv');
       expect(body.name).toBe('RescanSeries');
       expect(body.seriesId).toBe(1);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('B3b: manual provider media enters ARR staging and uses the download scan contract', async () => {
+    let body: any;
+    const root = await mkdtemp(path.join(tmpdir(), 'provider-reconciliation-arr-staging-'));
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      return new Response(JSON.stringify({ id: 21, status: 'queued' }), { status: 201 });
+    }) as typeof fetch;
+    try {
+      const configured = {
+        ...route('radarr', '/mnt/schrodrive/alldebrid'),
+        symlinkLibraryPath: path.join(root, 'organized', 'Movies'),
+        stagingPath: path.join(root, 'downloads', 'radarr'),
+      };
+      const item = {
+        ...event('Movies', 'Movies/Big Buck Bunny (2008)/Big.Buck.Bunny.2008.mkv'),
+        tree: [{ path: 'Big.Buck.Bunny.2008.mkv', size: 1 }],
+      };
+      await new HttpArrClient().submitScan(configured, item);
+      const staging = path.join(root, 'downloads', 'radarr', 'alldebrid-fixture-item', 'Big.Buck.Bunny.2008.mkv');
+      expect((await lstat(staging)).isSymbolicLink()).toBe(true);
+      expect(await readlink(staging)).toBe('/mnt/schrodrive/alldebrid/Movies/Big Buck Bunny (2008)/Big.Buck.Bunny.2008.mkv');
+      expect(body).toEqual({ name: 'DownloadedMoviesScan', path: path.dirname(staging), importMode: 'Copy' });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  test('B3c: provider deletion removes staging/library links and requests an ARR rescan', async () => {
+    let body: any;
+    const root = await mkdtemp(path.join(tmpdir(), 'provider-reconciliation-delete-'));
+    const providerPath = '/mnt/schrodrive/alldebrid/Movies/Big Buck Bunny (2008)/Big.Buck.Bunny.2008.mkv';
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).endsWith('/api/v3/movie')) return new Response(JSON.stringify([{ id: 240, title: 'Big Buck Bunny', year: 2008, path: path.join(root, 'organized', 'Movies', 'Big Buck Bunny (2008)') }]), { status: 200 });
+      body = init?.body ? JSON.parse(String(init.body)) : undefined;
+      return new Response(JSON.stringify({ id: 22, status: 'queued' }), { status: 201 });
+    }) as typeof fetch;
+    try {
+      const configured = {
+        ...route('radarr', '/mnt/schrodrive/alldebrid'),
+        symlinkLibraryPath: path.join(root, 'organized', 'Movies'),
+        stagingPath: path.join(root, 'downloads', 'radarr'),
+      };
+      const stagingLink = path.join(configured.stagingPath, 'alldebrid-fixture-item', 'Big.Buck.Bunny.2008.mkv');
+      const libraryLink = path.join(configured.symlinkLibraryPath, 'Big Buck Bunny (2008)', 'Big.Buck.Bunny.2008.mkv');
+      await mkdir(path.dirname(stagingLink), { recursive: true });
+      await mkdir(path.dirname(libraryLink), { recursive: true });
+      await symlink(providerPath, stagingLink);
+      await symlink(providerPath, libraryLink);
+      const result = await propagateDeletedFile(configured, event('Movies', 'Movies/Big Buck Bunny (2008)/Big.Buck.Bunny.2008.mkv'));
+      expect(result.removedSymlinks).toBe(2);
+      expect(body).toEqual({ name: 'RescanMovie', movieId: 240 });
+      await expect(lstat(stagingLink)).rejects.toThrow();
+      await expect(lstat(libraryLink)).rejects.toThrow();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
