@@ -421,7 +421,12 @@ async function reconcileOrganizedLibraryWithArr() {
         const movedThisLink = await moveSymlink(link, destination);
         if (movedThisLink)
             moved++;
-        if (record.id) {
+        // A rescan is needed only when this reconciliation changed the ARR-visible
+        // library: either the symlink moved or ARR's authoritative path was
+        // repaired.  The periodic organizer pass is intentionally idempotent;
+        // merely seeing an already-correct link must not enqueue another full
+        // Sonarr/Radarr scan.
+        if (record.id && (movedThisLink || pathRepaired)) {
             const rescanKey = `${candidate.category}:${record.id}`;
             if (!rescannedRecords.has(rescanKey)) {
                 rescannedRecords.add(rescanKey);

@@ -160,15 +160,14 @@ function startServer() {
     // Configuration API
     // ===========================================================================
     /** POST /api/dashboard/refresh — Refreshes recent provider activity and organised links. */
-    app.post("/api/dashboard/refresh", async (_req, res) => {
-        try {
-            const result = await (0, providerReconciliationRuntime_1.refreshProviderActivity)();
-            res.json({ ok: true, ...result });
-        }
-        catch (error) {
-            console.error("[api/dashboard/refresh] Refresh failed:", error?.message || String(error));
-            res.status(503).json({ ok: false, error: error?.message || "Dashboard refresh failed" });
-        }
+    app.post("/api/dashboard/refresh", (_req, res) => {
+        // Provider refresh can legitimately take longer than the browser request
+        // timeout while AllDebrid/rclone refreshes its listing. Start it here and
+        // let the normal dashboard polling observe the new inventory.
+        void (0, providerReconciliationRuntime_1.refreshProviderActivity)().catch((error) => {
+            console.error("[api/dashboard/refresh] Background refresh failed:", error?.message || String(error));
+        });
+        res.json({ ok: true, started: true });
     });
     /**
      * GET /api/config — Returns the current configuration with metadata.
@@ -1603,8 +1602,10 @@ function startServer() {
                         }
                     }
                     else {
-                        // Fall back to single fetch
-                        const torrents = await provider.listTorrents();
+                        // Fall back to single fetch. AllDebrid's cached inventory is not
+                        // invalidated when a magnet is added outside SchroDrive, so the
+                        // dashboard must force a fresh provider read for that provider.
+                        const torrents = await provider.listTorrents(provider.id === "alldebrid");
                         const mapped = torrents.map((t) => ({
                             id: t.id,
                             name: t.name,

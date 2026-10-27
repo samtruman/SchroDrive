@@ -614,14 +614,11 @@ class ProviderReconciliationIntake {
         const categoryDirectory = category.toLowerCase();
         const providerPath = item.files[0].path.replace(/^\/+/, '');
         const directoryName = item.directoryName?.replace(/^\/+|\/+$/g, '');
-        // Some providers expose a single-file torrent as a virtual directory
-        // whose name is exactly the file name. Do not duplicate that component:
-        // `shows/file.mkv/file.mkv` prevents mount readiness and ARR discovery.
-        const syntheticSingleFileDirectory = item.files.length === 1 &&
-            !!directoryName &&
-            (directoryName === providerPath || directoryName === node_path_1.default.basename(providerPath));
+        // AllDebrid exposes a single-file item as a virtual directory named after
+        // the file, with the real file one level below it:
+        // `shows/file.mkv/file.mkv`. Keep that provider path for mount readiness;
+        // ARR staging still receives the basename from the event tree.
         const eventPath = item.directoryName
-            && !syntheticSingleFileDirectory
             ? `${categoryDirectory}/${directoryName}/${providerPath}`
             : providerPath;
         return {

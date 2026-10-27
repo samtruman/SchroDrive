@@ -59,6 +59,7 @@ exports.getConfiguredMountReadiness = getConfiguredMountReadiness;
 exports.getExternalWebdavStatus = getExternalWebdavStatus;
 exports.getBridgeStatuses = getBridgeStatuses;
 exports.refreshBridges = refreshBridges;
+exports.refreshProviderMountCache = refreshProviderMountCache;
 exports.getActiveBridges = getActiveBridges;
 exports.mountVirtualDrive = mountVirtualDrive;
 exports.unmountAll = unmountAll;
@@ -374,6 +375,35 @@ function getBridgeStatuses() {
 async function refreshBridges() {
     for (const b of activeBridges.values()) {
         await b.refresh();
+    }
+}
+/**
+ * Invalidates the rclone VFS listings after a provider addition.
+ *
+ * Provider additions can happen through ARR, the dashboard, Overseerr or a
+ * direct .torrent upload. Keeping this operation in the mount service lets
+ * every caller use the same post-addition refresh contract.
+ */
+async function refreshProviderMountCache() {
+    if (config_1.config.mountRcloneRcPort <= 0)
+        return;
+    for (const [providerIndex, providerName] of config_1.config.providers.entries()) {
+        const rcUrl = `http://127.0.0.1:${config_1.config.mountRcloneRcPort + providerIndex}/vfs/refresh`;
+        for (const directory of ['/', '/__all__', '/shows']) {
+            try {
+                const response = await fetch(rcUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ fs: `${providerName}:`, dir: directory, recursive: 'false' }),
+                });
+                if (!response.ok) {
+                    console.warn(`[${new Date().toISOString()}][mount] provider mount refresh returned HTTP ${response.status} for ${providerName}${directory}`);
+                }
+            }
+            catch (error) {
+                console.warn(`[${new Date().toISOString()}][mount] provider mount refresh failed for ${providerName}${directory}: ${error?.message || String(error)}`);
+            }
+        }
     }
 }
 /**

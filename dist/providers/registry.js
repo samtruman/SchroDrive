@@ -44,6 +44,19 @@ const https_1 = __importDefault(require("https"));
 const config_1 = require("../core/config");
 const utils_1 = require("../core/utils");
 const db_1 = require("../core/db");
+const mount_1 = require("../services/mount");
+async function refreshMountAfterProviderAddition(results) {
+    if (!results.some((result) => result.success))
+        return;
+    try {
+        await (0, mount_1.refreshProviderMountCache)();
+    }
+    catch (error) {
+        // Mount refresh is best-effort: the provider addition remains successful
+        // and the next scheduled refresh can recover from a temporary RC outage.
+        console.warn(`[${new Date().toISOString()}][registry] post-addition mount refresh failed`, { error: error?.message || String(error) });
+    }
+}
 /** Extracts the infohash from a magnet URI. Supports 40-char hex and 32-char base32. */
 function extractInfoHash(magnet) {
     const match = magnet.match(/urn:btih:([a-fA-F0-9]{40}|[a-zA-Z2-7]{32})/i);
@@ -234,6 +247,7 @@ class ProviderRegistry {
                 console.log(`[${new Date().toISOString()}][providers] ⚖️ auto-blacklisted "${name}" (451 legally blocked)`);
             }
         }
+        await refreshMountAfterProviderAddition(results);
         return { results };
     }
     /**
@@ -298,6 +312,7 @@ class ProviderRegistry {
                 }
             }
         }
+        await refreshMountAfterProviderAddition(results);
         return { results };
     }
 }

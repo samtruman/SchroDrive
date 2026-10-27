@@ -33,6 +33,11 @@ When a provider item is deleted, both staging and any existing Arr-library
 symlinks are removed and the affected movie/series is rescanned. The standalone
 organizer fallback remains available only when Arr integration is unavailable
 or not configured.
+
+The periodic organizer/reconciliation pass is idempotent: Sonarr/Radarr is
+asked to rescan only when a symlink was created or moved, or when the
+authoritative ARR library path was repaired. A pass that finds everything
+already in the correct location does not enqueue another ARR scan.
 ```text
 provider listTorrents/fetchDirectories
   -> normalized snapshot and local SQLite diff

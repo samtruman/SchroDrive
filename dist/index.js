@@ -16,6 +16,43 @@ const bridge_1 = require("./services/cloudLinks/bridge");
 const arrBridge_1 = require("./services/arrBridge");
 const providerReconciliationRuntime_1 = require("./services/providerReconciliationRuntime");
 const program = new commander_1.Command();
+/**
+ * Wait until the configured provider mountpoints are actually readable.
+ * Starting organizer/reconciliation as soon as rclone is spawned creates a
+ * race: the mount directory exists, but ARR and the organizer still see an
+ * empty or unavailable filesystem.
+ */
+async function waitForStartupMountReady() {
+    const timeoutMs = Math.max(0, config_1.config.startupMountReadyTimeoutMs);
+    const pollMs = Math.max(250, config_1.config.startupMountReadyPollMs);
+    const deadline = Date.now() + timeoutMs;
+    let lastReason = "unknown";
+    let lastPath = "";
+    while (true) {
+        const readiness = await (0, mount_1.getMountReadiness)();
+        if (readiness.ready) {
+            console.log(`[${new Date().toISOString()}][serve] Mount ready; starting dependent services`);
+            return true;
+        }
+        lastReason = readiness.reason;
+        lastPath = readiness.path || "";
+        const remainingMs = Math.max(0, deadline - Date.now());
+        console.log(`[${new Date().toISOString()}][serve] Waiting for mount readiness`, {
+            reason: lastReason,
+            path: lastPath,
+            remainingMs,
+        });
+        if (Date.now() >= deadline)
+            break;
+        await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, Math.max(1, remainingMs))));
+    }
+    console.warn(`[${new Date().toISOString()}][serve] Mount readiness timeout; dependent services will start with their fail-closed guards`, {
+        timeoutMs,
+        reason: lastReason,
+        path: lastPath,
+    });
+    return false;
+}
 program
     .name("schrodrive")
     .description("CLI/Webhook tool to integrate Overseerr with Prowlarr/Jackett and debrid providers (plus API poller mode)")
@@ -83,6 +120,7 @@ program
         await (0, mount_1.mountVirtualDrive)().catch((err) => {
             console.error(`[${new Date().toISOString()}][serve] Virtual drive mount failed (non-fatal): ${err?.message}`);
         });
+        await waitForStartupMountReady();
     }
     if (config_1.config.runDeadScannerWatch) {
         console.log("[serve] Starting dead scanner watch (RUN_DEAD_SCANNER_WATCH=true)");

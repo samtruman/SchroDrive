@@ -14,6 +14,39 @@
  *
  * @module services/arrBridge
  */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -102,6 +135,24 @@ const servers = new Map();
 let statusPoller = null;
 /** Mount scanning interval handle. */
 let mountScanner = null;
+let organizedRefreshTimer = null;
+/**
+ * A completed ARR download is already visible on the provider mount. Queue
+ * one lightweight provider/organizer refresh so the Dashboard and organised
+ * library do not wait for the 15-minute reconciliation interval. Multiple
+ * files completed during the same mount scan share one refresh.
+ */
+function scheduleOrganizedRefreshAfterCompletion() {
+    if (organizedRefreshTimer)
+        clearTimeout(organizedRefreshTimer);
+    organizedRefreshTimer = setTimeout(() => {
+        organizedRefreshTimer = null;
+        void Promise.resolve().then(() => __importStar(require('./providerReconciliationRuntime'))).then(({ refreshProviderActivity }) => refreshProviderActivity())
+            .catch((error) => {
+            console.warn(`${LOG_PREFIX} automatic organised refresh failed: ${error?.message || String(error)}`);
+        });
+    }, 500);
+}
 // ===========================================================================
 // Helpers
 // ===========================================================================
@@ -275,6 +326,7 @@ async function scanMountsForCompleted() {
     if (ready.length === 0)
         return;
     await ensureDownloadsDir();
+    let completedCount = 0;
     for (const torrent of ready) {
         try {
             // Search across all provider mount dirs for matching torrent folder
@@ -326,6 +378,7 @@ async function scanMountsForCompleted() {
                 torrent.contentPath = torrentDir;
                 torrent.size = foundFiles.reduce((sum, f) => sum + f.size, 0);
                 persistTrackedTorrent(torrent);
+                completedCount += 1;
                 console.log(`${LOG_PREFIX} ✅ Torrent "${torrent.name}" completed — ${foundFiles.length} file(s) symlinked to ${torrentDir}`);
             }
         }
@@ -333,6 +386,8 @@ async function scanMountsForCompleted() {
             console.error(`${LOG_PREFIX} Mount scan error for "${torrent.name}": ${err?.message}`);
         }
     }
+    if (completedCount > 0)
+        scheduleOrganizedRefreshAfterCompletion();
 }
 function normaliseMountName(value) {
     return value
@@ -343,12 +398,33 @@ function normaliseMountName(value) {
         .trim();
 }
 const MIN_FUZZY_MOUNT_NAME_LENGTH = 20;
+function episodeKeys(value) {
+    const keys = new Set();
+    const normalized = value.toLowerCase().replace(/[._-]+/g, ' ');
+    for (const match of normalized.matchAll(/\bs(\d{1,2})e(\d{1,2})(?:\s*e?(\d{1,2}))?\b/g)) {
+        const season = Number(match[1]);
+        const first = Number(match[2]);
+        const last = match[3] ? Number(match[3]) : first;
+        for (let episode = first; episode <= last; episode += 1) {
+            keys.add(`s${season}e${episode}`);
+        }
+    }
+    return keys;
+}
 function mountNameScore(target, candidate) {
     if (!target || !candidate)
         return -1;
     if (target === candidate)
         return 100000;
     if (candidate.length < MIN_FUZZY_MOUNT_NAME_LENGTH)
+        return -1;
+    // Never use a neighbouring episode as a fuzzy match. This is especially
+    // important while a newly added item is still propagating to the mount:
+    // E08 must not be satisfied by the already visible E07 file.
+    const targetEpisodes = episodeKeys(target);
+    const candidateEpisodes = episodeKeys(candidate);
+    if (targetEpisodes.size > 0 && candidateEpisodes.size > 0 &&
+        ![...targetEpisodes].some((episode) => candidateEpisodes.has(episode)))
         return -1;
     const shorter = Math.min(target.length, candidate.length);
     const longer = Math.max(target.length, candidate.length);

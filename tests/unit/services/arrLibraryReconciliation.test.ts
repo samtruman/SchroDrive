@@ -63,6 +63,40 @@ describe("Arr library path reconciliation", () => {
     }
   });
 
+  test("does not rescan ARR when the organized symlink is already authoritative", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "arr-path-reconcile-noop-"));
+    try {
+      const source = path.join(root, "provider", "The.Godfather.1972.mkv");
+      const arrDir = path.join(root, "organized", "Movies", "The Godfather (1972)");
+      const link = path.join(arrDir, path.basename(source));
+      await mkdir(path.dirname(source), { recursive: true });
+      await mkdir(arrDir, { recursive: true });
+      await writeFile(source, "fixture");
+      await symlink(path.relative(arrDir, source), link);
+
+      config.organizedBase = path.join(root, "organized");
+      config.providerReconciliationRadarrUrl = "http://radarr.fixture";
+      config.providerReconciliationRadarrApiKey = "fixture-key";
+      config.providerReconciliationSonarrUrl = "";
+      config.providerReconciliationSonarrApiKey = "";
+
+      const requests: Array<{ url: string; body?: any }> = [];
+      globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+        requests.push({ url: String(input), body: init?.body ? JSON.parse(String(init.body)) : undefined });
+        if (String(input).endsWith("/api/v3/movie")) {
+          return new Response(JSON.stringify([{ id: 42, title: "The Godfather", tmdbId: 238, path: arrDir }]), { status: 200 });
+        }
+        return new Response(JSON.stringify({ id: 1, status: "queued" }), { status: 201 });
+      }) as typeof fetch;
+
+      const result = await reconcileOrganizedLibraryWithArr();
+      expect(result.moved).toBe(0);
+      expect(requests.some((request) => request.body?.name === "RescanMovie")).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   test("repairs a release-like Radarr path from the verified library directory", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "arr-path-repair-"));
     try {
