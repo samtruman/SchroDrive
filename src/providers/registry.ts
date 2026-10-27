@@ -5,6 +5,18 @@ import { config } from '../core/config';
 import { base32ToHex } from '../core/utils';
 import type { DebridProvider, AddStrategy, AddMagnetResult } from './index';
 import { isKnownMagnet, addKnownMagnet } from '../core/db';
+import { refreshProviderMountCache } from '../services/mount';
+
+async function refreshMountAfterProviderAddition(results: Array<{ success: boolean }>): Promise<void> {
+  if (!results.some((result) => result.success)) return;
+  try {
+    await refreshProviderMountCache();
+  } catch (error: any) {
+    // Mount refresh is best-effort: the provider addition remains successful
+    // and the next scheduled refresh can recover from a temporary RC outage.
+    console.warn(`[${new Date().toISOString()}][registry] post-addition mount refresh failed`, { error: error?.message || String(error) });
+  }
+}
 
 /** Extracts the infohash from a magnet URI. Supports 40-char hex and 32-char base32. */
 function extractInfoHash(magnet: string): string | null {
@@ -213,6 +225,8 @@ class ProviderRegistry {
       }
     }
 
+    await refreshMountAfterProviderAddition(results);
+
     return { results };
   }
 
@@ -283,6 +297,8 @@ class ProviderRegistry {
         }
       }
     }
+
+    await refreshMountAfterProviderAddition(results);
 
     return { results };
   }
