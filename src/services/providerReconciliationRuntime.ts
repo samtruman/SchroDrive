@@ -18,19 +18,25 @@ import type { DeleteImpact } from "./deleteImpact";
 
 let organizerRefreshScheduled = false;
 let organizerRefreshPromise: Promise<void> = Promise.resolve();
+const pendingOrganizerPaths = new Set<string>();
 
 /**
  * Refresh the organised view after provider reconciliation without running a
  * full scan once per file in a season pack. Calls arriving during the same
  * short window share one scan, so the Dashboard sees new links promptly.
  */
-function scheduleOrganizerRefresh(): Promise<void> {
+function scheduleOrganizerRefresh(paths: string[] = []): Promise<void> {
+  for (const sourcePath of paths) {
+    if (sourcePath?.trim()) pendingOrganizerPaths.add(sourcePath.trim());
+  }
   if (organizerRefreshScheduled) return organizerRefreshPromise;
   organizerRefreshScheduled = true;
   organizerRefreshPromise = (async () => {
     await new Promise((resolve) => setTimeout(resolve, 250));
+    const changedPaths = [...pendingOrganizerPaths];
+    pendingOrganizerPaths.clear();
     try {
-      await organizeOnce();
+      if (changedPaths.length > 0) await organizeOnce({ sourcePaths: changedPaths });
     } catch (error: any) {
       console.error("[provider-reconciliation] organized view refresh failed", error?.message || String(error));
     } finally {
@@ -93,7 +99,7 @@ export function createProviderReconciliationWorker(): ProviderReconciliationWork
       dryRun: config.providerReconciliationDryRun,
       routeFor: (category, sourceProvider) => category === "Movies" ? providerReconciliationRoutes(sourceProvider || providerId).movies : providerReconciliationRoutes(sourceProvider || providerId).shows,
       onSuccess: async (event) => {
-        await scheduleOrganizerRefresh();
+        await scheduleOrganizerRefresh([event.path]);
         resolveOrganizerReviewAutomatically(event.path, `Provider reconciliation (${event.provider}) matched ARR and completed`);
       },
       onDeleted: async (event) => {
@@ -142,7 +148,7 @@ export async function refreshProviderActivity(): Promise<{ events: number; organ
   const events = activeProviderReconciliationWorker
     ? await activeProviderReconciliationWorker.runRecent()
     : [];
-  await organizeOnce();
+  if (events.length > 0) await organizeOnce({ sourcePaths: events.map((event) => event.path) });
   return { events: events.length, organizerCompleted: true };
 }
 

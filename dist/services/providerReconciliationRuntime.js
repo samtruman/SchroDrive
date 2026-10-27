@@ -14,19 +14,27 @@ const organizer_1 = require("./organizer");
 const providerReconciliation_1 = require("./providerReconciliation");
 let organizerRefreshScheduled = false;
 let organizerRefreshPromise = Promise.resolve();
+const pendingOrganizerPaths = new Set();
 /**
  * Refresh the organised view after provider reconciliation without running a
  * full scan once per file in a season pack. Calls arriving during the same
  * short window share one scan, so the Dashboard sees new links promptly.
  */
-function scheduleOrganizerRefresh() {
+function scheduleOrganizerRefresh(paths = []) {
+    for (const sourcePath of paths) {
+        if (sourcePath?.trim())
+            pendingOrganizerPaths.add(sourcePath.trim());
+    }
     if (organizerRefreshScheduled)
         return organizerRefreshPromise;
     organizerRefreshScheduled = true;
     organizerRefreshPromise = (async () => {
         await new Promise((resolve) => setTimeout(resolve, 250));
+        const changedPaths = [...pendingOrganizerPaths];
+        pendingOrganizerPaths.clear();
         try {
-            await (0, organizer_1.organizeOnce)();
+            if (changedPaths.length > 0)
+                await (0, organizer_1.organizeOnce)({ sourcePaths: changedPaths });
         }
         catch (error) {
             console.error("[provider-reconciliation] organized view refresh failed", error?.message || String(error));
@@ -90,7 +98,7 @@ function createProviderReconciliationWorker() {
                 dryRun: config_1.config.providerReconciliationDryRun,
                 routeFor: (category, sourceProvider) => category === "Movies" ? providerReconciliationRoutes(sourceProvider || providerId).movies : providerReconciliationRoutes(sourceProvider || providerId).shows,
                 onSuccess: async (event) => {
-                    await scheduleOrganizerRefresh();
+                    await scheduleOrganizerRefresh([event.path]);
                     (0, organizerReview_1.resolveOrganizerReviewAutomatically)(event.path, `Provider reconciliation (${event.provider}) matched ARR and completed`);
                 },
                 onDeleted: async (event) => {
@@ -137,7 +145,8 @@ async function refreshProviderActivity() {
     const events = activeProviderReconciliationWorker
         ? await activeProviderReconciliationWorker.runRecent()
         : [];
-    await (0, organizer_1.organizeOnce)();
+    if (events.length > 0)
+        await (0, organizer_1.organizeOnce)({ sourcePaths: events.map((event) => event.path) });
     return { events: events.length, organizerCompleted: true };
 }
 /** Registers the worker created during application startup for on-demand refreshes. */

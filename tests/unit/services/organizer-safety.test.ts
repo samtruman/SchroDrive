@@ -113,6 +113,36 @@ describe("Organizer safety", () => {
     }
   });
 
+  test("incremental refresh does not prune unrelated links", async () => {
+    const root = await fixture();
+    const sourceRoot = path.join(root, "provider");
+    const organized = path.join(root, "organized");
+    const broken = path.join(organized, "Movies", "unrelated.mkv");
+    await mkdir(sourceRoot, { recursive: true });
+    await mkdir(path.dirname(broken), { recursive: true });
+    await symlink(path.join(root, "missing.mkv"), broken);
+
+    const previous = {
+      mountBase: config.mountBase,
+      organizedBase: config.organizedBase,
+      providers: config.providers,
+      webdavMountsEnabled: config.webdavMountsEnabled,
+    };
+    config.mountBase = root;
+    config.organizedBase = organized;
+    config.providers = ["provider"];
+    config.webdavMountsEnabled = false;
+    try {
+      await organizeOnce({ sourcePaths: ["shows/new-item.mkv"] });
+      expect((await lstat(broken)).isSymbolicLink()).toBe(true);
+    } finally {
+      config.mountBase = previous.mountBase;
+      config.organizedBase = previous.organizedBase;
+      config.providers = previous.providers;
+      config.webdavMountsEnabled = previous.webdavMountsEnabled;
+    }
+  });
+
   test("fails closed when the organized root is missing", async () => {
     const root = await fixture();
     const sourceRoot = path.join(root, "provider");

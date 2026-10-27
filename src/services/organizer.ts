@@ -1052,9 +1052,11 @@ export function providerMediaKey(mountBase: string, source: string): string {
  * @param opts.dryRun - If `true`, log actions but don't create symlinks.
  * @param opts.limit - Maximum number of files to process (default: 10000).
  */
-export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) {
+export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number; sourcePaths?: string[] }) {
   const dryRun = !!opts?.dryRun;
   const limit = opts?.limit ?? 10000;
+  const incrementalPaths = [...new Set((opts?.sourcePaths || []).map((value) => value.trim()).filter(Boolean))];
+  const incremental = incrementalPaths.length > 0;
 
   const mountStatuses = await getConfiguredMountReadiness();
   const readinessByPath = new Map(
@@ -1111,16 +1113,24 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
     }
   }
   const files: string[] = [];
-  for (const r of roots) {
+  const scanRoots = incremental
+    ? incrementalPaths.flatMap((sourcePath) => {
+        const relative = sourcePath.replace(/^\/+/, "");
+        return config.providers.map((providerId) => path.join(config.mountBase, providerId, relative));
+      })
+    : roots;
+  for (const r of scanRoots) {
     try {
       const st = await fsp.stat(r);
-      if (!st.isDirectory()) throw new Error(`organizer source is not a directory: ${r}`);
-      await walkDir(r, files, limit);
+      if (st.isDirectory()) await walkDir(r, files, limit);
+      else if (st.isFile()) files.push(r);
     } catch (err) {
-      throw new Error(`organizer source unavailable: ${r}: ${(err as Error)?.message || String(err)}`);
+      if (!incremental || (err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw new Error(`organizer source unavailable: ${r}: ${(err as Error)?.message || String(err)}`);
+      }
     }
   }
-  console.log(`[${new Date().toISOString()}][organize] scan`, { roots, files: files.length });
+  console.log(`[${new Date().toISOString()}][organize] scan`, { roots: scanRoots, files: files.length, incremental });
 
   // Filesystem traversal order is not stable across providers/filesystems.
   // Sorting makes canonical-vs-collision assignment deterministic for a
@@ -1130,7 +1140,7 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
   // An empty discovery is ambiguous: it can mean an empty library, but it can
   // also mean that a provider mount is temporarily unavailable. Never prune
   // existing organized links in that state.
-  if (!dryRun && files.length > 0 && !hasUnavailableSource) {
+  if (!incremental && !dryRun && files.length > 0 && !hasUnavailableSource) {
     for (const dir of [movieDir, tvDir, animeDir]) {
       try {
         const st = await fsp.stat(dir);
@@ -1143,7 +1153,7 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
         throw new Error(`organized library unavailable: ${dir}: ${(err as Error)?.message || String(err)}`);
       }
     }
-  } else if (!dryRun && hasUnavailableSource) {
+  } else if (!incremental && !dryRun && hasUnavailableSource) {
     console.warn(`[${new Date().toISOString()}][organize] skipping stale-content pruning while a source mount is not ready`);
   }
 
@@ -1278,7 +1288,7 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
 
   const discoveryComplete = !dryRun && files.length > 0 && !hasUnavailableSource && processed === files.length && unknownCount === 0;
 
-  if (discoveryComplete && desiredBySource.size > 0) {
+  if (!incremental && discoveryComplete && desiredBySource.size > 0) {
     let removedLinks = 0;
     let removedDirs = 0;
     for (const dir of [movieDir, tvDir, animeDir]) {
@@ -1299,7 +1309,7 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number }) 
   // standalone, but when Radarr/Sonarr are configured, reconcile both the
   // initial library bootstrap and later AllDebrid manifest additions against
   // their authoritative library paths before refreshing media servers.
-  if (!dryRun) {
+  if (!dryRun && !incremental) {
     try {
       const arrReconciliation = await reconcileOrganizedLibraryWithArr();
       if (arrReconciliation.scanned > 0) {

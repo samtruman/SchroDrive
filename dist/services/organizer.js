@@ -1002,6 +1002,8 @@ function providerMediaKey(mountBase, source) {
 async function organizeOnce(opts) {
     const dryRun = !!opts?.dryRun;
     const limit = opts?.limit ?? 10000;
+    const incrementalPaths = [...new Set((opts?.sourcePaths || []).map((value) => value.trim()).filter(Boolean))];
+    const incremental = incrementalPaths.length > 0;
     const mountStatuses = await (0, mount_1.getConfiguredMountReadiness)();
     const readinessByPath = new Map(mountStatuses.filter((status) => status.path).map((status) => [path.resolve(status.path), status]));
     const hasUnavailableSource = mountStatuses.some((status) => !status.ready);
@@ -1052,18 +1054,27 @@ async function organizeOnce(opts) {
         }
     }
     const files = [];
-    for (const r of roots) {
+    const scanRoots = incremental
+        ? incrementalPaths.flatMap((sourcePath) => {
+            const relative = sourcePath.replace(/^\/+/, "");
+            return config_1.config.providers.map((providerId) => path.join(config_1.config.mountBase, providerId, relative));
+        })
+        : roots;
+    for (const r of scanRoots) {
         try {
             const st = await fsp.stat(r);
-            if (!st.isDirectory())
-                throw new Error(`organizer source is not a directory: ${r}`);
-            await walkDir(r, files, limit);
+            if (st.isDirectory())
+                await walkDir(r, files, limit);
+            else if (st.isFile())
+                files.push(r);
         }
         catch (err) {
-            throw new Error(`organizer source unavailable: ${r}: ${err?.message || String(err)}`);
+            if (!incremental || err?.code !== "ENOENT") {
+                throw new Error(`organizer source unavailable: ${r}: ${err?.message || String(err)}`);
+            }
         }
     }
-    console.log(`[${new Date().toISOString()}][organize] scan`, { roots, files: files.length });
+    console.log(`[${new Date().toISOString()}][organize] scan`, { roots: scanRoots, files: files.length, incremental });
     // Filesystem traversal order is not stable across providers/filesystems.
     // Sorting makes canonical-vs-collision assignment deterministic for a
     // given source set without ever replacing an existing valid symlink.
@@ -1071,7 +1082,7 @@ async function organizeOnce(opts) {
     // An empty discovery is ambiguous: it can mean an empty library, but it can
     // also mean that a provider mount is temporarily unavailable. Never prune
     // existing organized links in that state.
-    if (!dryRun && files.length > 0 && !hasUnavailableSource) {
+    if (!incremental && !dryRun && files.length > 0 && !hasUnavailableSource) {
         for (const dir of [movieDir, tvDir, animeDir]) {
             try {
                 const st = await fsp.stat(dir);
@@ -1088,7 +1099,7 @@ async function organizeOnce(opts) {
             }
         }
     }
-    else if (!dryRun && hasUnavailableSource) {
+    else if (!incremental && !dryRun && hasUnavailableSource) {
         console.warn(`[${new Date().toISOString()}][organize] skipping stale-content pruning while a source mount is not ready`);
     }
     if (totalRemovedLinks > 0 || totalRemovedDirs > 0) {
@@ -1229,7 +1240,7 @@ async function organizeOnce(opts) {
         processed++;
     }
     const discoveryComplete = !dryRun && files.length > 0 && !hasUnavailableSource && processed === files.length && unknownCount === 0;
-    if (discoveryComplete && desiredBySource.size > 0) {
+    if (!incremental && discoveryComplete && desiredBySource.size > 0) {
         let removedLinks = 0;
         let removedDirs = 0;
         for (const dir of [movieDir, tvDir, animeDir]) {
@@ -1249,7 +1260,7 @@ async function organizeOnce(opts) {
     // standalone, but when Radarr/Sonarr are configured, reconcile both the
     // initial library bootstrap and later AllDebrid manifest additions against
     // their authoritative library paths before refreshing media servers.
-    if (!dryRun) {
+    if (!dryRun && !incremental) {
         try {
             const arrReconciliation = await (0, arrLibraryReconciliation_1.reconcileOrganizedLibraryWithArr)();
             if (arrReconciliation.scanned > 0) {

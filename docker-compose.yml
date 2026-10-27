@@ -122,7 +122,7 @@ services:
       - REFRESH_LIBRARY_ON_ADD=${REFRESH_LIBRARY_ON_ADD:-false}
       
       # ===== Media Organiser (symlinked views with metadata) =====
-      - RUN_ORGANIZER_WATCH=${RUN_ORGANIZER_WATCH:-true}
+      - RUN_ORGANIZER_WATCH=${RUN_ORGANIZER_WATCH:-false}
       - ORGANIZED_BASE=${ORGANIZED_BASE:-/mnt/schrodrive/organized}
       - ORGANIZER_MODE=${ORGANIZER_MODE:-symlink}
       - ORG_SCAN_INTERVAL_S=${ORG_SCAN_INTERVAL_S:-300}

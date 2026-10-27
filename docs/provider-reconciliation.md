@@ -40,6 +40,13 @@ authoritative ARR library path was repaired. A pass that finds everything
 already in the correct location does not enqueue another ARR scan.
 TV specials are treated as season `0` and remain under `Season 00` in both
 organizer and ARR reconciliation paths.
+
+Normal provider additions are event-driven. The provider snapshot diff and the
+ARR bridge pass only the changed provider paths to the organizer, which then
+reads those paths without walking the complete mount or pruning unrelated
+links. `RUN_ORGANIZER_WATCH` is disabled by default in Docker and should only
+be enabled for an intentional full recovery scan; direct additions made
+outside SchroDrive are discovered by the explicit Dashboard/provider refresh.
 ```text
 provider listTorrents/fetchDirectories
   -> normalized snapshot and local SQLite diff
