@@ -187,10 +187,12 @@ export default function DashboardPage() {
     })
 
     eventSource.addEventListener("done", () => {
+      setStreamStatus("")
       eventSource.close()
     })
 
     eventSource.onerror = () => {
+      setStreamStatus("")
       eventSource.close()
     }
 
