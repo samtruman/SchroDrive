@@ -16,6 +16,30 @@ import {
 } from "./providerReconciliation";
 import type { DeleteImpact } from "./deleteImpact";
 
+let organizerRefreshScheduled = false;
+let organizerRefreshPromise: Promise<void> = Promise.resolve();
+
+/**
+ * Refresh the organised view after provider reconciliation without running a
+ * full scan once per file in a season pack. Calls arriving during the same
+ * short window share one scan, so the Dashboard sees new links promptly.
+ */
+function scheduleOrganizerRefresh(): Promise<void> {
+  if (organizerRefreshScheduled) return organizerRefreshPromise;
+  organizerRefreshScheduled = true;
+  organizerRefreshPromise = (async () => {
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    try {
+      await organizeOnce();
+    } catch (error: any) {
+      console.error("[provider-reconciliation] organized view refresh failed", error?.message || String(error));
+    } finally {
+      organizerRefreshScheduled = false;
+    }
+  })();
+  return organizerRefreshPromise;
+}
+
 export function providerReconciliationRoutes(providerId = "alldebrid"): { movies: ArrRoute; shows: ArrRoute } {
   const sourcePathPrefix = `${config.providerReconciliationMountBase.replace(/\/$/, '')}/${providerId}`;
   const stagingRoot = config.arrDownloadsPath.replace(/\/$/, '');
@@ -69,9 +93,11 @@ export function createProviderReconciliationWorker(): ProviderReconciliationWork
       dryRun: config.providerReconciliationDryRun,
       routeFor: (category, sourceProvider) => category === "Movies" ? providerReconciliationRoutes(sourceProvider || providerId).movies : providerReconciliationRoutes(sourceProvider || providerId).shows,
       onSuccess: async (event) => {
+        await scheduleOrganizerRefresh();
         resolveOrganizerReviewAutomatically(event.path, `Provider reconciliation (${event.provider}) matched ARR and completed`);
       },
       onDeleted: async (event) => {
+        await scheduleOrganizerRefresh();
         resolveOrganizerReviewAutomatically(event.path, `Provider reconciliation (${event.provider}) item is no longer present`);
       },
       shouldRetry: (event) => isOrganizerReviewPending(event.path),
