@@ -1034,7 +1034,7 @@ export async function mountVirtualDrive(): Promise<void> {
     }
     args.push(`--log-file=${logFile}`);
 
-    args.push("--daemon");
+    if (config.mountRcloneRcPort <= 0) args.push("--daemon");
     console.log(`[${new Date().toISOString()}][mount] rclone ${args.join(" ")}`);
     const p = spawn(config.rclonePath, args, { stdio: "inherit" });
     p.on("error", (e) => {
@@ -1611,7 +1611,7 @@ async function attemptRemount(mount: MountTarget, rcloneConfigPath: string): Pro
     args.push(`--log-file=${logFile}`);
   }
 
-  args.push("--daemon");
+  if (config.mountRcloneRcPort <= 0) args.push("--daemon");
 
   console.log(`[${ts()}][mount-health] re-mounting: rclone ${args.join(" ")}`);
 

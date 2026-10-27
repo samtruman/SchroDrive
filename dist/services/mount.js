@@ -965,7 +965,8 @@ async function mountVirtualDrive() {
             args.push(`--log-level=INFO`);
         }
         args.push(`--log-file=${logFile}`);
-        args.push("--daemon");
+        if (config_1.config.mountRcloneRcPort <= 0)
+            args.push("--daemon");
         console.log(`[${new Date().toISOString()}][mount] rclone ${args.join(" ")}`);
         const p = (0, child_process_1.spawn)(config_1.config.rclonePath, args, { stdio: "inherit" });
         p.on("error", (e) => {
@@ -1482,7 +1483,8 @@ async function attemptRemount(mount, rcloneConfigPath) {
         }
         args.push(`--log-file=${logFile}`);
     }
-    args.push("--daemon");
+    if (config_1.config.mountRcloneRcPort <= 0)
+        args.push("--daemon");
     console.log(`[${ts()}][mount-health] re-mounting: rclone ${args.join(" ")}`);
     const p = (0, child_process_1.spawn)(config_1.config.rclonePath, args, { stdio: "inherit" });
     p.on("error", (e) => {
