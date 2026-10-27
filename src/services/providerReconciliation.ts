@@ -701,8 +701,16 @@ export class ProviderReconciliationIntake {
     const category = categoryFor(item);
     const categoryDirectory = category.toLowerCase();
     const providerPath = item.files[0].path.replace(/^\/+/, '');
+    const directoryName = item.directoryName?.replace(/^\/+|\/+$/g, '');
+    // Some providers expose a single-file torrent as a virtual directory
+    // whose name is exactly the file name. Do not duplicate that component:
+    // `shows/file.mkv/file.mkv` prevents mount readiness and ARR discovery.
+    const syntheticSingleFileDirectory = item.files.length === 1 &&
+      !!directoryName &&
+      (directoryName === providerPath || directoryName === path.basename(providerPath));
     const path = item.directoryName
-      ? `${categoryDirectory}/${item.directoryName.replace(/^\/+|\/+$/g, '')}/${providerPath}`
+      && !syntheticSingleFileDirectory
+      ? `${categoryDirectory}/${directoryName}/${providerPath}`
       : providerPath;
     return {
       provider, providerItemId: item.providerItemId, action,
