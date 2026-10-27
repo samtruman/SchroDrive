@@ -60,6 +60,8 @@ export interface ArrRoute {
   mountReadyTimeoutMs?: number;
   /** Poll interval while waiting for the provider mount. */
   mountReadyPollMs?: number;
+  /** Optional local endpoint used to invalidate the WebDAV mount cache. */
+  mountRefreshUrl?: string;
 }
 
 export interface ArrCommandResult {
@@ -180,6 +182,7 @@ export class HttpArrClient implements ArrClient {
       ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${event.path.replace(/^\/+/, '')}`
       : event.path;
     if (route.stagingPath) {
+      await refreshProviderMount(route);
       await waitForProviderMount(route, event);
       const scanPath = await exposeAsArrStaging(route, event);
       return this.submitCommand(route, { name: commandName, path: scanPath, importMode: route.importMode || 'Copy' });
@@ -396,6 +399,16 @@ async function exposeAsArrStaging(route: ArrRoute, event: DirectFileEvent): Prom
     await fsp.symlink(providerPath, destination);
   }
   return stagingDirectory;
+}
+
+async function refreshProviderMount(route: ArrRoute): Promise<void> {
+  if (!route.mountRefreshUrl) return;
+  try {
+    const response = await fetch(route.mountRefreshUrl, { method: "POST" });
+    if (!response.ok) console.warn("[provider-reconciliation] mount refresh returned HTTP " + response.status);
+  } catch (error) {
+    console.warn("[provider-reconciliation] mount refresh unavailable; continuing with readiness polling", error);
+  }
 }
 
 async function waitForProviderMount(route: ArrRoute, event: DirectFileEvent): Promise<void> {

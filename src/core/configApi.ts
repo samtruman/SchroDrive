@@ -74,6 +74,7 @@ export const CONFIG_SCHEMA = {
   ARR_DOWNLOADS_PATH: { type: "string", default: "", category: "arr", label: "ARR Downloads Path" },
   PROVIDER_RECONCILIATION_MOUNT_READY_TIMEOUT_MS: { type: "number", default: "30000", category: "arr", label: "Provider Mount Ready Timeout (ms)" },
   PROVIDER_RECONCILIATION_MOUNT_READY_POLL_MS: { type: "number", default: "500", category: "arr", label: "Provider Mount Ready Poll (ms)" },
+  PROVIDER_RECONCILIATION_MOUNT_REFRESH_URL: { type: "string", default: "http://127.0.0.1:8978/api/webdav/refresh", category: "arr", label: "Provider Mount Refresh URL" },
 
   // Runtime Services
   RUN_WEBHOOK: { type: "boolean", default: "true", category: "services", label: "Run Webhook Server" },

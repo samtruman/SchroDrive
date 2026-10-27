@@ -17,7 +17,8 @@ tree to become visible and readable through the mounted provider path. The wait
 uses PROVIDER_RECONCILIATION_MOUNT_READY_TIMEOUT_MS (default 30 seconds) and
 PROVIDER_RECONCILIATION_MOUNT_READY_POLL_MS (default 500 ms). If the mount is
 still stale after the timeout, the event is deferred instead of sending ARR an
-empty staging directory.
+empty staging directory. Before polling, the local WebDAV bridge refresh endpoint
+is called so a newly-added provider item can invalidate the directory cache.
 
 When a provider item is deleted, both staging and any existing Arr-library
 symlinks are removed and the affected movie/series is rescanned. The standalone
