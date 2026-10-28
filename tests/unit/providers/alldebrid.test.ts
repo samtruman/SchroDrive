@@ -208,4 +208,15 @@ afterEach(() => {
       reason: 'getaddrinfo ENOTFOUND api.alldebrid.com',
     });
   });
+
+  test('classifies AllDebrid 200 error payload for a deleted magnet as missing', async () => {
+    axiosIPv4.post = async () => ({
+      data: {
+        status: 'error',
+        error: { message: 'This magnet ID does not exists or is invalid' },
+      },
+    }) as any;
+
+    expect(await new AllDebridProvider().getTorrentStatus('824779139')).toEqual({ status: 'missing' });
+  });
 });

@@ -328,6 +328,10 @@ export class AllDebridProvider implements DebridProvider {
       const url = buildUrl('/v4.1/magnet/status', { id: torrentId });
       const res = await axiosIPv4.post(url, null, { headers: authHeaders(), timeout: 20000 });
       rateLimiter.recordSuccess(PROVIDER_NAME);
+      const providerError = `${res?.data?.error?.code || ''} ${res?.data?.error?.message || ''}`.toLowerCase();
+      if (res?.data?.status === 'error' && /not[ _-]?found|does not exist|unknown id|invalid/.test(providerError)) {
+        return { status: 'missing' };
+      }
       const data = unwrapResponse(res, 'get magnet status');
       const magnet = Array.isArray(data?.magnets) ? data.magnets[0] : data?.magnets;
       if (!magnet || typeof magnet !== 'object') {
