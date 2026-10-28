@@ -184,3 +184,10 @@ The RC refresh invalidates only the relevant mount directory cache. This must
 include nested AllDebrid paths such as `shows/Pack/Pack/file.mkv`; refreshing
 only `shows/Pack` leaves the nested VFS entry stale. Reconciliation then waits
 for the provider files to become readable before submitting the ARR command.
+
+The readiness paths are built from the provider's returned tree, not blindly
+from the persisted event path. This matters for legacy events whose path may
+already contain the pack directory twice (for example `Pack/Pack/file.mkv`)
+while the provider tree correctly reports `Pack/file.mkv`. A basename-only
+legacy tree still falls back to the event directory, so older fixtures and
+events remain compatible without reintroducing the duplicate-pack lookup.

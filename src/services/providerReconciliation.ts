@@ -500,19 +500,27 @@ async function waitForProviderMount(route: ArrRoute, event: DirectFileEvent): Pr
 
 function providerTreePaths(route: ArrRoute, event: DirectFileEvent): string[] {
   if (!route.sourcePathPrefix) return [];
-  const firstTreePath = String(event.tree[0]?.path || path.basename(event.path)).replace(/^[/\\]+/, "");
-  const eventPath = event.path.replace(/^[/\\]+/, "");
-  const prefix = eventPath.endsWith(firstTreePath)
-    ? eventPath.slice(0, -firstTreePath.length)
-    : path.dirname(eventPath).replace(/\\/g, "/") + "/";
   const videoFiles = event.tree.filter((file) => isVideoFile(file.path));
   const files = videoFiles.length > 0
     ? videoFiles
     : (event.tree.length > 0 ? event.tree : [{ path: path.basename(event.path), size: 0 }]);
   const sourceRoot = route.sourcePathPrefix.replace(/\/$/, "");
+  const defaultCategoryRoot = event.sourceCategory === "Movies" ? "movies" : "shows";
+  const eventCategoryRoot = event.path.split(/[\\/]/)[0];
+  const categoryRoot = /^(movies|shows)$/i.test(eventCategoryRoot) ? eventCategoryRoot : defaultCategoryRoot;
   return files.map((file) => {
-    const relativeFile = String(file.path).replace(/^[/\\]+/, "");
-    return sourceRoot + "/" + (prefix + relativeFile).replace(/\\/g, "/");
+    let relativeFile = String(file.path).replace(/^[/\\]+/, "").replace(/\\/g, "/");
+    if (relativeFile.startsWith(`${categoryRoot}/`)) relativeFile = relativeFile.slice(categoryRoot.length + 1);
+    if (!relativeFile.includes("/")) {
+      const eventRelativePath = event.path.replace(/^[/\\]+/, "").replace(/\\/g, "/");
+      const categoryPrefix = `${categoryRoot}/`;
+      const withoutCategory = eventRelativePath.toLowerCase().startsWith(categoryPrefix.toLowerCase())
+        ? eventRelativePath.slice(categoryPrefix.length)
+        : eventRelativePath;
+      const eventDirectory = path.posix.dirname(withoutCategory);
+      if (eventDirectory !== ".") relativeFile = `${eventDirectory}/${relativeFile}`;
+    }
+    return `${sourceRoot}/${categoryRoot}/${relativeFile}`;
   });
 }
 

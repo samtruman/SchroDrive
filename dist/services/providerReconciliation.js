@@ -432,19 +432,29 @@ async function waitForProviderMount(route, event) {
 function providerTreePaths(route, event) {
     if (!route.sourcePathPrefix)
         return [];
-    const firstTreePath = String(event.tree[0]?.path || node_path_1.default.basename(event.path)).replace(/^[/\\]+/, "");
-    const eventPath = event.path.replace(/^[/\\]+/, "");
-    const prefix = eventPath.endsWith(firstTreePath)
-        ? eventPath.slice(0, -firstTreePath.length)
-        : node_path_1.default.dirname(eventPath).replace(/\\/g, "/") + "/";
     const videoFiles = event.tree.filter((file) => isVideoFile(file.path));
     const files = videoFiles.length > 0
         ? videoFiles
         : (event.tree.length > 0 ? event.tree : [{ path: node_path_1.default.basename(event.path), size: 0 }]);
     const sourceRoot = route.sourcePathPrefix.replace(/\/$/, "");
+    const defaultCategoryRoot = event.sourceCategory === "Movies" ? "movies" : "shows";
+    const eventCategoryRoot = event.path.split(/[\\/]/)[0];
+    const categoryRoot = /^(movies|shows)$/i.test(eventCategoryRoot) ? eventCategoryRoot : defaultCategoryRoot;
     return files.map((file) => {
-        const relativeFile = String(file.path).replace(/^[/\\]+/, "");
-        return sourceRoot + "/" + (prefix + relativeFile).replace(/\\/g, "/");
+        let relativeFile = String(file.path).replace(/^[/\\]+/, "").replace(/\\/g, "/");
+        if (relativeFile.startsWith(`${categoryRoot}/`))
+            relativeFile = relativeFile.slice(categoryRoot.length + 1);
+        if (!relativeFile.includes("/")) {
+            const eventRelativePath = event.path.replace(/^[/\\]+/, "").replace(/\\/g, "/");
+            const categoryPrefix = `${categoryRoot}/`;
+            const withoutCategory = eventRelativePath.toLowerCase().startsWith(categoryPrefix.toLowerCase())
+                ? eventRelativePath.slice(categoryPrefix.length)
+                : eventRelativePath;
+            const eventDirectory = node_path_1.default.posix.dirname(withoutCategory);
+            if (eventDirectory !== ".")
+                relativeFile = `${eventDirectory}/${relativeFile}`;
+        }
+        return `${sourceRoot}/${categoryRoot}/${relativeFile}`;
     });
 }
 async function removeMatchingSymlinks(root, targets) {
