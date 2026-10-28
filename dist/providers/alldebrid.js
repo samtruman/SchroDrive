@@ -283,6 +283,10 @@ class AllDebridProvider {
             const url = buildUrl('/v4.1/magnet/status', { id: torrentId });
             const res = await httpClient_1.axiosIPv4.post(url, null, { headers: authHeaders(), timeout: 20000 });
             rateLimiter_1.rateLimiter.recordSuccess(PROVIDER_NAME);
+            const providerError = `${res?.data?.error?.code || ''} ${res?.data?.error?.message || ''}`.toLowerCase();
+            if (res?.data?.status === 'error' && /not[ _-]?found|does not exist|unknown id|invalid/.test(providerError)) {
+                return { status: 'missing' };
+            }
             const data = unwrapResponse(res, 'get magnet status');
             const magnet = Array.isArray(data?.magnets) ? data.magnets[0] : data?.magnets;
             if (!magnet || typeof magnet !== 'object') {

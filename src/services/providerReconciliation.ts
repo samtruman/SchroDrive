@@ -477,7 +477,9 @@ async function waitForProviderMount(route: ArrRoute, event: DirectFileEvent): Pr
     }
     if (missing.length === 0) return;
     if (route.providerItemStatus && attempts % 10 === 0) {
+      console.log(`[provider-reconciliation] checking provider status: ${event.provider}:${event.providerItemId}`);
       const providerStatus = await route.providerItemStatus(event.providerItemId);
+      console.log(`[provider-reconciliation] provider status: ${event.provider}:${event.providerItemId} -> ${providerStatus}`);
       if (providerStatus === 'missing') {
         throw new Error(`Provider item ${event.provider}:${event.providerItemId} is no longer available; mount readiness wait aborted`);
       }

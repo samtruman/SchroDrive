@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.providerReconciliationRoutes = providerReconciliationRoutes;
+exports.normalizeProviderItemId = normalizeProviderItemId;
 exports.propagateProviderDeletion = propagateProviderDeletion;
 exports.createProviderReconciliationWorker = createProviderReconciliationWorker;
 exports.startProviderReconciliation = startProviderReconciliation;
@@ -52,7 +53,7 @@ function providerReconciliationRoutes(providerId = "alldebrid") {
     const providerItemStatus = provider?.getTorrentStatus
         ? async (providerItemId) => {
             const prefix = `${providerId}:`;
-            const id = providerItemId.startsWith(prefix) ? providerItemId.slice(prefix.length) : providerItemId;
+            const id = normalizeProviderItemId(providerItemId, providerId);
             return (await provider.getTorrentStatus(id)).status;
         }
         : undefined;
@@ -60,6 +61,13 @@ function providerReconciliationRoutes(providerId = "alldebrid") {
         movies: { kind: "radarr", baseUrl: config_1.config.providerReconciliationRadarrUrl, apiKey: config_1.config.providerReconciliationRadarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config_1.config.providerReconciliationMoviesLibraryPath || undefined, stagingPath: stagingRoot ? stagingRoot + "/radarr" : undefined, mountReadyPollMs: stagingRoot ? config_1.config.providerReconciliationMountReadyPollMs : undefined, providerItemStatus },
         shows: { kind: "sonarr", baseUrl: config_1.config.providerReconciliationSonarrUrl, apiKey: config_1.config.providerReconciliationSonarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config_1.config.providerReconciliationShowsLibraryPath || undefined, stagingPath: stagingRoot ? stagingRoot + "/sonarr" : undefined, mountReadyPollMs: stagingRoot ? config_1.config.providerReconciliationMountReadyPollMs : undefined, providerItemStatus },
     };
+}
+function normalizeProviderItemId(providerItemId, providerId) {
+    const prefix = `${providerId}:`;
+    let id = providerItemId;
+    while (id.startsWith(prefix))
+        id = id.slice(prefix.length);
+    return id;
 }
 async function propagateProviderDeletion(impact) {
     const routes = providerReconciliationRoutes(impact.provider);
