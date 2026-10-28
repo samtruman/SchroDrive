@@ -64,9 +64,10 @@ describe('provider reconciliation runtime wiring', () => {
     config.providerReconciliationRadarrApiKey = 'radarr-fixture-key';
     config.providerReconciliationSonarrUrl = 'http://sonarr.test/';
     config.providerReconciliationSonarrApiKey = 'sonarr-fixture-key';
-    expect(providerReconciliationRoutes('realdebrid')).toEqual({
-      movies: { kind: 'radarr', baseUrl: 'http://radarr.test/', apiKey: 'radarr-fixture-key', sourcePathPrefix: '/mnt/schrodrive/realdebrid', importMode: 'Copy' },
-      shows: { kind: 'sonarr', baseUrl: 'http://sonarr.test/', apiKey: 'sonarr-fixture-key', sourcePathPrefix: '/mnt/schrodrive/realdebrid', importMode: 'Copy' },
-    });
+    const routes = providerReconciliationRoutes('realdebrid');
+    expect(routes.movies).toMatchObject({ kind: 'radarr', baseUrl: 'http://radarr.test/', apiKey: 'radarr-fixture-key', sourcePathPrefix: '/mnt/schrodrive/realdebrid', importMode: 'Copy' });
+    expect(routes.shows).toMatchObject({ kind: 'sonarr', baseUrl: 'http://sonarr.test/', apiKey: 'sonarr-fixture-key', sourcePathPrefix: '/mnt/schrodrive/realdebrid', importMode: 'Copy' });
+    expect(routes.movies.providerItemStatus).toBeFunction();
+    expect(routes.shows.providerItemStatus).toBe(routes.movies.providerItemStatus);
   });
 });
