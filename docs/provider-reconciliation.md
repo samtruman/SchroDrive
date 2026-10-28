@@ -25,6 +25,11 @@ review/retry path instead of blocking the worker forever. Pending events remain
 persistent across restart, so a provider item
 cannot be lost if the mount or provider is temporarily unavailable.
 
+Provider item IDs are normalised before the status check. This also handles
+legacy/persisted values that already contain the provider namespace more than
+once (for example `alldebrid:alldebrid:824779139`), so an explicit provider
+deletion is not mistaken for an unknown item and left waiting indefinitely.
+
 At process startup, when `RUN_MOUNT=true`, SchröDrive also waits for the mount
 roots themselves to be real, readable mountpoints before starting the organizer
 watch or the provider-reconciliation worker. This prevents the first startup

@@ -53,7 +53,7 @@ export function providerReconciliationRoutes(providerId = "alldebrid"): { movies
   const providerItemStatus = provider?.getTorrentStatus
     ? async (providerItemId: string): Promise<'present' | 'missing' | 'unknown'> => {
         const prefix = `${providerId}:`;
-        const id = providerItemId.startsWith(prefix) ? providerItemId.slice(prefix.length) : providerItemId;
+        const id = normalizeProviderItemId(providerItemId, providerId);
         return (await provider.getTorrentStatus!(id)).status;
       }
     : undefined;
@@ -61,6 +61,13 @@ export function providerReconciliationRoutes(providerId = "alldebrid"): { movies
     movies: { kind: "radarr", baseUrl: config.providerReconciliationRadarrUrl, apiKey: config.providerReconciliationRadarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config.providerReconciliationMoviesLibraryPath || undefined, stagingPath: stagingRoot ? stagingRoot + "/radarr" : undefined, mountReadyPollMs: stagingRoot ? config.providerReconciliationMountReadyPollMs : undefined, providerItemStatus },
     shows: { kind: "sonarr", baseUrl: config.providerReconciliationSonarrUrl, apiKey: config.providerReconciliationSonarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config.providerReconciliationShowsLibraryPath || undefined, stagingPath: stagingRoot ? stagingRoot + "/sonarr" : undefined, mountReadyPollMs: stagingRoot ? config.providerReconciliationMountReadyPollMs : undefined, providerItemStatus },
   };
+}
+
+export function normalizeProviderItemId(providerItemId: string, providerId: string): string {
+  const prefix = `${providerId}:`;
+  let id = providerItemId;
+  while (id.startsWith(prefix)) id = id.slice(prefix.length);
+  return id;
 }
 
 export async function propagateProviderDeletion(impact: DeleteImpact): Promise<ArrDeletePropagationResult> {

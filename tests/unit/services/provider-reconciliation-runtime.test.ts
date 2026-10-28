@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { config, isProviderReconciliationAutoEnabled } from '../../../src/core/config';
-import { providerReconciliationRoutes, startProviderReconciliation } from '../../../src/services/providerReconciliationRuntime';
+import { normalizeProviderItemId, providerReconciliationRoutes, startProviderReconciliation } from '../../../src/services/providerReconciliationRuntime';
 
 const original = {
   enabled: config.providerReconciliationEnabled,
@@ -69,5 +69,10 @@ describe('provider reconciliation runtime wiring', () => {
     expect(routes.shows).toMatchObject({ kind: 'sonarr', baseUrl: 'http://sonarr.test/', apiKey: 'sonarr-fixture-key', sourcePathPrefix: '/mnt/schrodrive/realdebrid', importMode: 'Copy' });
     expect(routes.movies.providerItemStatus).toBeFunction();
     expect(routes.shows.providerItemStatus).toBe(routes.movies.providerItemStatus);
+  });
+
+  test('normalizes duplicated provider prefixes before status lookup', () => {
+    expect(normalizeProviderItemId('alldebrid:alldebrid:824779139', 'alldebrid')).toBe('824779139');
+    expect(normalizeProviderItemId('824779139', 'alldebrid')).toBe('824779139');
   });
 });
