@@ -357,8 +357,11 @@ async function refreshProviderMount(route, event) {
     const providerName = node_path_1.default.basename(route.sourcePathPrefix);
     const providerIndex = Math.max(0, config_1.config.providers.indexOf(providerName));
     const rcUrl = `http://127.0.0.1:${config_1.config.mountRcloneRcPort + providerIndex}/vfs/refresh`;
-    const parts = event.path.replace(/^\/+|\/+$/g, "").split("/");
-    const directory = parts.length >= 2 ? `/${parts.slice(0, 2).join("/")}` : `/${parts[0] || ""}`;
+    const normalizedEventPath = event.path.replace(/^\/+|\/+$/g, "");
+    // AllDebrid exposes many items as nested virtual directories, for example:
+    // `shows/Pack/Pack/file.mkv`. Refresh the actual parent directory of the
+    // file. Refreshing only `shows/Pack` leaves rclone's nested VFS entry stale.
+    const directory = `/${node_path_1.default.posix.dirname(normalizedEventPath).replace(/^\/+/, "")}`;
     try {
         const response = await fetch(rcUrl, {
             method: "POST",
@@ -378,34 +381,45 @@ async function refreshProviderMount(route, event) {
 async function waitForProviderMount(route, event) {
     if (!route.sourcePathPrefix)
         return;
-    const timeoutMs = Math.max(0, route.mountReadyTimeoutMs ?? 0);
-    if (timeoutMs === 0)
-        return;
     const pollMs = Math.max(50, route.mountReadyPollMs ?? 500);
     const paths = providerTreePaths(route, event);
     if (paths.length === 0)
         return;
-    const deadline = Date.now() + timeoutMs;
     let missing = paths;
-    do {
-        missing = [];
+    let attempts = 0;
+    let lastRefreshAt = Date.now();
+    const refreshCooldownMs = Math.max(5000, pollMs * 10);
+    while (missing.length > 0) {
+        attempts += 1;
         for (const candidate of paths) {
             try {
                 const stat = await node_fs_1.promises.stat(candidate);
-                if (!stat.isFile())
+                if (stat.isFile()) {
+                    missing = missing.filter((value) => value !== candidate);
+                }
+                else if (!missing.includes(candidate)) {
                     missing.push(candidate);
+                }
             }
             catch {
-                missing.push(candidate);
+                if (!missing.includes(candidate))
+                    missing.push(candidate);
             }
         }
         if (missing.length === 0)
             return;
-        if (Date.now() >= deadline)
-            break;
-        await new Promise((resolve) => setTimeout(resolve, Math.min(pollMs, Math.max(1, deadline - Date.now()))));
-    } while (Date.now() < deadline);
-    throw new ProviderMountNotReadyError("Provider mount not ready for " + event.provider + ":" + event.providerItemId + "; missing " + missing.length + " file(s) after " + timeoutMs + "ms");
+        // Re-issue the targeted refresh while rclone is still materialising the
+        // provider item. This is deliberately unbounded: a fixed timeout caused
+        // valid events to be deferred while the mount was still indexing.
+        if (Date.now() - lastRefreshAt >= refreshCooldownMs) {
+            await refreshProviderMount(route, event);
+            lastRefreshAt = Date.now();
+        }
+        if (attempts === 1 || attempts % 10 === 0) {
+            console.log(`[provider-reconciliation] waiting for mount: ${event.provider}:${event.providerItemId}; missing ${missing.length} file(s); attempt ${attempts}`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, pollMs));
+    }
 }
 function providerTreePaths(route, event) {
     if (!route.sourcePathPrefix)

@@ -106,7 +106,6 @@ exports.CONFIG_SCHEMA = {
     PROVIDER_RECONCILIATION_SONARR_URL: { type: "string", default: "", category: "arr", label: "Sonarr URL" },
     PROVIDER_RECONCILIATION_SONARR_API_KEY: { type: "password", default: "", category: "arr", label: "Sonarr API Key" },
     ARR_DOWNLOADS_PATH: { type: "string", default: "", category: "arr", label: "ARR Downloads Path" },
-    PROVIDER_RECONCILIATION_MOUNT_READY_TIMEOUT_MS: { type: "number", default: "30000", category: "arr", label: "Provider Mount Ready Timeout (ms)" },
     PROVIDER_RECONCILIATION_MOUNT_READY_POLL_MS: { type: "number", default: "500", category: "arr", label: "Provider Mount Ready Poll (ms)" },
     // Runtime Services
     RUN_WEBHOOK: { type: "boolean", default: "true", category: "services", label: "Run Webhook Server" },

@@ -108,7 +108,7 @@ describe('provider reconciliation fixture E2E', () => {
     }) as typeof fetch;
     try {
       const configured = {
-        ...route('radarr', '/mnt/schrodrive/alldebrid'),
+        ...route('radarr', root),
         symlinkLibraryPath: path.join(root, 'organized', 'Movies'),
         stagingPath: path.join(root, 'downloads', 'radarr'),
       };
@@ -116,10 +116,13 @@ describe('provider reconciliation fixture E2E', () => {
         ...event('Movies', 'Movies/Big Buck Bunny (2008)/Big.Buck.Bunny.2008.mkv'),
         tree: [{ path: 'Big.Buck.Bunny.2008.mkv', size: 1 }],
       };
+      const providerFile = path.join(root, 'Movies', 'Big Buck Bunny (2008)', 'Big.Buck.Bunny.2008.mkv');
+      await mkdir(path.dirname(providerFile), { recursive: true });
+      await writeFile(providerFile, 'fixture');
       await new HttpArrClient().submitScan(configured, item);
       const staging = path.join(root, 'downloads', 'radarr', 'alldebrid-fixture-item', 'Big.Buck.Bunny.2008.mkv');
       expect((await lstat(staging)).isSymbolicLink()).toBe(true);
-      expect(await readlink(staging)).toBe('/mnt/schrodrive/alldebrid/Movies/Big Buck Bunny (2008)/Big.Buck.Bunny.2008.mkv');
+      expect(await readlink(staging)).toBe(path.join(root, 'Movies', 'Big Buck Bunny (2008)', 'Big.Buck.Bunny.2008.mkv'));
       expect(body).toEqual({ name: 'DownloadedMoviesScan', path: path.dirname(staging), importMode: 'Copy' });
     } finally {
       await rm(root, { recursive: true, force: true });
@@ -135,7 +138,7 @@ describe('provider reconciliation fixture E2E', () => {
     }) as typeof fetch;
     const providerFile = path.join(root, 'Movies', 'Delayed.Movie (2025)', 'Delayed.Movie.2025.mkv');
     await mkdir(path.dirname(providerFile), { recursive: true });
-    const configured = { ...route('radarr', root), stagingPath: path.join(root, 'downloads', 'radarr'), mountReadyTimeoutMs: 1000, mountReadyPollMs: 50 };
+    const configured = { ...route('radarr', root), stagingPath: path.join(root, 'downloads', 'radarr'), mountReadyPollMs: 50 };
     const item = { ...event('Movies', 'Movies/Delayed.Movie (2025)/Delayed.Movie.2025.mkv'), tree: [{ path: 'Delayed.Movie.2025.mkv', size: 1 }] };
     const delayed = setTimeout(() => void writeFile(providerFile, 'fixture'), 100);
     try {
