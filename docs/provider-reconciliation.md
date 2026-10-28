@@ -52,6 +52,10 @@ the complete mount or pruning unrelated links. `RUN_ORGANIZER_WATCH` is
 disabled by default in Docker and is reserved for intentional full recovery
 scans. The Dashboard/provider refresh remains an explicit on-demand trigger,
 not a prerequisite for normal automatic processing.
+
+If a provider reuses an item ID after deletion, the persisted lifecycle state
+allows the same file tree to be processed again; the previous `added` event is
+not treated as a duplicate of the new post-deletion addition.
 ```text
 provider listTorrents/fetchDirectories
   -> normalized snapshot and local SQLite diff

@@ -191,6 +191,19 @@ describe('provider reconciliation direct intake', () => {
     expect(arr.submitted).toHaveLength(1);
   });
 
+  test('reprocesses a provider item re-added after deletion even with the same fingerprint', async () => {
+    const store = new InMemoryIntakeStateStore();
+    const arr = new FakeArr();
+    const intake = new ProviderReconciliationIntake(
+      new SequenceSource([[snapshot('m-1', 'Movie (2026)')], [], [snapshot('m-1', 'Movie (2026)')]]),
+      arr, store, { routeFor },
+    );
+    expect((await intake.reconcile()).map((event) => event.action)).toEqual(['added']);
+    expect((await intake.reconcile()).map((event) => event.action)).toEqual(['deleted']);
+    expect((await intake.reconcile()).map((event) => event.action)).toEqual(['added']);
+    expect(arr.submitted).toHaveLength(2);
+  });
+
   test('dry-run persists state without submitting to Arr', async () => {
     const arr = new FakeArr();
     const store = new InMemoryIntakeStateStore();

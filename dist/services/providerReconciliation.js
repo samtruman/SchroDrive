@@ -631,7 +631,11 @@ class ProviderReconciliationIntake {
         };
     }
     async dispatch(event, item, fp, forceRetry = false) {
-        if (!forceRetry && this.store.hasEvent(event.stableDedupeKey))
+        const previous = this.store.getItem(event.providerItemId);
+        // A provider may reuse an ID after deletion. The same file tree then has
+        // the same fingerprint, but it is a new physical lifecycle and must be
+        // delivered again to ARR.
+        if (!forceRetry && this.store.hasEvent(event.stableDedupeKey) && previous?.lastAction !== 'deleted')
             return;
         await this.options.onEvent?.(event);
         if (this.options.dryRun) {
