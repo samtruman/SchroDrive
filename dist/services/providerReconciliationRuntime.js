@@ -48,9 +48,17 @@ function scheduleOrganizerRefresh(paths = []) {
 function providerReconciliationRoutes(providerId = "alldebrid") {
     const sourcePathPrefix = `${config_1.config.providerReconciliationMountBase.replace(/\/$/, '')}/${providerId}`;
     const stagingRoot = config_1.config.arrDownloadsPath.replace(/\/$/, '');
+    const provider = providers_1.registry.get(providerId);
+    const providerItemStatus = provider?.getTorrentStatus
+        ? async (providerItemId) => {
+            const prefix = `${providerId}:`;
+            const id = providerItemId.startsWith(prefix) ? providerItemId.slice(prefix.length) : providerItemId;
+            return (await provider.getTorrentStatus(id)).status;
+        }
+        : undefined;
     return {
-        movies: { kind: "radarr", baseUrl: config_1.config.providerReconciliationRadarrUrl, apiKey: config_1.config.providerReconciliationRadarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config_1.config.providerReconciliationMoviesLibraryPath || undefined, stagingPath: stagingRoot ? stagingRoot + "/radarr" : undefined, mountReadyPollMs: stagingRoot ? config_1.config.providerReconciliationMountReadyPollMs : undefined },
-        shows: { kind: "sonarr", baseUrl: config_1.config.providerReconciliationSonarrUrl, apiKey: config_1.config.providerReconciliationSonarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config_1.config.providerReconciliationShowsLibraryPath || undefined, stagingPath: stagingRoot ? stagingRoot + "/sonarr" : undefined, mountReadyPollMs: stagingRoot ? config_1.config.providerReconciliationMountReadyPollMs : undefined },
+        movies: { kind: "radarr", baseUrl: config_1.config.providerReconciliationRadarrUrl, apiKey: config_1.config.providerReconciliationRadarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config_1.config.providerReconciliationMoviesLibraryPath || undefined, stagingPath: stagingRoot ? stagingRoot + "/radarr" : undefined, mountReadyPollMs: stagingRoot ? config_1.config.providerReconciliationMountReadyPollMs : undefined, providerItemStatus },
+        shows: { kind: "sonarr", baseUrl: config_1.config.providerReconciliationSonarrUrl, apiKey: config_1.config.providerReconciliationSonarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config_1.config.providerReconciliationShowsLibraryPath || undefined, stagingPath: stagingRoot ? stagingRoot + "/sonarr" : undefined, mountReadyPollMs: stagingRoot ? config_1.config.providerReconciliationMountReadyPollMs : undefined, providerItemStatus },
     };
 }
 async function propagateProviderDeletion(impact) {

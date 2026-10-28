@@ -59,6 +59,8 @@ export interface ArrRoute {
   stagingPath?: string;
   /** Poll interval while waiting for the provider mount. */
   mountReadyPollMs?: number;
+  /** Optional authoritative provider lookup used to stop waiting for removed items. */
+  providerItemStatus?: (providerItemId: string) => Promise<'present' | 'missing' | 'unknown'>;
 }
 
 export interface ArrCommandResult {
@@ -474,6 +476,12 @@ async function waitForProviderMount(route: ArrRoute, event: DirectFileEvent): Pr
       }
     }
     if (missing.length === 0) return;
+    if (route.providerItemStatus && attempts % 10 === 0) {
+      const providerStatus = await route.providerItemStatus(event.providerItemId);
+      if (providerStatus === 'missing') {
+        throw new Error(`Provider item ${event.provider}:${event.providerItemId} is no longer available; mount readiness wait aborted`);
+      }
+    }
     // Re-issue the targeted refresh while rclone is still materialising the
     // provider item. This is deliberately unbounded: a fixed timeout caused
     // valid events to be deferred while the mount was still indexing.

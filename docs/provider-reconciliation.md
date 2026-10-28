@@ -18,8 +18,11 @@ Video files are authoritative for readiness; subtitle, poster, and other
 sidecar files are optional because the WebDAV bridge may expose them later or
 not expose them at all. The worker polls until the files become visible and
 reissues a targeted rclone VFS refresh with a cooldown while the mount is
-materialising. There is no per-file timeout that can prematurely defer a valid
-event. Pending events remain persistent across restart, so a provider item
+materialising. There is no fixed per-file timeout that can prematurely defer a valid
+event. The provider ID is checked periodically as a safety valve: an authoritative
+provider-side deletion stops the wait and sends the event through the normal
+review/retry path instead of blocking the worker forever. Pending events remain
+persistent across restart, so a provider item
 cannot be lost if the mount or provider is temporarily unavailable.
 
 At process startup, when `RUN_MOUNT=true`, SchröDrive also waits for the mount

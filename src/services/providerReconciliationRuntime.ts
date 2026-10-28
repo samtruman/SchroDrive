@@ -49,9 +49,17 @@ function scheduleOrganizerRefresh(paths: string[] = []): Promise<void> {
 export function providerReconciliationRoutes(providerId = "alldebrid"): { movies: ArrRoute; shows: ArrRoute } {
   const sourcePathPrefix = `${config.providerReconciliationMountBase.replace(/\/$/, '')}/${providerId}`;
   const stagingRoot = config.arrDownloadsPath.replace(/\/$/, '');
+  const provider = registry.get(providerId);
+  const providerItemStatus = provider?.getTorrentStatus
+    ? async (providerItemId: string): Promise<'present' | 'missing' | 'unknown'> => {
+        const prefix = `${providerId}:`;
+        const id = providerItemId.startsWith(prefix) ? providerItemId.slice(prefix.length) : providerItemId;
+        return (await provider.getTorrentStatus!(id)).status;
+      }
+    : undefined;
   return {
-    movies: { kind: "radarr", baseUrl: config.providerReconciliationRadarrUrl, apiKey: config.providerReconciliationRadarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config.providerReconciliationMoviesLibraryPath || undefined, stagingPath: stagingRoot ? stagingRoot + "/radarr" : undefined, mountReadyPollMs: stagingRoot ? config.providerReconciliationMountReadyPollMs : undefined },
-    shows: { kind: "sonarr", baseUrl: config.providerReconciliationSonarrUrl, apiKey: config.providerReconciliationSonarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config.providerReconciliationShowsLibraryPath || undefined, stagingPath: stagingRoot ? stagingRoot + "/sonarr" : undefined, mountReadyPollMs: stagingRoot ? config.providerReconciliationMountReadyPollMs : undefined },
+    movies: { kind: "radarr", baseUrl: config.providerReconciliationRadarrUrl, apiKey: config.providerReconciliationRadarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config.providerReconciliationMoviesLibraryPath || undefined, stagingPath: stagingRoot ? stagingRoot + "/radarr" : undefined, mountReadyPollMs: stagingRoot ? config.providerReconciliationMountReadyPollMs : undefined, providerItemStatus },
+    shows: { kind: "sonarr", baseUrl: config.providerReconciliationSonarrUrl, apiKey: config.providerReconciliationSonarrApiKey, sourcePathPrefix, importMode: "Copy", symlinkLibraryPath: config.providerReconciliationShowsLibraryPath || undefined, stagingPath: stagingRoot ? stagingRoot + "/sonarr" : undefined, mountReadyPollMs: stagingRoot ? config.providerReconciliationMountReadyPollMs : undefined, providerItemStatus },
   };
 }
 
