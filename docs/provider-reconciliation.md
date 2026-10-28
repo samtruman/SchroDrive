@@ -12,9 +12,12 @@ or `ARR_DOWNLOADS_PATH/sonarr`, then submits `DownloadedMoviesScan` or
 rename, and import. SchroDrive does not invent a canonical folder for this
 path.
 
-Before the scan command is sent, SchröDrive waits for every file in the provider
-tree to become visible and readable through the mounted provider path. The wait
-uses PROVIDER_RECONCILIATION_MOUNT_READY_TIMEOUT_MS (default 30 seconds) and
+Before the scan command is sent, SchröDrive waits for every media file in the
+provider tree to become visible and readable through the mounted provider path.
+Video files are authoritative for readiness; subtitle, poster, and other
+sidecar files are optional because the WebDAV bridge may expose them later or
+not expose them at all. The wait uses
+PROVIDER_RECONCILIATION_MOUNT_READY_TIMEOUT_MS (default 30 seconds) and
 PROVIDER_RECONCILIATION_MOUNT_READY_POLL_MS (default 500 ms). If the mount is
 still stale after the timeout, the event is deferred instead of sending ARR an
 empty staging directory. Before polling, the local WebDAV bridge refresh endpoint
