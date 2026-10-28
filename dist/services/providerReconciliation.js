@@ -14,6 +14,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ProviderReconciliationWorker = exports.ProviderReconciliationIntake = exports.ProviderSnapshotSource = exports.HttpArrClient = exports.SqliteIntakeStateStore = exports.InMemoryIntakeStateStore = void 0;
 exports.propagateDeletedFile = propagateDeletedFile;
 exports.isMediaFile = isMediaFile;
+exports.isVideoFile = isVideoFile;
 const node_crypto_1 = require("node:crypto");
 const node_fs_1 = require("node:fs");
 const node_path_1 = __importDefault(require("node:path"));
@@ -296,7 +297,8 @@ async function exposeAsArrStaging(route, event) {
     const prefix = eventPath.endsWith(firstTreePath)
         ? eventPath.slice(0, -firstTreePath.length)
         : `${node_path_1.default.dirname(eventPath).replace(/\\/g, '/')}/`;
-    const files = event.tree.length > 0 ? event.tree : [{ path: node_path_1.default.basename(event.path), size: 0 }];
+    const videoFiles = event.tree.filter((file) => isVideoFile(file.path));
+    const files = videoFiles.length > 0 ? videoFiles : (event.tree.length > 0 ? event.tree : [{ path: node_path_1.default.basename(event.path), size: 0 }]);
     await node_fs_1.promises.mkdir(stagingDirectory, { recursive: true });
     for (const file of files) {
         const relativeFile = String(file.path).replace(/^[/\\]+/, '');
@@ -394,7 +396,8 @@ function providerTreePaths(route, event) {
     const prefix = eventPath.endsWith(firstTreePath)
         ? eventPath.slice(0, -firstTreePath.length)
         : node_path_1.default.dirname(eventPath).replace(/\\/g, "/") + "/";
-    const files = event.tree.length > 0 ? event.tree : [{ path: node_path_1.default.basename(event.path), size: 0 }];
+    const videoFiles = event.tree.filter((file) => isVideoFile(file.path));
+    const files = videoFiles.length > 0 ? videoFiles : (event.tree.length > 0 ? event.tree : [{ path: node_path_1.default.basename(event.path), size: 0 }]);
     const sourceRoot = route.sourcePathPrefix.replace(/\/$/, "");
     return files.map((file) => {
         const relativeFile = String(file.path).replace(/^[/\\]+/, "");
@@ -502,6 +505,10 @@ const SUBTITLE_EXTENSIONS = new Set(['ass', 'idx', 'mpsub', 'sbv', 'smi', 'srt',
 function isMediaFile(filePath) {
     const extension = filePath.split('.').pop()?.toLowerCase() || '';
     return VIDEO_EXTENSIONS.has(extension) || SUBTITLE_EXTENSIONS.has(extension);
+}
+function isVideoFile(filePath) {
+    const extension = filePath.split('.').pop()?.toLowerCase() || '';
+    return VIDEO_EXTENSIONS.has(extension);
 }
 function categoryFor(snapshot) {
     return (0, mediaClassifier_1.classifyTorrent)(snapshot.name, snapshot.files.map((file) => file.path)) === 'shows' ? 'Shows' : 'Movies';

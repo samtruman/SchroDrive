@@ -378,7 +378,10 @@ async function exposeAsArrStaging(route: ArrRoute, event: DirectFileEvent): Prom
   const prefix = eventPath.endsWith(firstTreePath)
     ? eventPath.slice(0, -firstTreePath.length)
     : `${path.dirname(eventPath).replace(/\\/g, '/')}/`;
-  const files = event.tree.length > 0 ? event.tree : [{ path: path.basename(event.path), size: 0 }];
+  const videoFiles = event.tree.filter((file) => isVideoFile(file.path));
+  const files = videoFiles.length > 0
+    ? videoFiles
+    : (event.tree.length > 0 ? event.tree : [{ path: path.basename(event.path), size: 0 }]);
 
   await fsp.mkdir(stagingDirectory, { recursive: true });
   for (const file of files) {
@@ -465,7 +468,10 @@ function providerTreePaths(route: ArrRoute, event: DirectFileEvent): string[] {
   const prefix = eventPath.endsWith(firstTreePath)
     ? eventPath.slice(0, -firstTreePath.length)
     : path.dirname(eventPath).replace(/\\/g, "/") + "/";
-  const files = event.tree.length > 0 ? event.tree : [{ path: path.basename(event.path), size: 0 }];
+  const videoFiles = event.tree.filter((file) => isVideoFile(file.path));
+  const files = videoFiles.length > 0
+    ? videoFiles
+    : (event.tree.length > 0 ? event.tree : [{ path: path.basename(event.path), size: 0 }]);
   const sourceRoot = route.sourcePathPrefix.replace(/\/$/, "");
   return files.map((file) => {
     const relativeFile = String(file.path).replace(/^[/\\]+/, "");
@@ -587,6 +593,11 @@ const SUBTITLE_EXTENSIONS = new Set(['ass', 'idx', 'mpsub', 'sbv', 'smi', 'srt',
 export function isMediaFile(filePath: string): boolean {
   const extension = filePath.split('.').pop()?.toLowerCase() || '';
   return VIDEO_EXTENSIONS.has(extension) || SUBTITLE_EXTENSIONS.has(extension);
+}
+
+export function isVideoFile(filePath: string): boolean {
+  const extension = filePath.split('.').pop()?.toLowerCase() || '';
+  return VIDEO_EXTENSIONS.has(extension);
 }
 
 function categoryFor(snapshot: ProviderSnapshot): SourceCategory {

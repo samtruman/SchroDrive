@@ -12,6 +12,7 @@ import {
   type ArrCommandResult,
   type DirectFileEvent,
   isMediaFile,
+  isVideoFile,
   ProviderSnapshotSource,
   ProviderReconciliationWorker,
   HttpArrClient,
@@ -227,6 +228,11 @@ describe('provider reconciliation direct intake', () => {
     const events = await intake.reconcile();
     expect(names.filter(isMediaFile)).toHaveLength(10);
     expect(events[0].tree.map((file) => file.path)).toEqual(names.slice(0, 10));
+  });
+
+  test('distinguishes required video files from optional subtitle sidecars', async () => {
+    expect(isVideoFile('Example.mp4')).toBe(true);
+    expect(isVideoFile('Example.srt')).toBe(false);
   });
 
   test('restarts from persisted state and polls the pending Arr command', async () => {
