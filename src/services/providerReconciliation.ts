@@ -61,8 +61,6 @@ export interface ArrRoute {
   mountReadyTimeoutMs?: number;
   /** Poll interval while waiting for the provider mount. */
   mountReadyPollMs?: number;
-  /** Optional local endpoint used to invalidate the WebDAV mount cache. */
-  mountRefreshUrl?: string;
 }
 
 export interface ArrCommandResult {
@@ -76,7 +74,7 @@ export interface ArrClient {
   getCommand(route: ArrRoute, commandId: string): Promise<ArrCommandResult>;
 }
 
-class ProviderMountNotReadyError extends Error {
+export class ProviderMountNotReadyError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ProviderMountNotReadyError";
@@ -96,6 +94,9 @@ export interface IntakeStateStore {
   saveItem(state: IntakeState): void;
   hasEvent(key: string): boolean;
   saveEvent(event: DirectFileEvent, arr?: ArrCommandResult): void;
+  saveDeferred(event: DirectFileEvent): void;
+  listDeferred(): DirectFileEvent[];
+  clearDeferred(key: string): void;
   getCursor(): { recentAt?: string; fullAt?: string };
   saveCursor(mode: 'recent' | 'full', observedAt: string): void;
 }
@@ -116,6 +117,7 @@ export interface IntakeState {
 export class InMemoryIntakeStateStore implements IntakeStateStore {
   private readonly items = new Map<string, IntakeState>();
   private readonly events = new Map<string, DirectFileEvent>();
+  private readonly deferred = new Map<string, DirectFileEvent>();
   private cursor: { recentAt?: string; fullAt?: string } = {};
 
   getItem(id: string): IntakeState | undefined { return this.items.get(id); }
@@ -123,6 +125,9 @@ export class InMemoryIntakeStateStore implements IntakeStateStore {
   saveItem(state: IntakeState): void { this.items.set(state.providerItemId, state); }
   hasEvent(key: string): boolean { return this.events.has(key); }
   saveEvent(event: DirectFileEvent): void { this.events.set(event.stableDedupeKey, event); }
+  saveDeferred(event: DirectFileEvent): void { this.deferred.set(event.stableDedupeKey, event); }
+  listDeferred(): DirectFileEvent[] { return [...this.deferred.values()]; }
+  clearDeferred(key: string): void { this.deferred.delete(key); }
   getCursor(): { recentAt?: string; fullAt?: string } { return { ...this.cursor }; }
   saveCursor(mode: 'recent' | 'full', observedAt: string): void { this.cursor[mode === 'recent' ? 'recentAt' : 'fullAt'] = observedAt; }
 }
@@ -140,6 +145,11 @@ export class SqliteIntakeStateStore implements IntakeStateStore {
       event_json TEXT NOT NULL,
       arr_json TEXT,
       created_at INTEGER NOT NULL
+    )`);
+    getDb().exec(`CREATE TABLE IF NOT EXISTS provider_reconciliation_pending (
+      dedupe_key TEXT PRIMARY KEY,
+      event_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
     )`);
     getDb().exec(`CREATE TABLE IF NOT EXISTS provider_reconciliation_cursor (
       name TEXT PRIMARY KEY,
@@ -165,6 +175,18 @@ export class SqliteIntakeStateStore implements IntakeStateStore {
   saveEvent(event: DirectFileEvent, arr?: ArrCommandResult): void {
     getDb().prepare(`INSERT OR IGNORE INTO provider_reconciliation_events(dedupe_key,event_json,arr_json,created_at)
       VALUES (?,?,?,?)`).run(event.stableDedupeKey, JSON.stringify(event), arr ? JSON.stringify(arr) : null, Date.parse(event.observedAt));
+  }
+  saveDeferred(event: DirectFileEvent): void {
+    getDb().prepare(`INSERT INTO provider_reconciliation_pending(dedupe_key,event_json,updated_at)
+      VALUES (?,?,?) ON CONFLICT(dedupe_key) DO UPDATE SET event_json=excluded.event_json,updated_at=excluded.updated_at`)
+      .run(event.stableDedupeKey, JSON.stringify(event), Date.parse(event.observedAt));
+  }
+  listDeferred(): DirectFileEvent[] {
+    return (getDb().prepare('SELECT event_json FROM provider_reconciliation_pending ORDER BY updated_at').all() as Array<{ event_json: string }>)
+      .flatMap((row) => { try { return [JSON.parse(row.event_json) as DirectFileEvent]; } catch { return []; } });
+  }
+  clearDeferred(key: string): void {
+    getDb().prepare('DELETE FROM provider_reconciliation_pending WHERE dedupe_key = ?').run(key);
   }
   getCursor(): { recentAt?: string; fullAt?: string } {
     const rows = getDb().prepare('SELECT name, observed_at FROM provider_reconciliation_cursor').all() as Array<{ name: string; observed_at: string }>;
@@ -406,14 +428,6 @@ async function exposeAsArrStaging(route: ArrRoute, event: DirectFileEvent): Prom
 }
 
 async function refreshProviderMount(route: ArrRoute, event?: DirectFileEvent): Promise<void> {
-  if (route.mountRefreshUrl) {
-    try {
-      const response = await fetch(route.mountRefreshUrl, { method: "POST" });
-      if (!response.ok) console.warn("[provider-reconciliation] provider mount refresh returned HTTP " + response.status);
-    } catch (error) {
-      console.warn("[provider-reconciliation] provider mount refresh unavailable; continuing with rclone/readiness refresh", error);
-    }
-  }
   if (!event || config.mountRcloneRcPort <= 0 || !route.sourcePathPrefix) return;
   const providerName = path.basename(route.sourcePathPrefix);
   const providerIndex = Math.max(0, config.providers.indexOf(providerName));
@@ -629,6 +643,24 @@ export class ProviderReconciliationIntake {
 
   async reconcile(mode: 'recent' | 'full' = 'full', recentLimit = 30): Promise<DirectFileEvent[]> {
     await this.pollPendingCommands();
+    const deferred = this.store.listDeferred();
+    const deferredIds = new Set(deferred.map((event) => event.providerItemId));
+    const events: DirectFileEvent[] = [];
+    for (const event of deferred) {
+      const item = this.store.getItem(event.providerItemId);
+      const replayed = await this.dispatch(event, {
+        provider: event.provider,
+        providerItemId: event.providerItemId,
+        name: path.basename(event.path),
+        status: 'finished',
+        files: event.tree,
+        observedAt: event.observedAt,
+      }, item?.fingerprint || fingerprint({ providerItemId: event.providerItemId, status: 'finished', files: event.tree }), true);
+      if (replayed) {
+        this.store.clearDeferred(event.stableDedupeKey);
+        events.push(event);
+      }
+    }
     const knownProviderItemIds = mode === 'recent'
       ? this.store.listItems().filter((item) => item.lastAction !== 'deleted').map((item) => item.providerItemId)
       : [];
@@ -636,9 +668,8 @@ export class ProviderReconciliationIntake {
       ? await this.source.listRecentSnapshot(recentLimit, knownProviderItemIds)
       : await this.source.listSnapshot();
     const seen = new Set(current.map((item) => item.providerItemId));
-    const events: DirectFileEvent[] = [];
-
     for (const item of current) {
+      if (deferredIds.has(item.providerItemId)) continue;
       if (!isFinished(item) || item.files.length === 0) continue;
       item.files = item.files.filter((file) => isMediaFile(file.path));
       if (item.files.length === 0) continue;
@@ -652,8 +683,8 @@ export class ProviderReconciliationIntake {
       const retryPendingReview = Boolean(retryEvent && this.options.shouldRetry?.(retryEvent));
       if (!action && !retryPendingReview) continue;
       const event = action ? this.makeEvent(item, action, nextFingerprint) : retryEvent!;
-      await this.dispatch(event, item, nextFingerprint, retryPendingReview);
-      events.push(event);
+      const dispatched = await this.dispatch(event, item, nextFingerprint, retryPendingReview);
+      if (dispatched) events.push(event);
     }
 
     // A missing status-list item is a removal, but an item still processing is not.
@@ -731,17 +762,17 @@ export class ProviderReconciliationIntake {
     };
   }
 
-  private async dispatch(event: DirectFileEvent, item: ProviderSnapshot, fp: string, forceRetry = false): Promise<void> {
+  private async dispatch(event: DirectFileEvent, item: ProviderSnapshot, fp: string, forceRetry = false): Promise<boolean> {
     const previous = this.store.getItem(event.providerItemId);
     // A provider may reuse an ID after deletion. The same file tree then has
     // the same fingerprint, but it is a new physical lifecycle and must be
     // delivered again to ARR.
-    if (!forceRetry && this.store.hasEvent(event.stableDedupeKey) && previous?.lastAction !== 'deleted') return;
+    if (!forceRetry && this.store.hasEvent(event.stableDedupeKey) && previous?.lastAction !== 'deleted') return true;
     await this.options.onEvent?.(event);
     if (this.options.dryRun) {
       this.store.saveEvent(event);
       this.store.saveItem({ provider: event.provider, providerItemId: item.providerItemId, fingerprint: fp, path: event.path, tree: event.tree, sourceCategory: event.sourceCategory, lastAction: event.action, updatedAt: event.observedAt });
-      return;
+      return true;
     }
     const route = this.options.routeFor(event.sourceCategory, event.provider);
     let lastError: unknown;
@@ -751,11 +782,12 @@ export class ProviderReconciliationIntake {
         this.store.saveEvent(event, command);
         this.store.saveItem({ provider: event.provider, providerItemId: item.providerItemId, fingerprint: fp, path: event.path, tree: event.tree, sourceCategory: event.sourceCategory, lastAction: event.action, commandId: command.commandId, terminalStatus: command.status, updatedAt: event.observedAt });
         await this.options.onSuccess?.(event);
-        return;
+        return true;
       } catch (error) {
         if (error instanceof ProviderMountNotReadyError) {
           console.warn("[provider-reconciliation] mount not ready; deferring ARR scan", error.message);
-          return;
+          this.store.saveDeferred(event);
+          return false;
         }
         lastError = error;
       }

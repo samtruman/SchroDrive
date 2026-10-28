@@ -16,6 +16,7 @@ import {
   ProviderSnapshotSource,
   ProviderReconciliationWorker,
   HttpArrClient,
+  ProviderMountNotReadyError,
 } from '../../src/services/providerReconciliation';
 
 function snapshot(id: string, name: string, files = [{ path: `${name}.mkv`, size: 10 }]): ProviderSnapshot {
@@ -37,6 +38,14 @@ class FakeArr implements ArrClient {
   async getCommand(_route: any, commandId: string): Promise<ArrCommandResult> {
     this.polled.push(commandId);
     return { commandId, status: 'completed', result: 'successful' };
+  }
+}
+
+class MountDelayedArr extends FakeArr {
+  ready = false;
+  async submitScan(route: any, event: DirectFileEvent): Promise<ArrCommandResult> {
+    if (!this.ready) throw new ProviderMountNotReadyError('mount is still starting');
+    return super.submitScan(route, event);
   }
 }
 
@@ -177,6 +186,26 @@ describe('provider reconciliation direct intake', () => {
     expect(second).toHaveLength(1);
     expect(second[0].action).toBe('changed');
     expect(second[0].stableDedupeKey).not.toBe((await intake.reconcile())[0]?.stableDedupeKey);
+  });
+
+  test('persists mount-deferred events and retries them after the cursor advances', async () => {
+    const store = new InMemoryIntakeStateStore();
+    const arr = new MountDelayedArr();
+    const intake = new ProviderReconciliationIntake(
+      new SequenceSource([[snapshot('m-deferred', 'Movie (2026)')], [snapshot('m-deferred', 'Movie (2026)')]]),
+      arr, store, { routeFor },
+    );
+
+    expect(await intake.reconcile()).toEqual([]);
+    expect(store.listDeferred()).toHaveLength(1);
+    expect(store.getCursor().fullAt).toBeDefined();
+
+    arr.ready = true;
+    const replayed = await intake.reconcile();
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0].providerItemId).toBe('m-deferred');
+    expect(store.listDeferred()).toHaveLength(0);
+    expect(arr.submitted).toHaveLength(1);
   });
 
   test('suppresses duplicate delivery and emits deletion from a missing status item', async () => {

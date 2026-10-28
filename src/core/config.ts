@@ -119,7 +119,6 @@ export const config = {
   providerReconciliationMountBase: process.env.PROVIDER_RECONCILIATION_MOUNT_BASE || "/mnt/schrodrive",
   providerReconciliationMountReadyTimeoutMs: Number(process.env.PROVIDER_RECONCILIATION_MOUNT_READY_TIMEOUT_MS || 30000),
   providerReconciliationMountReadyPollMs: Number(process.env.PROVIDER_RECONCILIATION_MOUNT_READY_POLL_MS || 500),
-  providerReconciliationMountRefreshUrl: process.env.PROVIDER_RECONCILIATION_MOUNT_REFRESH_URL || "http://127.0.0.1:8978/api/webdav/refresh",
   providerReconciliationMoviesLibraryPath: process.env.PROVIDER_RECONCILIATION_MOVIES_LIBRARY_PATH || "",
   providerReconciliationShowsLibraryPath: process.env.PROVIDER_RECONCILIATION_SHOWS_LIBRARY_PATH || "",
   // AllDebrid WebDAV (if supported)

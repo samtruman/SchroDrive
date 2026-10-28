@@ -19,9 +19,10 @@ sidecar files are optional because the WebDAV bridge may expose them later or
 not expose them at all. The wait uses
 PROVIDER_RECONCILIATION_MOUNT_READY_TIMEOUT_MS (default 30 seconds) and
 PROVIDER_RECONCILIATION_MOUNT_READY_POLL_MS (default 500 ms). If the mount is
-still stale after the timeout, the event is deferred instead of sending ARR an
-empty staging directory. Before polling, the local WebDAV bridge refresh endpoint
-is called so a newly-added provider item can invalidate the directory cache.
+still stale after the timeout, the event is persisted in the reconciliation
+pending queue instead of sending ARR an empty staging directory. The next
+reconciliation cycle retries that exact event; advancing the cursor never
+discards a deferred provider item.
 
 At process startup, when `RUN_MOUNT=true`, SchröDrive also waits for the mount
 roots themselves to be real, readable mountpoints before starting the organizer
@@ -163,13 +164,15 @@ The older generic `REFRESH_LIBRARY_ON_ADD` setting is not the control for this
 path. It must not be used as a substitute for the server-specific settings.
 
 
-### Mount readiness and rclone refresh
+### Mount readiness and targeted rclone refresh
 
-Before submitting a direct file to Radarr or Sonarr, reconciliation refreshes
-the provider WebDAV bridge and requests a targeted rclone VFS refresh. Set
+Before submitting a direct file to Radarr or Sonarr, reconciliation requests a
+targeted rclone VFS refresh for the provider directory and then waits for the
+specific media files to become readable. It does not call the global WebDAV
+bridge refresh endpoint, which would reload every provider item for every ARR
+request. Set
 `MOUNT_RCLONE_RC_PORT` (for example `5579`) to enable rclone's local RC
 endpoint; the mount process starts it on loopback only.
-`PROVIDER_RECONCILIATION_MOUNT_REFRESH_URL` refreshes the bridge, while the RC
-refresh invalidates the mount directory cache. Reconciliation then waits for
-the provider files to become readable, bounded by
+The RC refresh invalidates only the relevant mount directory cache.
+Reconciliation then waits for the provider files to become readable, bounded by
 `PROVIDER_RECONCILIATION_MOUNT_READY_TIMEOUT_MS`.

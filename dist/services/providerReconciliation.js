@@ -11,7 +11,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ProviderReconciliationWorker = exports.ProviderReconciliationIntake = exports.ProviderSnapshotSource = exports.HttpArrClient = exports.SqliteIntakeStateStore = exports.InMemoryIntakeStateStore = void 0;
+exports.ProviderReconciliationWorker = exports.ProviderReconciliationIntake = exports.ProviderSnapshotSource = exports.HttpArrClient = exports.SqliteIntakeStateStore = exports.InMemoryIntakeStateStore = exports.ProviderMountNotReadyError = void 0;
 exports.propagateDeletedFile = propagateDeletedFile;
 exports.isMediaFile = isMediaFile;
 exports.isVideoFile = isVideoFile;
@@ -31,10 +31,12 @@ class ProviderMountNotReadyError extends Error {
         this.name = "ProviderMountNotReadyError";
     }
 }
+exports.ProviderMountNotReadyError = ProviderMountNotReadyError;
 class InMemoryIntakeStateStore {
     constructor() {
         this.items = new Map();
         this.events = new Map();
+        this.deferred = new Map();
         this.cursor = {};
     }
     getItem(id) { return this.items.get(id); }
@@ -42,6 +44,9 @@ class InMemoryIntakeStateStore {
     saveItem(state) { this.items.set(state.providerItemId, state); }
     hasEvent(key) { return this.events.has(key); }
     saveEvent(event) { this.events.set(event.stableDedupeKey, event); }
+    saveDeferred(event) { this.deferred.set(event.stableDedupeKey, event); }
+    listDeferred() { return [...this.deferred.values()]; }
+    clearDeferred(key) { this.deferred.delete(key); }
     getCursor() { return { ...this.cursor }; }
     saveCursor(mode, observedAt) { this.cursor[mode === 'recent' ? 'recentAt' : 'fullAt'] = observedAt; }
 }
@@ -59,6 +64,11 @@ class SqliteIntakeStateStore {
       event_json TEXT NOT NULL,
       arr_json TEXT,
       created_at INTEGER NOT NULL
+    )`);
+        (0, db_1.getDb)().exec(`CREATE TABLE IF NOT EXISTS provider_reconciliation_pending (
+      dedupe_key TEXT PRIMARY KEY,
+      event_json TEXT NOT NULL,
+      updated_at INTEGER NOT NULL
     )`);
         (0, db_1.getDb)().exec(`CREATE TABLE IF NOT EXISTS provider_reconciliation_cursor (
       name TEXT PRIMARY KEY,
@@ -89,6 +99,23 @@ class SqliteIntakeStateStore {
     saveEvent(event, arr) {
         (0, db_1.getDb)().prepare(`INSERT OR IGNORE INTO provider_reconciliation_events(dedupe_key,event_json,arr_json,created_at)
       VALUES (?,?,?,?)`).run(event.stableDedupeKey, JSON.stringify(event), arr ? JSON.stringify(arr) : null, Date.parse(event.observedAt));
+    }
+    saveDeferred(event) {
+        (0, db_1.getDb)().prepare(`INSERT INTO provider_reconciliation_pending(dedupe_key,event_json,updated_at)
+      VALUES (?,?,?) ON CONFLICT(dedupe_key) DO UPDATE SET event_json=excluded.event_json,updated_at=excluded.updated_at`)
+            .run(event.stableDedupeKey, JSON.stringify(event), Date.parse(event.observedAt));
+    }
+    listDeferred() {
+        return (0, db_1.getDb)().prepare('SELECT event_json FROM provider_reconciliation_pending ORDER BY updated_at').all()
+            .flatMap((row) => { try {
+            return [JSON.parse(row.event_json)];
+        }
+        catch {
+            return [];
+        } });
+    }
+    clearDeferred(key) {
+        (0, db_1.getDb)().prepare('DELETE FROM provider_reconciliation_pending WHERE dedupe_key = ?').run(key);
     }
     getCursor() {
         const rows = (0, db_1.getDb)().prepare('SELECT name, observed_at FROM provider_reconciliation_cursor').all();
@@ -298,7 +325,9 @@ async function exposeAsArrStaging(route, event) {
         ? eventPath.slice(0, -firstTreePath.length)
         : `${node_path_1.default.dirname(eventPath).replace(/\\/g, '/')}/`;
     const videoFiles = event.tree.filter((file) => isVideoFile(file.path));
-    const files = videoFiles.length > 0 ? videoFiles : (event.tree.length > 0 ? event.tree : [{ path: node_path_1.default.basename(event.path), size: 0 }]);
+    const files = videoFiles.length > 0
+        ? videoFiles
+        : (event.tree.length > 0 ? event.tree : [{ path: node_path_1.default.basename(event.path), size: 0 }]);
     await node_fs_1.promises.mkdir(stagingDirectory, { recursive: true });
     for (const file of files) {
         const relativeFile = String(file.path).replace(/^[/\\]+/, '');
@@ -323,16 +352,6 @@ async function exposeAsArrStaging(route, event) {
     return stagingDirectory;
 }
 async function refreshProviderMount(route, event) {
-    if (route.mountRefreshUrl) {
-        try {
-            const response = await fetch(route.mountRefreshUrl, { method: "POST" });
-            if (!response.ok)
-                console.warn("[provider-reconciliation] provider mount refresh returned HTTP " + response.status);
-        }
-        catch (error) {
-            console.warn("[provider-reconciliation] provider mount refresh unavailable; continuing with rclone/readiness refresh", error);
-        }
-    }
     if (!event || config_1.config.mountRcloneRcPort <= 0 || !route.sourcePathPrefix)
         return;
     const providerName = node_path_1.default.basename(route.sourcePathPrefix);
@@ -397,7 +416,9 @@ function providerTreePaths(route, event) {
         ? eventPath.slice(0, -firstTreePath.length)
         : node_path_1.default.dirname(eventPath).replace(/\\/g, "/") + "/";
     const videoFiles = event.tree.filter((file) => isVideoFile(file.path));
-    const files = videoFiles.length > 0 ? videoFiles : (event.tree.length > 0 ? event.tree : [{ path: node_path_1.default.basename(event.path), size: 0 }]);
+    const files = videoFiles.length > 0
+        ? videoFiles
+        : (event.tree.length > 0 ? event.tree : [{ path: node_path_1.default.basename(event.path), size: 0 }]);
     const sourceRoot = route.sourcePathPrefix.replace(/\/$/, "");
     return files.map((file) => {
         const relativeFile = String(file.path).replace(/^[/\\]+/, "");
@@ -534,6 +555,24 @@ class ProviderReconciliationIntake {
     }
     async reconcile(mode = 'full', recentLimit = 30) {
         await this.pollPendingCommands();
+        const deferred = this.store.listDeferred();
+        const deferredIds = new Set(deferred.map((event) => event.providerItemId));
+        const events = [];
+        for (const event of deferred) {
+            const item = this.store.getItem(event.providerItemId);
+            const replayed = await this.dispatch(event, {
+                provider: event.provider,
+                providerItemId: event.providerItemId,
+                name: node_path_1.default.basename(event.path),
+                status: 'finished',
+                files: event.tree,
+                observedAt: event.observedAt,
+            }, item?.fingerprint || fingerprint({ providerItemId: event.providerItemId, status: 'finished', files: event.tree }), true);
+            if (replayed) {
+                this.store.clearDeferred(event.stableDedupeKey);
+                events.push(event);
+            }
+        }
         const knownProviderItemIds = mode === 'recent'
             ? this.store.listItems().filter((item) => item.lastAction !== 'deleted').map((item) => item.providerItemId)
             : [];
@@ -541,8 +580,9 @@ class ProviderReconciliationIntake {
             ? await this.source.listRecentSnapshot(recentLimit, knownProviderItemIds)
             : await this.source.listSnapshot();
         const seen = new Set(current.map((item) => item.providerItemId));
-        const events = [];
         for (const item of current) {
+            if (deferredIds.has(item.providerItemId))
+                continue;
             if (!isFinished(item) || item.files.length === 0)
                 continue;
             item.files = item.files.filter((file) => isMediaFile(file.path));
@@ -559,8 +599,9 @@ class ProviderReconciliationIntake {
             if (!action && !retryPendingReview)
                 continue;
             const event = action ? this.makeEvent(item, action, nextFingerprint) : retryEvent;
-            await this.dispatch(event, item, nextFingerprint, retryPendingReview);
-            events.push(event);
+            const dispatched = await this.dispatch(event, item, nextFingerprint, retryPendingReview);
+            if (dispatched)
+                events.push(event);
         }
         // A missing status-list item is a removal, but an item still processing is not.
         // Recent scans include every persisted provider ID in their lightweight
@@ -643,12 +684,12 @@ class ProviderReconciliationIntake {
         // the same fingerprint, but it is a new physical lifecycle and must be
         // delivered again to ARR.
         if (!forceRetry && this.store.hasEvent(event.stableDedupeKey) && previous?.lastAction !== 'deleted')
-            return;
+            return true;
         await this.options.onEvent?.(event);
         if (this.options.dryRun) {
             this.store.saveEvent(event);
             this.store.saveItem({ provider: event.provider, providerItemId: item.providerItemId, fingerprint: fp, path: event.path, tree: event.tree, sourceCategory: event.sourceCategory, lastAction: event.action, updatedAt: event.observedAt });
-            return;
+            return true;
         }
         const route = this.options.routeFor(event.sourceCategory, event.provider);
         let lastError;
@@ -658,12 +699,13 @@ class ProviderReconciliationIntake {
                 this.store.saveEvent(event, command);
                 this.store.saveItem({ provider: event.provider, providerItemId: item.providerItemId, fingerprint: fp, path: event.path, tree: event.tree, sourceCategory: event.sourceCategory, lastAction: event.action, commandId: command.commandId, terminalStatus: command.status, updatedAt: event.observedAt });
                 await this.options.onSuccess?.(event);
-                return;
+                return true;
             }
             catch (error) {
                 if (error instanceof ProviderMountNotReadyError) {
                     console.warn("[provider-reconciliation] mount not ready; deferring ARR scan", error.message);
-                    return;
+                    this.store.saveDeferred(event);
+                    return false;
                 }
                 lastError = error;
             }
