@@ -84,6 +84,25 @@ afterEach(() => {
     expect(String(calls[1].body)).toContain('id%5B%5D=789');
   });
 
+  test('exposes a file tree already ready while AllDebrid status is still finalising', async () => {
+    axiosIPv4.post = async (url: string, body: any) => {
+      calls.push({ url, body });
+      if (url.includes('/magnet/status')) {
+        return response({ magnets: [{ id: 790, filename: 'Dog.Stars.2160p.mkv', statusCode: 1 }] });
+      }
+      return response({ magnets: [{
+        id: 790,
+        files: [{ n: 'Dog.Stars.2160p.mkv', s: 2160, l: 'https://alldebrid.test/dog-stars-2160' }],
+      }] });
+    };
+
+    const dirs = await new AllDebridProvider().fetchDirectories();
+
+    expect(dirs).toHaveLength(1);
+    expect(dirs[0].name).toBe('Dog.Stars.2160p.mkv');
+    expect(dirs[0].files).toEqual([{ id: 'Dog.Stars.2160p.mkv', name: 'Dog.Stars.2160p.mkv', size: 2160 }]);
+  });
+
   test('coalesces concurrent list and directory status requests', async () => {
     let statusCalls = 0;
     let fileTreeCalls = 0;

@@ -36,6 +36,14 @@ export async function createMagnetBackup(providerId: string, mode: MagnetBackupM
   const record: MagnetBackupRecord = { id, mode, provider: provider.id, createdAt: now, itemCount: manifest.items.length, magnetCount: manifest.magnetCount, sha256, file, baseBackupId: document.baseBackupId, added, modified, removed, valid: true }; atomicWrite(indexPath(), [record, ...records].slice(0, 1000)); return record;
 }
 export function listMagnetBackups(providerId?: string): MagnetBackupRecord[] { return readIndex().filter((record) => !providerId || record.provider === providerId).map((record) => ({ ...record, file: path.basename(record.file) })); }
+export function getMagnetBackupFile(id: string): { record: MagnetBackupRecord; file: string } | undefined {
+  const record = readIndex().find((item) => item.id === id);
+  if (!record) return undefined;
+  const file = path.resolve(record.file);
+  const backupRoot = `${path.resolve(root())}${path.sep}`;
+  if (!file.startsWith(backupRoot) || !fs.existsSync(file)) return undefined;
+  return { record, file };
+}
 export function readMagnetBackup(id: string): MagnetBackupDocument | undefined { const record = readIndex().find((item) => item.id === id); if (!record) return undefined; try { return JSON.parse(fs.readFileSync(record.file, "utf8")) as MagnetBackupDocument; } catch { return undefined; } }
 export function verifyMagnetBackup(id: string): { valid: boolean; reason?: string; sha256?: string } { const record = readIndex().find((item) => item.id === id); if (!record) return { valid: false, reason: "Backup not found" }; try { const sha256 = crypto.createHash("sha256").update(fs.readFileSync(record.file)).digest("hex"); return sha256 === record.sha256 ? { valid: true, sha256 } : { valid: false, sha256, reason: "Manifest checksum mismatch" }; } catch { return { valid: false, reason: "Manifest unavailable" }; } }
 function configuredCronTime(): string {

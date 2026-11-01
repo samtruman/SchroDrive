@@ -52,7 +52,7 @@ import { migrationRouteLevel, providerMigrationCapabilities } from "./services/p
 import { listMigrationAudit, listVersionManagerDeleteAudit, recordAcquisitionAudit, recordMigrationAudit, recordVersionManagerDeleteAudit } from "./core/db";
 import { buildUnifiedReviewQueue, setVersionManagerReviewDismissed } from "./services/unifiedReview";
 import { getVersionManagerScanRuntimeStatus, getVersionManagerScanStatus, startVersionManagerScan } from "./services/versionManagerScanJob";
-import { createMagnetBackup, deleteMagnetBackup, getMagnetBackupSchedule, listMagnetBackups, magnetBackupDirectory, readMagnetBackup, saveMagnetBackupSchedule, startMagnetBackupScheduler, verifyMagnetBackup } from "./services/magnetBackup";
+import { createMagnetBackup, deleteMagnetBackup, getMagnetBackupFile, getMagnetBackupSchedule, listMagnetBackups, magnetBackupDirectory, readMagnetBackup, saveMagnetBackupSchedule, startMagnetBackupScheduler, verifyMagnetBackup } from "./services/magnetBackup";
 import { buildDeleteImpact } from "./services/deleteImpact";
 import { BatchDeleteExecutionError, ProviderInventoryDriftError, executeVersionManagerDelete, executeVersionManagerDeleteBatch } from "./services/deleteExecutor";
 import { getMigrationJob, listMigrationJobs, startMigrationJob } from "./services/migrationJob";
@@ -668,6 +668,13 @@ export function startServer() {
       const record = await createMagnetBackup(provider, mode);
       res.status(201).json({ ok: true, readOnly: true, record });
     } catch (error: any) { res.status(503).json({ ok: false, error: error?.message || "Magnet backup failed" }); }
+  });
+  app.get("/api/version-manager/magnet-backup/:id/download", (req, res) => {
+    const backup = getMagnetBackupFile(String(req.params.id));
+    if (!backup) return res.status(404).json({ ok: false, error: "Backup file not found" });
+    return res.type("application/json").download(backup.file, path.basename(backup.file), (error) => {
+      if (error && !res.headersSent) res.status(404).json({ ok: false, error: "Backup file could not be downloaded" });
+    });
   });
   app.get("/api/version-manager/magnet-backup/:id", (req, res) => {
     const document = readMagnetBackup(String(req.params.id));
