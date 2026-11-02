@@ -24,6 +24,7 @@ exports.startServer = startServer;
 exports.buildQueryFromPayload = buildQueryFromPayload;
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
+const path_1 = __importDefault(require("path"));
 const config_1 = require("./core/config");
 const index_1 = require("./indexers/index");
 const providers_1 = require("./providers");
@@ -707,6 +708,15 @@ function startServer() {
         catch (error) {
             res.status(503).json({ ok: false, error: error?.message || "Magnet backup failed" });
         }
+    });
+    app.get("/api/version-manager/magnet-backup/:id/download", (req, res) => {
+        const backup = (0, magnetBackup_1.getMagnetBackupFile)(String(req.params.id));
+        if (!backup)
+            return res.status(404).json({ ok: false, error: "Backup file not found" });
+        return res.type("application/json").download(backup.file, path_1.default.basename(backup.file), (error) => {
+            if (error && !res.headersSent)
+                res.status(404).json({ ok: false, error: "Backup file could not be downloaded" });
+        });
     });
     app.get("/api/version-manager/magnet-backup/:id", (req, res) => {
         const document = (0, magnetBackup_1.readMagnetBackup)(String(req.params.id));
