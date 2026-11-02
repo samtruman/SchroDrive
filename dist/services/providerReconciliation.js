@@ -440,21 +440,26 @@ function providerTreePaths(route, event) {
     const defaultCategoryRoot = event.sourceCategory === "Movies" ? "movies" : "shows";
     const eventCategoryRoot = event.path.split(/[\\/]/)[0];
     const categoryRoot = /^(movies|shows)$/i.test(eventCategoryRoot) ? eventCategoryRoot : defaultCategoryRoot;
+    const eventRelativePath = event.path.replace(/^[/\\]+/, "").replace(/\\/g, "/");
+    const categoryPrefix = `${categoryRoot}/`;
+    const withoutCategory = eventRelativePath.toLowerCase().startsWith(categoryPrefix.toLowerCase())
+        ? eventRelativePath.slice(categoryPrefix.length)
+        : eventRelativePath;
+    const firstTreePath = String(files[0]?.path || node_path_1.default.basename(event.path))
+        .replace(/^[/\\]+/, "")
+        .replace(/\\/g, "/");
+    // AllDebrid exposes file paths relative to the torrent directory, while
+    // the WebDAV mount exposes that directory as the first path segment. This
+    // matters for multi-file torrents: `Pack/E01.mkv` in the tree is mounted
+    // at `TorrentName/Pack/E01.mkv`, not at `Pack/E01.mkv`.
+    const torrentPrefix = withoutCategory.endsWith(firstTreePath)
+        ? withoutCategory.slice(0, -firstTreePath.length)
+        : `${node_path_1.default.posix.dirname(withoutCategory).replace(/^\.?\//, "")}/`;
     return files.map((file) => {
         let relativeFile = String(file.path).replace(/^[/\\]+/, "").replace(/\\/g, "/");
         if (relativeFile.startsWith(`${categoryRoot}/`))
             relativeFile = relativeFile.slice(categoryRoot.length + 1);
-        if (!relativeFile.includes("/")) {
-            const eventRelativePath = event.path.replace(/^[/\\]+/, "").replace(/\\/g, "/");
-            const categoryPrefix = `${categoryRoot}/`;
-            const withoutCategory = eventRelativePath.toLowerCase().startsWith(categoryPrefix.toLowerCase())
-                ? eventRelativePath.slice(categoryPrefix.length)
-                : eventRelativePath;
-            const eventDirectory = node_path_1.default.posix.dirname(withoutCategory);
-            if (eventDirectory !== ".")
-                relativeFile = `${eventDirectory}/${relativeFile}`;
-        }
-        return `${sourceRoot}/${categoryRoot}/${relativeFile}`;
+        return `${sourceRoot}/${categoryRoot}/${torrentPrefix}${relativeFile}`;
     });
 }
 async function removeMatchingSymlinks(root, targets) {
