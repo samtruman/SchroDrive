@@ -840,7 +840,14 @@ export class ProviderReconciliationWorker {
 
   constructor(
     private readonly intake: ProviderReconciliationIntake | ProviderReconciliationIntake[],
-    private readonly intervals: { recentMs: number; fullMs: number; recentLimit?: number; runFullOnStart?: boolean },
+    private readonly intervals: {
+      recentMs: number;
+      fullMs: number;
+      recentLimit?: number;
+      runFullOnStart?: boolean;
+      onRecentCompleted?: (events: DirectFileEvent[]) => Promise<void> | void;
+      onFullCompleted?: (events: DirectFileEvent[]) => Promise<void> | void;
+    },
   ) {}
 
   private intakes(): ProviderReconciliationIntake[] { return Array.isArray(this.intake) ? this.intake : [this.intake]; }
@@ -861,10 +868,18 @@ export class ProviderReconciliationWorker {
     return next;
   }
   runRecent(): Promise<DirectFileEvent[]> {
-    return this.enqueue('recent', async () => (await Promise.all(this.intakes().map((intake) => intake.reconcile('recent', this.intervals.recentLimit || 30)))).flat());
+    return this.enqueue('recent', async () => {
+      const events = (await Promise.all(this.intakes().map((intake) => intake.reconcile('recent', this.intervals.recentLimit || 30)))).flat();
+      await this.intervals.onRecentCompleted?.(events);
+      return events;
+    });
   }
   runFull(): Promise<DirectFileEvent[]> {
-    return this.enqueue('full', async () => (await Promise.all(this.intakes().map((intake) => intake.reconcile('full')))).flat());
+    return this.enqueue('full', async () => {
+      const events = (await Promise.all(this.intakes().map((intake) => intake.reconcile('full')))).flat();
+      await this.intervals.onFullCompleted?.(events);
+      return events;
+    });
   }
 
   start(): void {

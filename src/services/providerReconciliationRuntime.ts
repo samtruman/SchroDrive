@@ -114,7 +114,6 @@ export function createProviderReconciliationWorker(): ProviderReconciliationWork
       dryRun: config.providerReconciliationDryRun,
       routeFor: (category, sourceProvider) => category === "Movies" ? providerReconciliationRoutes(sourceProvider || providerId).movies : providerReconciliationRoutes(sourceProvider || providerId).shows,
       onSuccess: async (event) => {
-        await scheduleOrganizerRefresh([event.path]);
         resolveOrganizerReviewAutomatically(event.path, `Provider reconciliation (${event.provider}) matched ARR and completed`);
       },
       onDeleted: async (event) => {
@@ -137,6 +136,15 @@ export function createProviderReconciliationWorker(): ProviderReconciliationWork
   }
   return new ProviderReconciliationWorker(intakes, {
     recentMs: Math.max(1000, config.providerReconciliationRecentIntervalMs), fullMs: Math.max(1000, config.providerReconciliationFullIntervalMs), recentLimit: Math.max(1, config.providerReconciliationRecentLimit), runFullOnStart: config.providerReconciliationRunFullOnStart,
+    onRecentCompleted: async (events) => {
+      if (events.length > 0) await scheduleOrganizerRefresh(events.map((event) => event.path));
+    },
+    onFullCompleted: async () => {
+      const delayMs = Math.max(0, config.organizerReconciliationDelayMs);
+      console.log(`[provider-reconciliation] full scan completed; waiting ${delayMs}ms before organizer reconciliation`);
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await organizeOnce();
+    },
   });
 }
 
@@ -166,7 +174,6 @@ export async function refreshProviderActivity(): Promise<{ events: number; organ
   const events = activeProviderReconciliationWorker
     ? await activeProviderReconciliationWorker.runRecent()
     : [];
-  if (events.length > 0) await organizeOnce({ sourcePaths: events.map((event) => event.path) });
   return { events: events.length, organizerCompleted: true };
 }
 
