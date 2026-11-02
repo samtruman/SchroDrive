@@ -114,7 +114,6 @@ function createProviderReconciliationWorker() {
                 dryRun: config_1.config.providerReconciliationDryRun,
                 routeFor: (category, sourceProvider) => category === "Movies" ? providerReconciliationRoutes(sourceProvider || providerId).movies : providerReconciliationRoutes(sourceProvider || providerId).shows,
                 onSuccess: async (event) => {
-                    await scheduleOrganizerRefresh([event.path]);
                     (0, organizerReview_1.resolveOrganizerReviewAutomatically)(event.path, `Provider reconciliation (${event.provider}) matched ARR and completed`);
                 },
                 onDeleted: async (event) => {
@@ -137,6 +136,17 @@ function createProviderReconciliationWorker() {
     }
     return new providerReconciliation_1.ProviderReconciliationWorker(intakes, {
         recentMs: Math.max(1000, config_1.config.providerReconciliationRecentIntervalMs), fullMs: Math.max(1000, config_1.config.providerReconciliationFullIntervalMs), recentLimit: Math.max(1, config_1.config.providerReconciliationRecentLimit), runFullOnStart: config_1.config.providerReconciliationRunFullOnStart,
+        onRecentCompleted: async (events) => {
+            if (events.length > 0)
+                await scheduleOrganizerRefresh(events.map((event) => event.path));
+        },
+        onFullCompleted: async () => {
+            const delayMs = Math.max(0, config_1.config.organizerReconciliationDelayMs);
+            console.log(`[provider-reconciliation] full scan completed; waiting ${delayMs}ms before organizer reconciliation`);
+            if (delayMs > 0)
+                await new Promise((resolve) => setTimeout(resolve, delayMs));
+            await (0, organizer_1.organizeOnce)();
+        },
     });
 }
 function startProviderReconciliation() {
@@ -164,8 +174,6 @@ async function refreshProviderActivity() {
     const events = activeProviderReconciliationWorker
         ? await activeProviderReconciliationWorker.runRecent()
         : [];
-    if (events.length > 0)
-        await (0, organizer_1.organizeOnce)({ sourcePaths: events.map((event) => event.path) });
     return { events: events.length, organizerCompleted: true };
 }
 /** Registers the worker created during application startup for on-demand refreshes. */

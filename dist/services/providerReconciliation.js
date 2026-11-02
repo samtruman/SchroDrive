@@ -777,10 +777,18 @@ class ProviderReconciliationWorker {
         return next;
     }
     runRecent() {
-        return this.enqueue('recent', async () => (await Promise.all(this.intakes().map((intake) => intake.reconcile('recent', this.intervals.recentLimit || 30)))).flat());
+        return this.enqueue('recent', async () => {
+            const events = (await Promise.all(this.intakes().map((intake) => intake.reconcile('recent', this.intervals.recentLimit || 30)))).flat();
+            await this.intervals.onRecentCompleted?.(events);
+            return events;
+        });
     }
     runFull() {
-        return this.enqueue('full', async () => (await Promise.all(this.intakes().map((intake) => intake.reconcile('full')))).flat());
+        return this.enqueue('full', async () => {
+            const events = (await Promise.all(this.intakes().map((intake) => intake.reconcile('full')))).flat();
+            await this.intervals.onFullCompleted?.(events);
+            return events;
+        });
     }
     start() {
         if (this.recentTimer || this.fullTimer)
