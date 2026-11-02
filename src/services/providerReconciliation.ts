@@ -210,6 +210,37 @@ function providerMountRoot(route: ArrRoute): string {
   return root && existsSync(path.join(root, '__all__')) ? `${root}/__all__` : root;
 }
 
+const mountPathResolutionCache = new Map<string, string>();
+
+async function resolveProviderPath(route: ArrRoute, candidate: string): Promise<string> {
+  const cached = mountPathResolutionCache.get(candidate);
+  if (cached) return cached;
+  try {
+    if ((await fsp.stat(candidate)).isFile()) {
+      mountPathResolutionCache.set(candidate, candidate);
+      return candidate;
+    }
+  } catch {}
+  const root = providerMountRoot(route);
+  if (!root.endsWith('/__all__')) return candidate;
+  const target = path.basename(candidate);
+  async function find(current: string, depth: number): Promise<string | undefined> {
+    const entries = await fsp.readdir(current, { withFileTypes: true }).catch(() => [] as import('node:fs').Dirent[]);
+    for (const entry of entries) {
+      const child = path.join(current, entry.name);
+      if (entry.isFile() && entry.name === target) return child;
+      if (entry.isDirectory() && depth > 0) {
+        const match = await find(child, depth - 1);
+        if (match) return match;
+      }
+    }
+    return undefined;
+  }
+  const resolved = await find(root, 3);
+  if (resolved) mountPathResolutionCache.set(candidate, resolved);
+  return resolved || candidate;
+}
+
 export class HttpArrClient implements ArrClient {
   async submitScan(route: ArrRoute, event: DirectFileEvent): Promise<ArrCommandResult> {
     let commandName = route.kind === 'radarr' ? 'DownloadedMoviesScan' : 'DownloadedEpisodesScan';
@@ -370,6 +401,7 @@ async function resolveCanonicalMetadata(title: string, kind: 'movie' | 'tv', yea
  * target is deliberately a symlink into the shared SchröDrive mount.
  */
 async function exposeAsSymlink(route: ArrRoute, event: DirectFileEvent, providerPath: string, arrPath: string): Promise<string> {
+  providerPath = await resolveProviderPath(route, providerPath);
   const libraryRoot = path.resolve(route.symlinkLibraryPath!);
   const authoritativeRoot = path.resolve(arrPath);
   if (authoritativeRoot !== libraryRoot && !authoritativeRoot.startsWith(`${libraryRoot}${path.sep}`)) {
@@ -422,7 +454,7 @@ async function exposeAsArrStaging(route: ArrRoute, event: DirectFileEvent): Prom
     const relativeFile = String(file.path).replace(/^[/\\]+/, '');
     const providerRelativePath = `${prefix}${relativeFile}`.replace(/\\/g, '/');
     const providerPath = route.sourcePathPrefix
-      ? `${providerMountRoot(route)}/${providerRelativePath}`
+      ? await resolveProviderPath(route, `${providerMountRoot(route)}/${providerRelativePath}`)
       : providerRelativePath;
     const destination = path.join(stagingDirectory, safeRelativeMediaPath(relativeFile));
     await fsp.mkdir(path.dirname(destination), { recursive: true });
@@ -480,7 +512,7 @@ async function waitForProviderMount(route: ArrRoute, event: DirectFileEvent): Pr
     attempts += 1;
     for (const candidate of paths) {
       try {
-        const stat = await fsp.stat(candidate);
+        const stat = await fsp.stat(await resolveProviderPath(route, candidate));
         if (stat.isFile()) {
           missing = missing.filter((value) => value !== candidate);
         } else if (!missing.includes(candidate)) {

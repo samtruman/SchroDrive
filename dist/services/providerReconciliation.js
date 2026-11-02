@@ -127,11 +127,56 @@ class SqliteIntakeStateStore {
     }
 }
 exports.SqliteIntakeStateStore = SqliteIntakeStateStore;
+function providerEventPath(route, event) {
+    const relative = event.path.replace(/^\/+/, '');
+    return providerMountRoot(route) !== route.sourcePathPrefix?.replace(/\/$/, '')
+        ? relative.replace(/^(movies|shows)\//i, '')
+        : relative;
+}
+function providerMountRoot(route) {
+    const root = route.sourcePathPrefix?.replace(/\/$/, '') || '';
+    return root && (0, node_fs_1.existsSync)(node_path_1.default.join(root, '__all__')) ? `${root}/__all__` : root;
+}
+const mountPathResolutionCache = new Map();
+async function resolveProviderPath(route, candidate) {
+    const cached = mountPathResolutionCache.get(candidate);
+    if (cached)
+        return cached;
+    try {
+        if ((await node_fs_1.promises.stat(candidate)).isFile()) {
+            mountPathResolutionCache.set(candidate, candidate);
+            return candidate;
+        }
+    }
+    catch { }
+    const root = providerMountRoot(route);
+    if (!root.endsWith('/__all__'))
+        return candidate;
+    const target = node_path_1.default.basename(candidate);
+    async function find(current, depth) {
+        const entries = await node_fs_1.promises.readdir(current, { withFileTypes: true }).catch(() => []);
+        for (const entry of entries) {
+            const child = node_path_1.default.join(current, entry.name);
+            if (entry.isFile() && entry.name === target)
+                return child;
+            if (entry.isDirectory() && depth > 0) {
+                const match = await find(child, depth - 1);
+                if (match)
+                    return match;
+            }
+        }
+        return undefined;
+    }
+    const resolved = await find(root, 3);
+    if (resolved)
+        mountPathResolutionCache.set(candidate, resolved);
+    return resolved || candidate;
+}
 class HttpArrClient {
     async submitScan(route, event) {
         let commandName = route.kind === 'radarr' ? 'DownloadedMoviesScan' : 'DownloadedEpisodesScan';
         const providerPath = route.sourcePathPrefix
-            ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${event.path.replace(/^\/+/, '')}`
+            ? `${providerMountRoot(route)}/${providerEventPath(route, event)}`
             : event.path;
         if (route.stagingPath) {
             await refreshProviderMount(route, event);
@@ -281,6 +326,7 @@ async function resolveCanonicalMetadata(title, kind, year) {
  * target is deliberately a symlink into the shared SchröDrive mount.
  */
 async function exposeAsSymlink(route, event, providerPath, arrPath) {
+    providerPath = await resolveProviderPath(route, providerPath);
     const libraryRoot = node_path_1.default.resolve(route.symlinkLibraryPath);
     const authoritativeRoot = node_path_1.default.resolve(arrPath);
     if (authoritativeRoot !== libraryRoot && !authoritativeRoot.startsWith(`${libraryRoot}${node_path_1.default.sep}`)) {
@@ -320,7 +366,7 @@ async function exposeAsArrStaging(route, event) {
     const stagingRoot = node_path_1.default.resolve(route.stagingPath);
     const stagingDirectory = node_path_1.default.join(stagingRoot, safeSegment(`${event.provider}-${event.providerItemId}`));
     const firstTreePath = String(event.tree[0]?.path || node_path_1.default.basename(event.path)).replace(/^[/\\]+/, '');
-    const eventPath = event.path.replace(/^[/\\]+/, '');
+    const eventPath = providerEventPath(route, event);
     const prefix = eventPath.endsWith(firstTreePath)
         ? eventPath.slice(0, -firstTreePath.length)
         : `${node_path_1.default.dirname(eventPath).replace(/\\/g, '/')}/`;
@@ -333,7 +379,7 @@ async function exposeAsArrStaging(route, event) {
         const relativeFile = String(file.path).replace(/^[/\\]+/, '');
         const providerRelativePath = `${prefix}${relativeFile}`.replace(/\\/g, '/');
         const providerPath = route.sourcePathPrefix
-            ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${providerRelativePath}`
+            ? await resolveProviderPath(route, `${providerMountRoot(route)}/${providerRelativePath}`)
             : providerRelativePath;
         const destination = node_path_1.default.join(stagingDirectory, safeRelativeMediaPath(relativeFile));
         await node_fs_1.promises.mkdir(node_path_1.default.dirname(destination), { recursive: true });
@@ -358,10 +404,13 @@ async function refreshProviderMount(route, event) {
     const providerIndex = Math.max(0, config_1.config.providers.indexOf(providerName));
     const rcUrl = `http://127.0.0.1:${config_1.config.mountRcloneRcPort + providerIndex}/vfs/refresh`;
     const normalizedEventPath = event.path.replace(/^\/+|\/+$/g, "");
+    const refreshPath = (0, node_fs_1.existsSync)(node_path_1.default.join(route.sourcePathPrefix, "__all__"))
+        ? normalizedEventPath.replace(/^(movies|shows)\//i, "")
+        : normalizedEventPath;
     // AllDebrid exposes many items as nested virtual directories, for example:
     // `shows/Pack/Pack/file.mkv`. Refresh the actual parent directory of the
     // file. Refreshing only `shows/Pack` leaves rclone's nested VFS entry stale.
-    const directory = `/${node_path_1.default.posix.dirname(normalizedEventPath).replace(/^\/+/, "")}`;
+    const directory = `/${node_path_1.default.posix.dirname(refreshPath).replace(/^\/+/, "")}`;
     try {
         const response = await fetch(rcUrl, {
             method: "POST",
@@ -393,7 +442,7 @@ async function waitForProviderMount(route, event) {
         attempts += 1;
         for (const candidate of paths) {
             try {
-                const stat = await node_fs_1.promises.stat(candidate);
+                const stat = await node_fs_1.promises.stat(await resolveProviderPath(route, candidate));
                 if (stat.isFile()) {
                     missing = missing.filter((value) => value !== candidate);
                 }
@@ -436,7 +485,7 @@ function providerTreePaths(route, event) {
     const files = videoFiles.length > 0
         ? videoFiles
         : (event.tree.length > 0 ? event.tree : [{ path: node_path_1.default.basename(event.path), size: 0 }]);
-    const sourceRoot = route.sourcePathPrefix.replace(/\/$/, "");
+    const sourceRoot = providerMountRoot(route);
     const defaultCategoryRoot = event.sourceCategory === "Movies" ? "movies" : "shows";
     const eventCategoryRoot = event.path.split(/[\\/]/)[0];
     const categoryRoot = /^(movies|shows)$/i.test(eventCategoryRoot) ? eventCategoryRoot : defaultCategoryRoot;
@@ -459,7 +508,8 @@ function providerTreePaths(route, event) {
         let relativeFile = String(file.path).replace(/^[/\\]+/, "").replace(/\\/g, "/");
         if (relativeFile.startsWith(`${categoryRoot}/`))
             relativeFile = relativeFile.slice(categoryRoot.length + 1);
-        return `${sourceRoot}/${categoryRoot}/${torrentPrefix}${relativeFile}`;
+        const categoryPrefixForMount = sourceRoot === route.sourcePathPrefix?.replace(/\/$/, '') ? `${categoryRoot}/` : '';
+        return `${sourceRoot}/${categoryPrefixForMount}${torrentPrefix}${relativeFile}`;
     });
 }
 async function removeMatchingSymlinks(root, targets) {
@@ -485,7 +535,7 @@ async function removeMatchingSymlinks(root, targets) {
 }
 async function propagateDeletedFile(route, event, options = {}) {
     const providerPath = route.sourcePathPrefix
-        ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${event.path.replace(/^\/+/, '')}`
+        ? `${providerMountRoot(route)}/${providerEventPath(route, event)}`
         : event.path;
     const targets = new Set([node_path_1.default.normalize(providerPath)]);
     const roots = [route.symlinkLibraryPath, route.stagingPath].filter((value) => Boolean(value));
