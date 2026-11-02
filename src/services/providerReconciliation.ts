@@ -8,7 +8,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { promises as fsp } from 'node:fs';
+import { existsSync, promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { getDb } from '../core/db';
 import { config } from '../core/config';
@@ -198,11 +198,23 @@ export class SqliteIntakeStateStore implements IntakeStateStore {
   }
 }
 
+function providerEventPath(route: ArrRoute, event: DirectFileEvent): string {
+  const relative = event.path.replace(/^\/+/, '');
+  return providerMountRoot(route) !== route.sourcePathPrefix?.replace(/\/$/, '')
+    ? relative.replace(/^(movies|shows)\//i, '')
+    : relative;
+}
+
+function providerMountRoot(route: ArrRoute): string {
+  const root = route.sourcePathPrefix?.replace(/\/$/, '') || '';
+  return root && existsSync(path.join(root, '__all__')) ? `${root}/__all__` : root;
+}
+
 export class HttpArrClient implements ArrClient {
   async submitScan(route: ArrRoute, event: DirectFileEvent): Promise<ArrCommandResult> {
     let commandName = route.kind === 'radarr' ? 'DownloadedMoviesScan' : 'DownloadedEpisodesScan';
     const providerPath = route.sourcePathPrefix
-      ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${event.path.replace(/^\/+/, '')}`
+      ? `${providerMountRoot(route)}/${providerEventPath(route, event)}`
       : event.path;
     if (route.stagingPath) {
       await refreshProviderMount(route, event);
@@ -396,7 +408,7 @@ async function exposeAsArrStaging(route: ArrRoute, event: DirectFileEvent): Prom
   const stagingRoot = path.resolve(route.stagingPath!);
   const stagingDirectory = path.join(stagingRoot, safeSegment(`${event.provider}-${event.providerItemId}`));
   const firstTreePath = String(event.tree[0]?.path || path.basename(event.path)).replace(/^[/\\]+/, '');
-  const eventPath = event.path.replace(/^[/\\]+/, '');
+  const eventPath = providerEventPath(route, event);
   const prefix = eventPath.endsWith(firstTreePath)
     ? eventPath.slice(0, -firstTreePath.length)
     : `${path.dirname(eventPath).replace(/\\/g, '/')}/`;
@@ -410,7 +422,7 @@ async function exposeAsArrStaging(route: ArrRoute, event: DirectFileEvent): Prom
     const relativeFile = String(file.path).replace(/^[/\\]+/, '');
     const providerRelativePath = `${prefix}${relativeFile}`.replace(/\\/g, '/');
     const providerPath = route.sourcePathPrefix
-      ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${providerRelativePath}`
+      ? `${providerMountRoot(route)}/${providerRelativePath}`
       : providerRelativePath;
     const destination = path.join(stagingDirectory, safeRelativeMediaPath(relativeFile));
     await fsp.mkdir(path.dirname(destination), { recursive: true });
@@ -433,10 +445,13 @@ async function refreshProviderMount(route: ArrRoute, event?: DirectFileEvent): P
   const providerIndex = Math.max(0, config.providers.indexOf(providerName));
   const rcUrl = `http://127.0.0.1:${config.mountRcloneRcPort + providerIndex}/vfs/refresh`;
   const normalizedEventPath = event.path.replace(/^\/+|\/+$/g, "");
+  const refreshPath = existsSync(path.join(route.sourcePathPrefix, "__all__"))
+    ? normalizedEventPath.replace(/^(movies|shows)\//i, "")
+    : normalizedEventPath;
   // AllDebrid exposes many items as nested virtual directories, for example:
   // `shows/Pack/Pack/file.mkv`. Refresh the actual parent directory of the
   // file. Refreshing only `shows/Pack` leaves rclone's nested VFS entry stale.
-  const directory = `/${path.posix.dirname(normalizedEventPath).replace(/^\/+/, "")}`;
+  const directory = `/${path.posix.dirname(refreshPath).replace(/^\/+/, "")}`;
   try {
     const response = await fetch(rcUrl, {
       method: "POST",
@@ -504,7 +519,7 @@ function providerTreePaths(route: ArrRoute, event: DirectFileEvent): string[] {
   const files = videoFiles.length > 0
     ? videoFiles
     : (event.tree.length > 0 ? event.tree : [{ path: path.basename(event.path), size: 0 }]);
-  const sourceRoot = route.sourcePathPrefix.replace(/\/$/, "");
+  const sourceRoot = providerMountRoot(route);
   const defaultCategoryRoot = event.sourceCategory === "Movies" ? "movies" : "shows";
   const eventCategoryRoot = event.path.split(/[\\/]/)[0];
   const categoryRoot = /^(movies|shows)$/i.test(eventCategoryRoot) ? eventCategoryRoot : defaultCategoryRoot;
@@ -526,7 +541,8 @@ function providerTreePaths(route: ArrRoute, event: DirectFileEvent): string[] {
   return files.map((file) => {
     let relativeFile = String(file.path).replace(/^[/\\]+/, "").replace(/\\/g, "/");
     if (relativeFile.startsWith(`${categoryRoot}/`)) relativeFile = relativeFile.slice(categoryRoot.length + 1);
-    return `${sourceRoot}/${categoryRoot}/${torrentPrefix}${relativeFile}`;
+    const categoryPrefixForMount = sourceRoot === route.sourcePathPrefix?.replace(/\/$/, '') ? `${categoryRoot}/` : '';
+    return `${sourceRoot}/${categoryPrefixForMount}${torrentPrefix}${relativeFile}`;
   });
 }
 
@@ -553,7 +569,7 @@ async function removeMatchingSymlinks(root: string, targets: Set<string>): Promi
 
 export async function propagateDeletedFile(route: ArrRoute, event: DirectFileEvent, options: { refreshArr?: boolean } = {}): Promise<ArrDeletePropagationResult> {
   const providerPath = route.sourcePathPrefix
-    ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${event.path.replace(/^\/+/, '')}`
+    ? `${providerMountRoot(route)}/${providerEventPath(route, event)}`
     : event.path;
   const targets = new Set([path.normalize(providerPath)]);
   const roots = [route.symlinkLibraryPath, route.stagingPath].filter((value): value is string => Boolean(value));
