@@ -163,12 +163,12 @@ export interface DebridProvider {
   // --- Torrent Operations ---------------------------------------------------
 
   /** Fetches the complete list of torrents from the provider. */
-  listTorrents(requireFresh?: boolean): Promise<TorrentInfo[]>;
+  listTorrents(): Promise<TorrentInfo[]>;
   /**
    * Optional status-aware listing for providers that can distinguish a
    * complete inventory from a cached, partial, or unavailable response.
    */
-  listTorrentsWithStatus?(requireFresh?: boolean): Promise<{ torrents: TorrentInfo[]; complete: boolean }>;
+  listTorrentsWithStatus?(): Promise<{ torrents: TorrentInfo[]; complete: boolean }>;
   /** Looks up one persisted provider torrent ID without relying on a full-list cache. */
   getTorrentStatus?(torrentId: string): Promise<TorrentStatusResult>;
   /** Async generator yielding torrent pages for SSE streaming (optional). */

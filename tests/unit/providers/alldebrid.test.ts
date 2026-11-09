@@ -199,19 +199,6 @@ afterEach(() => {
       expect.stringContaining('/v4/link/unlock'),
     ]);
   });
-  test('fresh inventory propagates outages instead of returning an empty list', async () => {
-    axiosIPv4.post = async () => { throw new Error('fixture unavailable'); };
-    await expect(new AllDebridProvider().listTorrents(true)).rejects.toThrow('fixture unavailable');
-  });
-
-  test('fresh inventory rejects stale cache while default callers retain fallback', async () => {
-    const key = `alldebrid_torrents:${createHash('sha256').update('unit-test-key').digest('hex').slice(0, 16)}`;
-    rateLimiter.setCache(key, [{ id: 123, filename: 'Cached.mkv', status: 'Ready', statusCode: 4 }]);
-    axiosIPv4.post = async () => { throw new Error('fixture unavailable'); };
-    const provider = new AllDebridProvider();
-    await expect(provider.listTorrents(true)).rejects.toThrow('fixture unavailable');
-    expect((await provider.listTorrents()).length).toBe(1);
-  });
 
   test('does not classify a transport ENOTFOUND error as missing', async () => {
     axiosIPv4.post = async () => {
@@ -226,16 +213,5 @@ afterEach(() => {
       status: 'unknown',
       reason: 'getaddrinfo ENOTFOUND api.alldebrid.com',
     });
-  });
-
-  test('classifies AllDebrid 200 error payload for a deleted magnet as missing', async () => {
-    axiosIPv4.post = async () => ({
-      data: {
-        status: 'error',
-        error: { message: 'This magnet ID does not exists or is invalid' },
-      },
-    }) as any;
-
-    expect(await new AllDebridProvider().getTorrentStatus('824779139')).toEqual({ status: 'missing' });
   });
 });

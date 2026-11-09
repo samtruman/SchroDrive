@@ -206,6 +206,39 @@ export function getDownloadsPath(): string {
   return config.arrDownloadsPath || path.join(config.mountBase, 'downloads');
 }
 
+/**
+ * Removes an Arr bridge staging directory without following its symlinks.
+ *
+ * Staging entries are disposable local links: the provider mount is the
+ * source of truth and the organised library has its own links. Keep this
+ * operation constrained to the configured downloads root so an Arr request
+ * can never remove a provider or organised-library path by mistake.
+ */
+export async function cleanupStagingPath(stagingPath: string): Promise<boolean> {
+  const downloadsRoot = path.resolve(getDownloadsPath());
+  const candidate = path.resolve(stagingPath);
+  const relative = path.relative(downloadsRoot, candidate);
+
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    console.warn(`${LOG_PREFIX} Refusing to clean staging path outside downloads root`, {
+      stagingPath: candidate,
+      downloadsRoot,
+    });
+    return false;
+  }
+
+  try {
+    await fsp.rm(candidate, { recursive: true, force: true });
+    return true;
+  } catch (err: any) {
+    console.warn(`${LOG_PREFIX} Failed to clean staging path`, {
+      stagingPath: candidate,
+      err: err?.message || String(err),
+    });
+    return false;
+  }
+}
+
 /** Ensures the downloads staging directory exists. */
 async function ensureDownloadsDir(): Promise<void> {
   const dir = getDownloadsPath();
@@ -224,7 +257,7 @@ async function ensureDownloadsDir(): Promise<void> {
  */
 export async function createStableSymlink(sourcePath: string, symlinkPath: string): Promise<void> {
   await fsp.mkdir(path.dirname(symlinkPath), { recursive: true });
-  try { await fsp.unlink(symlinkPath); } catch { /* does not exist */ }
+  try { await fsp.unlink(symlinkPath); } catch { /* doesn't exist */ }
   await fsp.symlink(path.resolve(sourcePath), symlinkPath);
 }
 
@@ -459,6 +492,67 @@ function mountNameScore(target: string, candidate: string): number {
   const candidateEpisodes = episodeKeys(candidate);
   if (targetEpisodes.size > 0 && candidateEpisodes.size > 0 &&
       ![...targetEpisodes].some((episode) => candidateEpisodes.has(episode))) return -1;
+
+  const shorter = Math.min(target.length, candidate.length);
+  const longer = Math.max(target.length, candidate.length);
+  const overlap = Math.round((shorter / longer) * 1000);
+  if (target.includes(candidate) || candidate.includes(target)) return 5000 + overlap;
+
+  const targetTokens = new Set(target.split(' '));
+  const sharedTokens = candidate.split(' ').filter(token => targetTokens.has(token)).length;
+  return sharedTokens >= 3 ? 1000 + sharedTokens * 100 + overlap : -1;
+}
+
+/** Resolve a completed torrent to its best mount entry. */
+export async function findBestMountMatch(searchDir: string, torrentName: string): Promise<MountMatch | null> {
+  const entries = await fsp.readdir(searchDir, { withFileTypes: true });
+  const target = normaliseMountName(torrentName);
+  if (!target) return null;
+  const directories: MountMatch[] = [];
+  const files: MountMatch[] = [];
+
+  for (const entry of entries) {
+    const fullPath = path.join(searchDir, entry.name);
+    const candidate = normaliseMountName(entry.name);
+
+    if (entry.isDirectory()) {
+      const discovered = await scanDirRecursive(fullPath);
+      if (!discovered.length) continue;
+      const directoryScore = mountNameScore(target, candidate);
+      const fileScore = Math.max(...discovered.map(file => mountNameScore(target, normaliseMountName(file.name))));
+      const score = Math.max(directoryScore, fileScore);
+      if (score >= 0) directories.push({ path: fullPath, files: discovered, score });
+    } else if (entry.isFile() && isVideoFile(entry.name)) {
+      const stat = await fsp.stat(fullPath);
+      const score = mountNameScore(target, candidate);
+      if (score >= 0) files.push({ path: searchDir, files: [{ name: entry.name, size: stat.size, path: fullPath }], score });
+    }
+  }
+
+  return [...directories, ...files].sort((a, b) => b.score - a.score)[0] || null;
+}
+
+type MountMatch = {
+  path: string;
+  files: Array<{ name: string; size: number; path: string }>;
+  score: number;
+};
+
+function normaliseMountName(value: string): string {
+  return value
+    .replace(/[.](mkv|mp4|avi|mov|wmv|m4v|ts|m2ts|webm)$/i, '')
+    .toLowerCase()
+    .replace(/[._-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+const MIN_FUZZY_MOUNT_NAME_LENGTH = 20;
+
+function mountNameScore(target: string, candidate: string): number {
+  if (!target || !candidate) return -1;
+  if (target === candidate) return 100000;
+  if (candidate.length < MIN_FUZZY_MOUNT_NAME_LENGTH) return -1;
 
   const shorter = Math.min(target.length, candidate.length);
   const longer = Math.max(target.length, candidate.length);
@@ -915,9 +1009,13 @@ function handleDeleteTorrent(req: Request, res: Response): void {
     if (torrent) {
       console.log(`${LOG_PREFIX} Removing tracked torrent: "${torrent.name}" (deleteFiles: ${deleteFiles})`);
 
-      // Clean up symlinks if requested
-      if (deleteFiles && torrent.symlinkPath) {
-        fsp.rm(torrent.symlinkPath, { recursive: true, force: true }).catch(() => {});
+      // Arr removes the completed download after importing it. The bridge
+      // staging directory is disposable regardless of deleteFiles: it only
+      // contains local symlinks, while the provider mount and organised view
+      // remain untouched. deleteFiles controls Arr's client semantics, not
+      // whether the bridge leaks staging links forever.
+      if (torrent.symlinkPath) {
+        void cleanupStagingPath(torrent.symlinkPath);
       }
 
       tracked.delete(hash);

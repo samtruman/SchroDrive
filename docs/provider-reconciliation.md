@@ -85,32 +85,22 @@ provider listTorrents/fetchDirectories
   -> Jellyfin sees the ARR-managed library
 ```
 
-## Shared TMDb identity and Arr library paths
-
-The Organizer uses a canonical TMDb-derived path only as its standalone
-fallback (`Movies/<TMDb title> (year)` or `TV/<TMDb title> (year)/Season NN`)
-and preserves the original release filename. The direct provider flow does
-not use that fallback: ARR receives the staging path and owns the identity and
-final folder decision.
-
-This prevents a localized Arr title such as `Wolfs - Lupi Solitari (2024)`
-from becoming a second library folder beside the ARR-managed folder. Provider
-content remains on the mount and is never copied or deleted by reconciliation;
-only the temporary staging symlink and ARR import lifecycle are involved.
-Only paths below the configured download staging root are used for the direct
-import path.
-
-
 When both Radarr and Sonarr are configured with a URL and API key, the worker
 starts automatically. `PROVIDER_RECONCILIATION_ENABLED=true` can still be used
 to force it on, while an explicit `false` disables automatic activation.
 
-## Bootstrap reconciliation edge cases
+When an Arr-visible symlink library is configured, reconciliation resolves the
+existing Radarr or Sonarr entity before creating a link. Title, original title,
+alternate titles, year, and Arr's own metadata lookup are used to identify the
+configured entity. The symlink is then placed below the library path already
+stored by Arr; SchröDrive does not invent a parallel title folder. If identity
+or the Arr path is unavailable or ambiguous, the item is deferred to Review.
 
 Provider mounts that expose category directories and an aggregate __all__ directory are scanned through the category directories only. Every direct, non-hidden category directory is eligible, including custom categories; the aggregate __all__ and compatibility links directories are never combined with authoritative roots. If no category root exists, __all__ (then links) is retained as a legacy fallback. This prevents an Arr-reconciled file from being imported a second time through an aggregate alias while preserving older provider layouts. Existing aggregate aliases are removed only when the corresponding category-root link is present in the same organised folder.
 
 Alias reconciliation compares the complete provider-relative media path, not only the final filename. This keeps two different sources with the same leaf name from being treated as the same media item.
 
+ARR parser identity is authoritative when Arr can parse the release filename and the parsed entity is configured. Without a parser match, a title match is accepted only when its year is equal or within +/-1 year; a distant year mismatch (for example, a remake with the same title) is not linked automatically. Arr metadata lookup remains the final identity fallback. Ambiguous or unresolved items are left unlinked, never placed in a guessed folder.
 ARR parser identity is authoritative when Arr can parse the release filename and the parsed entity is configured. Without a parser match, a title match is accepted only when its year is equal or within +/-1 year; a distant year mismatch (for example, a remake with the same title) is not linked automatically. Arr metadata lookup remains the final identity fallback. Ambiguous or unresolved items are left unlinked, never placed in a guessed folder.
 ## Contract coverage
 

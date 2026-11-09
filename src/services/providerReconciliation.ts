@@ -247,26 +247,17 @@ export class HttpArrClient implements ArrClient {
     const providerPath = route.sourcePathPrefix
       ? `${providerMountRoot(route)}/${providerEventPath(route, event)}`
       : event.path;
-    if (route.stagingPath) {
-      await refreshProviderMount(route, event);
-      await waitForProviderMount(route, event);
-      const scanPath = await exposeAsArrStaging(route, event);
-      return this.submitCommand(route, { name: commandName, path: scanPath, importMode: route.importMode || 'Copy' });
-    }
     const arrEntity = route.symlinkLibraryPath ? await findArrEntity(route, event) : undefined;
-    const arrPath = arrEntity?.path;
-    if (route.symlinkLibraryPath && !arrPath) {
-      throw new Error(`Arr ${route.kind} path is unavailable for this item; deferring provider reconciliation instead of creating a canonical fallback`);
+    if (route.symlinkLibraryPath && !arrEntity?.path) {
+      throw new Error(`Arr ${route.kind} record or library path not found for ${path.basename(event.path)}`);
     }
     const scanPath = route.symlinkLibraryPath
-      ? await exposeAsSymlink(route, event, providerPath, arrPath!)
+      ? await exposeAsSymlink(route, event, providerPath, arrEntity!.path!)
       : providerPath;
     let commandBody: Record<string, unknown> = { name: commandName, path: scanPath, importMode: route.importMode || 'Copy' };
     if (route.symlinkLibraryPath) {
-      if (arrEntity?.id !== undefined) {
-        commandName = route.kind === 'radarr' ? 'RescanMovie' : 'RescanSeries';
-        commandBody = { name: commandName, [route.kind === 'radarr' ? 'movieId' : 'seriesId']: arrEntity.id };
-      }
+      commandName = route.kind === 'radarr' ? 'RescanMovie' : 'RescanSeries';
+      commandBody = { name: commandName, [route.kind === 'radarr' ? 'movieId' : 'seriesId']: arrEntity!.id };
     }
     return this.submitCommand(route, commandBody);
   }
@@ -293,7 +284,25 @@ export class HttpArrClient implements ArrClient {
   }
 }
 
-type ArrEntity = { id?: number; title?: string; originalTitle?: string; alternateTitles?: Array<string | { title?: string }>; tmdbId?: number | string; year?: number; path?: string };
+type ArrAlternateTitle = string | { title?: string };
+type ArrEntity = {
+  id?: number;
+  title?: string;
+  originalTitle?: string;
+  alternateTitles?: ArrAlternateTitle[];
+  year?: number;
+  tmdbId?: number | string;
+  path?: string;
+};
+
+function normalizedTitle(value: string): string {
+  return value.toLocaleLowerCase().replace(/\s*\((?:(?:19|20|21)\d{2}|us|uk)\)\s*$/iu, '').replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function arrTitles(entity: ArrEntity): string[] {
+  const values = [entity.title, entity.originalTitle, ...(entity.alternateTitles || []).map((item) => typeof item === 'string' ? item : item.title)];
+  return [...new Set(values.filter((value): value is string => Boolean(value)).map(normalizedTitle).filter(Boolean))];
+}
 
 async function fetchArrEntities(route: ArrRoute, endpoint: string): Promise<ArrEntity[]> {
   const response = await fetch(`${route.baseUrl.replace(/\/$/, '')}/api/v3/${endpoint}`, {
@@ -319,25 +328,9 @@ async function parseArrEntity(route: ArrRoute, filename: string): Promise<ArrEnt
 async function findArrEntity(route: ArrRoute, event: DirectFileEvent): Promise<ArrEntity | undefined> {
   const filename = path.basename(event.path);
   const parsed = parseMediaFilename(filename, event.path);
-  const manual = getManualIdentityOverrideForProviderSource(event.provider, event.path, {
-    kind: route.kind === 'radarr' ? 'movie' : 'episode',
-    title: parsed.title,
-    year: parsed.year,
-    season: parsed.season,
-    episode: parsed.episode,
-  });
-  const title = normalizeArrTitle(parsed.title || event.path.split('/').filter(Boolean).slice(-2, -1)[0] || '');
+  const title = normalizedTitle(parsed.title || event.path.split('/').filter(Boolean).slice(-2, -1)[0] || '');
   const endpoint = route.kind === 'radarr' ? 'movie' : 'series';
-  const kind = route.kind === 'radarr' ? 'movie' : 'tv';
   const records = await fetchArrEntities(route, endpoint);
-  if (manual?.tmdbId) {
-    const manualMatch = records.find((record) => record.id && String(record.tmdbId || '') === String(manual.tmdbId));
-    if (manualMatch) return manualMatch;
-  }
-  const titleMatches = records.filter((record) => {
-    if (!record.id || !arrTitleAliases(record).includes(title)) return false;
-    return true;
-  });
 
   // Let Arr parse the release first. If it identifies an entity that is not
   // configured in this Arr instance, fail closed instead of guessing by title.
@@ -346,8 +339,7 @@ async function findArrEntity(route: ArrRoute, event: DirectFileEvent): Promise<A
     return records.find((record) => String(record.id) === String(parsedEntity.id));
   }
 
-  // The year is secondary evidence: it disambiguates duplicate ARR titles,
-  // but a distant remake must not be accepted as a unique match.
+  const titleMatches = records.filter((record) => record.id && arrTitles(record).includes(title));
   const nearYearMatches = titleMatches.filter((record) => {
     if (!parsed.year || !record.year) return true;
     return Math.abs(Number(record.year) - parsed.year) <= 1;
@@ -356,26 +348,14 @@ async function findArrEntity(route: ArrRoute, event: DirectFileEvent): Promise<A
 
   // Use Arr's own metadata lookup for canonical TMDb identity, then map it
   // back to an already configured record. No second TMDb credential is needed.
-  const lookup = await fetchArrEntities(route, `${endpoint}/lookup?term=${encodeURIComponent(parsed.title || filename)}`);
+  const lookup = await fetchArrEntities(route, endpoint + '/lookup?term=' + encodeURIComponent(parsed.title || filename));
   const yearMatches = lookup.filter((candidate) => {
     if (!parsed.year || !candidate.year) return true;
     return Math.abs(Number(candidate.year) - parsed.year) <= 1;
   });
   const tmdbIds = new Set(yearMatches.map((candidate) => String(candidate.tmdbId || '')).filter(Boolean));
   const tmdbMatches = records.filter((record) => record.id && tmdbIds.has(String(record.tmdbId || '')));
-  if (tmdbMatches.length === 1) return tmdbMatches[0];
-
-  // ARR is authoritative. TMDB is only a fallback when ARR title aliases do
-  // not produce one unambiguous result.
-  const canonical = parsed.title ? await resolveCanonicalMetadata(parsed.title, kind, parsed.year) : undefined;
-  const matchByTmdb = canonical?.tmdbId
-    ? records.find((record) => record.id && String(record.tmdbId || '') === canonical.tmdbId)
-    : undefined;
-  return matchByTmdb;
-}
-
-function safeSegment(value: string): string {
-  return value.replace(/[\\/:*?"<>|]/g, ' ').replace(/\s+/g, ' ').trim() || 'Unknown';
+  return tmdbMatches.length === 1 ? tmdbMatches[0] : undefined;
 }
 
 function safeRelativeMediaPath(value: string): string {
@@ -401,7 +381,6 @@ async function resolveCanonicalMetadata(title: string, kind: 'movie' | 'tv', yea
  * target is deliberately a symlink into the shared SchröDrive mount.
  */
 async function exposeAsSymlink(route: ArrRoute, event: DirectFileEvent, providerPath: string, arrPath: string): Promise<string> {
-  providerPath = await resolveProviderPath(route, providerPath);
   const libraryRoot = path.resolve(route.symlinkLibraryPath!);
   const authoritativeRoot = path.resolve(arrPath);
   if (authoritativeRoot !== libraryRoot && !authoritativeRoot.startsWith(`${libraryRoot}${path.sep}`)) {
@@ -409,10 +388,10 @@ async function exposeAsSymlink(route: ArrRoute, event: DirectFileEvent, provider
   }
   const filename = path.basename(event.path);
   const parsed = parseMediaFilename(filename, event.path);
-  const destination = event.sourceCategory === 'Shows' && parsed.season
-    ? path.join(arrPath, `Season ${String(parsed.season).padStart(2, '0')}`, filename)
-    : path.join(arrPath, filename);
-  const directory = path.dirname(destination);
+  const directory = event.sourceCategory === 'Shows' && parsed.season
+    ? path.join(arrPath, `Season ${String(parsed.season).padStart(2, '0')}`)
+    : arrPath;
+  const destination = path.join(directory, filename);
   await fsp.mkdir(directory, { recursive: true });
   const existing = await fsp.lstat(destination).catch(() => undefined);
   if (existing?.isSymbolicLink()) {
