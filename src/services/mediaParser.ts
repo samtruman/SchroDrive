@@ -178,7 +178,13 @@ export function parseMediaFilename(filename: string, relativePath = filename): P
 
   const absolute = normalized.match(/^(.*?)(?:\s+-\s+)(\d{3,4})(?:\s|$)/);
   const animeContext = /(?:^|[\\/])anime(?:[\\/]|$)/i.test(relativePath);
-  if (absolute && (animeContext || / - /.test(normalized)) && Number(absolute[2]) >= 1 && Number(absolute[2]) <= 9999) {
+  const absoluteNumber = absolute ? Number(absolute[2]) : undefined;
+  const isFourDigitYear = absoluteNumber !== undefined && absoluteNumber >= 1800 && absoluteNumber <= 2199;
+  // `Title - 2005` is a movie-year form, not an absolute anime episode.
+  // Keep absolute-episode parsing for anime/numbered releases, but let the
+  // normal movie-year parser handle four-digit years so files such as
+  // "Manuale d'amore - 2005.avi" cannot be classified as TV.
+  if (absolute && !isFourDigitYear && (animeContext || / - /.test(normalized)) && absoluteNumber! >= 1 && absoluteNumber! <= 9999) {
     const title = cleanTitle(absolute[1]) || parentTitle;
     if (title) {
       return result(sourceBasename, extension, {

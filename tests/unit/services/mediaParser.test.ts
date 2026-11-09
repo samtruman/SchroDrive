@@ -7,6 +7,7 @@ describe("structured media parser", () => {
     ["Atomic.S01E03-E04.ITA.1080p.WEB-DL.mkv", "episode", "Atomic", undefined],
     ["The.Boys.3x02.1080p.WEB-DL.mkv", "episode", "The Boys", undefined],
     ["One.Piece - 1100.mkv", "anime-episode", "One Piece", undefined],
+    ["Manuale d'amore - 2005.avi", "movie", "Manuale d'amore", 2005],
   ])("parses %s", (filename, kind, title, year) => {
     const parsed = parseMediaFilename(filename);
     expect(parsed.status).toBe("matched");
