@@ -19,7 +19,6 @@ import type { DeleteImpact } from "./deleteImpact";
 let organizerRefreshScheduled = false;
 let organizerRefreshPromise: Promise<void> = Promise.resolve();
 const pendingOrganizerPaths = new Set<string>();
-let nightlyOrganizerScheduled = false;
 
 /**
  * Refresh the organised view after provider reconciliation without running a
@@ -45,22 +44,6 @@ function scheduleOrganizerRefresh(paths: string[] = []): Promise<void> {
     }
   })();
   return organizerRefreshPromise;
-}
-
-async function runNightlyOrganizerPass(): Promise<void> {
-  if (nightlyOrganizerScheduled) return;
-  nightlyOrganizerScheduled = true;
-  try {
-    const delayMs = Math.max(0, config.organizerReconciliationDelayMs);
-    console.log(`[provider-reconciliation] full provider pass complete; organizer pass scheduled in ${delayMs}ms`);
-    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
-    await organizeOnce();
-    console.log("[provider-reconciliation] nightly organizer pass completed");
-  } catch (error: any) {
-    console.error("[provider-reconciliation] nightly organizer pass failed", error?.message || String(error));
-  } finally {
-    nightlyOrganizerScheduled = false;
-  }
 }
 
 export function providerReconciliationRoutes(providerId = "alldebrid"): { movies: ArrRoute; shows: ArrRoute } {
@@ -131,7 +114,6 @@ export function createProviderReconciliationWorker(): ProviderReconciliationWork
       dryRun: config.providerReconciliationDryRun,
       routeFor: (category, sourceProvider) => category === "Movies" ? providerReconciliationRoutes(sourceProvider || providerId).movies : providerReconciliationRoutes(sourceProvider || providerId).shows,
       onSuccess: async (event) => {
-        await scheduleOrganizerRefresh([event.path]);
         resolveOrganizerReviewAutomatically(event.path, `Provider reconciliation (${event.provider}) matched ARR and completed`);
       },
       onDeleted: async (event) => {
@@ -153,12 +135,16 @@ export function createProviderReconciliationWorker(): ProviderReconciliationWork
     return undefined;
   }
   return new ProviderReconciliationWorker(intakes, {
-    recentMs: Math.max(1000, config.providerReconciliationRecentIntervalMs),
-    fullMs: Math.max(1000, config.providerReconciliationFullIntervalMs),
-    fullTime: config.providerReconciliationFullTime,
-    recentLimit: Math.max(1, config.providerReconciliationRecentLimit),
-    runFullOnStart: config.providerReconciliationRunFullOnStart,
-    onFullComplete: runNightlyOrganizerPass,
+    recentMs: Math.max(1000, config.providerReconciliationRecentIntervalMs), fullMs: Math.max(1000, config.providerReconciliationFullIntervalMs), recentLimit: Math.max(1, config.providerReconciliationRecentLimit), runFullOnStart: config.providerReconciliationRunFullOnStart,
+    onRecentCompleted: async (events) => {
+      if (events.length > 0) await scheduleOrganizerRefresh(events.map((event) => event.path));
+    },
+    onFullCompleted: async () => {
+      const delayMs = Math.max(0, config.organizerReconciliationDelayMs);
+      console.log(`[provider-reconciliation] full scan completed; waiting ${delayMs}ms before organizer reconciliation`);
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await organizeOnce();
+    },
   });
 }
 
@@ -188,7 +174,6 @@ export async function refreshProviderActivity(): Promise<{ events: number; organ
   const events = activeProviderReconciliationWorker
     ? await activeProviderReconciliationWorker.runRecent()
     : [];
-  if (events.length > 0) await organizeOnce({ sourcePaths: events.map((event) => event.path) });
   return { events: events.length, organizerCompleted: true };
 }
 

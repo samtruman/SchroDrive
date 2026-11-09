@@ -109,8 +109,6 @@ export const config = {
   providerReconciliationEnabled: isProviderReconciliationAutoEnabled(),
   providerReconciliationRecentIntervalMs: Number(process.env.PROVIDER_RECONCILIATION_RECENT_INTERVAL_MS || 900000),
   providerReconciliationFullIntervalMs: Number(process.env.PROVIDER_RECONCILIATION_FULL_INTERVAL_MS || 21600000),
-  providerReconciliationFullTime: process.env.PROVIDER_RECONCILIATION_FULL_TIME || "03:00",
-  organizerReconciliationDelayMs: Number(process.env.ORGANIZER_RECONCILIATION_DELAY_MS || 1800000),
   providerReconciliationRecentLimit: Number(process.env.PROVIDER_RECONCILIATION_RECENT_LIMIT || 30),
   providerReconciliationRunFullOnStart: String(process.env.PROVIDER_RECONCILIATION_RUN_FULL_ON_START ?? "true").toLowerCase() !== "false",
   providerReconciliationDryRun: String(process.env.PROVIDER_RECONCILIATION_DRY_RUN ?? "false").toLowerCase() === "true",
@@ -120,6 +118,7 @@ export const config = {
   providerReconciliationSonarrApiKey: process.env.PROVIDER_RECONCILIATION_SONARR_API_KEY || "",
   providerReconciliationMountBase: process.env.PROVIDER_RECONCILIATION_MOUNT_BASE || "/mnt/schrodrive",
   providerReconciliationMountReadyPollMs: Number(process.env.PROVIDER_RECONCILIATION_MOUNT_READY_POLL_MS || 500),
+  organizerReconciliationDelayMs: Number(process.env.ORGANIZER_RECONCILIATION_DELAY_MS || 1800000),
   providerReconciliationMoviesLibraryPath: process.env.PROVIDER_RECONCILIATION_MOVIES_LIBRARY_PATH || "",
   providerReconciliationShowsLibraryPath: process.env.PROVIDER_RECONCILIATION_SHOWS_LIBRARY_PATH || "",
   // AllDebrid WebDAV (if supported)

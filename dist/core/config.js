@@ -120,6 +120,7 @@ exports.config = {
     providerReconciliationSonarrApiKey: process.env.PROVIDER_RECONCILIATION_SONARR_API_KEY || "",
     providerReconciliationMountBase: process.env.PROVIDER_RECONCILIATION_MOUNT_BASE || "/mnt/schrodrive",
     providerReconciliationMountReadyPollMs: Number(process.env.PROVIDER_RECONCILIATION_MOUNT_READY_POLL_MS || 500),
+    organizerReconciliationDelayMs: Number(process.env.ORGANIZER_RECONCILIATION_DELAY_MS || 1800000),
     providerReconciliationMoviesLibraryPath: process.env.PROVIDER_RECONCILIATION_MOVIES_LIBRARY_PATH || "",
     providerReconciliationShowsLibraryPath: process.env.PROVIDER_RECONCILIATION_SHOWS_LIBRARY_PATH || "",
     // AllDebrid WebDAV (if supported)

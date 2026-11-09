@@ -8,7 +8,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { promises as fsp } from 'node:fs';
+import { existsSync, promises as fsp } from 'node:fs';
 import path from 'node:path';
 import { getDb } from '../core/db';
 import { config } from '../core/config';
@@ -198,11 +198,54 @@ export class SqliteIntakeStateStore implements IntakeStateStore {
   }
 }
 
+function providerEventPath(route: ArrRoute, event: DirectFileEvent): string {
+  const relative = event.path.replace(/^\/+/, '');
+  return providerMountRoot(route) !== route.sourcePathPrefix?.replace(/\/$/, '')
+    ? relative.replace(/^(movies|shows)\//i, '')
+    : relative;
+}
+
+function providerMountRoot(route: ArrRoute): string {
+  const root = route.sourcePathPrefix?.replace(/\/$/, '') || '';
+  return root && existsSync(path.join(root, '__all__')) ? `${root}/__all__` : root;
+}
+
+const mountPathResolutionCache = new Map<string, string>();
+
+async function resolveProviderPath(route: ArrRoute, candidate: string): Promise<string> {
+  const cached = mountPathResolutionCache.get(candidate);
+  if (cached) return cached;
+  try {
+    if ((await fsp.stat(candidate)).isFile()) {
+      mountPathResolutionCache.set(candidate, candidate);
+      return candidate;
+    }
+  } catch {}
+  const root = providerMountRoot(route);
+  if (!root.endsWith('/__all__')) return candidate;
+  const target = path.basename(candidate);
+  async function find(current: string, depth: number): Promise<string | undefined> {
+    const entries = await fsp.readdir(current, { withFileTypes: true }).catch(() => [] as import('node:fs').Dirent[]);
+    for (const entry of entries) {
+      const child = path.join(current, entry.name);
+      if (entry.isFile() && entry.name === target) return child;
+      if (entry.isDirectory() && depth > 0) {
+        const match = await find(child, depth - 1);
+        if (match) return match;
+      }
+    }
+    return undefined;
+  }
+  const resolved = await find(root, 3);
+  if (resolved) mountPathResolutionCache.set(candidate, resolved);
+  return resolved || candidate;
+}
+
 export class HttpArrClient implements ArrClient {
   async submitScan(route: ArrRoute, event: DirectFileEvent): Promise<ArrCommandResult> {
     let commandName = route.kind === 'radarr' ? 'DownloadedMoviesScan' : 'DownloadedEpisodesScan';
     const providerPath = route.sourcePathPrefix
-      ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${event.path.replace(/^\/+/, '')}`
+      ? `${providerMountRoot(route)}/${providerEventPath(route, event)}`
       : event.path;
     if (route.stagingPath) {
       await refreshProviderMount(route, event);
@@ -358,6 +401,7 @@ async function resolveCanonicalMetadata(title: string, kind: 'movie' | 'tv', yea
  * target is deliberately a symlink into the shared SchröDrive mount.
  */
 async function exposeAsSymlink(route: ArrRoute, event: DirectFileEvent, providerPath: string, arrPath: string): Promise<string> {
+  providerPath = await resolveProviderPath(route, providerPath);
   const libraryRoot = path.resolve(route.symlinkLibraryPath!);
   const authoritativeRoot = path.resolve(arrPath);
   if (authoritativeRoot !== libraryRoot && !authoritativeRoot.startsWith(`${libraryRoot}${path.sep}`)) {
@@ -396,7 +440,7 @@ async function exposeAsArrStaging(route: ArrRoute, event: DirectFileEvent): Prom
   const stagingRoot = path.resolve(route.stagingPath!);
   const stagingDirectory = path.join(stagingRoot, safeSegment(`${event.provider}-${event.providerItemId}`));
   const firstTreePath = String(event.tree[0]?.path || path.basename(event.path)).replace(/^[/\\]+/, '');
-  const eventPath = event.path.replace(/^[/\\]+/, '');
+  const eventPath = providerEventPath(route, event);
   const prefix = eventPath.endsWith(firstTreePath)
     ? eventPath.slice(0, -firstTreePath.length)
     : `${path.dirname(eventPath).replace(/\\/g, '/')}/`;
@@ -410,7 +454,7 @@ async function exposeAsArrStaging(route: ArrRoute, event: DirectFileEvent): Prom
     const relativeFile = String(file.path).replace(/^[/\\]+/, '');
     const providerRelativePath = `${prefix}${relativeFile}`.replace(/\\/g, '/');
     const providerPath = route.sourcePathPrefix
-      ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${providerRelativePath}`
+      ? await resolveProviderPath(route, `${providerMountRoot(route)}/${providerRelativePath}`)
       : providerRelativePath;
     const destination = path.join(stagingDirectory, safeRelativeMediaPath(relativeFile));
     await fsp.mkdir(path.dirname(destination), { recursive: true });
@@ -433,10 +477,13 @@ async function refreshProviderMount(route: ArrRoute, event?: DirectFileEvent): P
   const providerIndex = Math.max(0, config.providers.indexOf(providerName));
   const rcUrl = `http://127.0.0.1:${config.mountRcloneRcPort + providerIndex}/vfs/refresh`;
   const normalizedEventPath = event.path.replace(/^\/+|\/+$/g, "");
+  const refreshPath = existsSync(path.join(route.sourcePathPrefix, "__all__"))
+    ? normalizedEventPath.replace(/^(movies|shows)\//i, "")
+    : normalizedEventPath;
   // AllDebrid exposes many items as nested virtual directories, for example:
   // `shows/Pack/Pack/file.mkv`. Refresh the actual parent directory of the
   // file. Refreshing only `shows/Pack` leaves rclone's nested VFS entry stale.
-  const directory = `/${path.posix.dirname(normalizedEventPath).replace(/^\/+/, "")}`;
+  const directory = `/${path.posix.dirname(refreshPath).replace(/^\/+/, "")}`;
   try {
     const response = await fetch(rcUrl, {
       method: "POST",
@@ -465,7 +512,7 @@ async function waitForProviderMount(route: ArrRoute, event: DirectFileEvent): Pr
     attempts += 1;
     for (const candidate of paths) {
       try {
-        const stat = await fsp.stat(candidate);
+        const stat = await fsp.stat(await resolveProviderPath(route, candidate));
         if (stat.isFile()) {
           missing = missing.filter((value) => value !== candidate);
         } else if (!missing.includes(candidate)) {
@@ -504,23 +551,30 @@ function providerTreePaths(route: ArrRoute, event: DirectFileEvent): string[] {
   const files = videoFiles.length > 0
     ? videoFiles
     : (event.tree.length > 0 ? event.tree : [{ path: path.basename(event.path), size: 0 }]);
-  const sourceRoot = route.sourcePathPrefix.replace(/\/$/, "");
+  const sourceRoot = providerMountRoot(route);
   const defaultCategoryRoot = event.sourceCategory === "Movies" ? "movies" : "shows";
   const eventCategoryRoot = event.path.split(/[\\/]/)[0];
   const categoryRoot = /^(movies|shows)$/i.test(eventCategoryRoot) ? eventCategoryRoot : defaultCategoryRoot;
+  const eventRelativePath = event.path.replace(/^[/\\]+/, "").replace(/\\/g, "/");
+  const categoryPrefix = `${categoryRoot}/`;
+  const withoutCategory = eventRelativePath.toLowerCase().startsWith(categoryPrefix.toLowerCase())
+    ? eventRelativePath.slice(categoryPrefix.length)
+    : eventRelativePath;
+  const firstTreePath = String(files[0]?.path || path.basename(event.path))
+    .replace(/^[/\\]+/, "")
+    .replace(/\\/g, "/");
+  // AllDebrid exposes file paths relative to the torrent directory, while
+  // the WebDAV mount exposes that directory as the first path segment. This
+  // matters for multi-file torrents: `Pack/E01.mkv` in the tree is mounted
+  // at `TorrentName/Pack/E01.mkv`, not at `Pack/E01.mkv`.
+  const torrentPrefix = withoutCategory.endsWith(firstTreePath)
+    ? withoutCategory.slice(0, -firstTreePath.length)
+    : `${path.posix.dirname(withoutCategory).replace(/^\.?\//, "")}/`;
   return files.map((file) => {
     let relativeFile = String(file.path).replace(/^[/\\]+/, "").replace(/\\/g, "/");
     if (relativeFile.startsWith(`${categoryRoot}/`)) relativeFile = relativeFile.slice(categoryRoot.length + 1);
-    if (!relativeFile.includes("/")) {
-      const eventRelativePath = event.path.replace(/^[/\\]+/, "").replace(/\\/g, "/");
-      const categoryPrefix = `${categoryRoot}/`;
-      const withoutCategory = eventRelativePath.toLowerCase().startsWith(categoryPrefix.toLowerCase())
-        ? eventRelativePath.slice(categoryPrefix.length)
-        : eventRelativePath;
-      const eventDirectory = path.posix.dirname(withoutCategory);
-      if (eventDirectory !== ".") relativeFile = `${eventDirectory}/${relativeFile}`;
-    }
-    return `${sourceRoot}/${categoryRoot}/${relativeFile}`;
+    const categoryPrefixForMount = sourceRoot === route.sourcePathPrefix?.replace(/\/$/, '') ? `${categoryRoot}/` : '';
+    return `${sourceRoot}/${categoryPrefixForMount}${torrentPrefix}${relativeFile}`;
   });
 }
 
@@ -547,7 +601,7 @@ async function removeMatchingSymlinks(root: string, targets: Set<string>): Promi
 
 export async function propagateDeletedFile(route: ArrRoute, event: DirectFileEvent, options: { refreshArr?: boolean } = {}): Promise<ArrDeletePropagationResult> {
   const providerPath = route.sourcePathPrefix
-    ? `${route.sourcePathPrefix.replace(/\/$/, '')}/${event.path.replace(/^\/+/, '')}`
+    ? `${providerMountRoot(route)}/${providerEventPath(route, event)}`
     : event.path;
   const targets = new Set([path.normalize(providerPath)]);
   const roots = [route.symlinkLibraryPath, route.stagingPath].filter((value): value is string => Boolean(value));
@@ -836,12 +890,18 @@ export class ProviderReconciliationIntake {
 export class ProviderReconciliationWorker {
   private recentTimer: ReturnType<typeof setInterval> | undefined;
   private fullTimer: ReturnType<typeof setInterval> | undefined;
-  private fullScheduleTimer: ReturnType<typeof setTimeout> | undefined;
   private runQueue: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly intake: ProviderReconciliationIntake | ProviderReconciliationIntake[],
-    private readonly intervals: { recentMs: number; fullMs: number; fullTime?: string; recentLimit?: number; runFullOnStart?: boolean; onFullComplete?: () => Promise<void> },
+    private readonly intervals: {
+      recentMs: number;
+      fullMs: number;
+      recentLimit?: number;
+      runFullOnStart?: boolean;
+      onRecentCompleted?: (events: DirectFileEvent[]) => Promise<void> | void;
+      onFullCompleted?: (events: DirectFileEvent[]) => Promise<void> | void;
+    },
   ) {}
 
   private intakes(): ProviderReconciliationIntake[] { return Array.isArray(this.intake) ? this.intake : [this.intake]; }
@@ -862,62 +922,36 @@ export class ProviderReconciliationWorker {
     return next;
   }
   runRecent(): Promise<DirectFileEvent[]> {
-    return this.enqueue('recent', async () => (await Promise.all(this.intakes().map((intake) => intake.reconcile('recent', this.intervals.recentLimit || 30)))).flat());
+    return this.enqueue('recent', async () => {
+      const events = (await Promise.all(this.intakes().map((intake) => intake.reconcile('recent', this.intervals.recentLimit || 30)))).flat();
+      await this.intervals.onRecentCompleted?.(events);
+      return events;
+    });
   }
   runFull(): Promise<DirectFileEvent[]> {
-    return this.enqueue('full', async () => (await Promise.all(this.intakes().map((intake) => intake.reconcile('full')))).flat());
-  }
-
-  private scheduleFullRun(): void {
-    const match = this.intervals.fullTime?.match(/^(\d{2}):(\d{2})$/);
-    if (match) {
-      const now = new Date();
-      const next = new Date(now);
-      next.setHours(Number(match[1]), Number(match[2]), 0, 0);
-      if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
-      this.fullScheduleTimer = setTimeout(async () => {
-        try {
-          await this.runFull();
-          await this.intervals.onFullComplete?.();
-        } catch {
-          // The queued worker already logs failures; keep the daily scheduler alive.
-        } finally {
-          this.scheduleFullRun();
-        }
-      }, next.getTime() - now.getTime());
-      return;
-    }
-    if (this.intervals.fullTime) console.warn(`[provider-reconciliation] invalid PROVIDER_RECONCILIATION_FULL_TIME=${this.intervals.fullTime}; using interval`);
-    this.fullTimer = setInterval(async () => {
-      try {
-        await this.runFull();
-        await this.intervals.onFullComplete?.();
-      } catch {
-        // The queued worker already logs failures; keep the interval alive.
-      }
-    }, this.intervals.fullMs);
+    return this.enqueue('full', async () => {
+      const events = (await Promise.all(this.intakes().map((intake) => intake.reconcile('full')))).flat();
+      await this.intervals.onFullCompleted?.(events);
+      return events;
+    });
   }
 
   start(): void {
     if (this.recentTimer || this.fullTimer) return;
     void this.runRecent().catch(() => undefined);
-    if (this.intervals.runFullOnStart !== false) {
-      void this.runFull().then(() => this.intervals.onFullComplete?.()).catch(() => undefined);
-    }
+    if (this.intervals.runFullOnStart !== false) void this.runFull().catch(() => undefined);
     this.recentTimer = setInterval(() => { void this.runRecent().catch(() => undefined); }, this.intervals.recentMs);
-    this.scheduleFullRun();
+    this.fullTimer = setInterval(() => { void this.runFull().catch(() => undefined); }, this.intervals.fullMs);
   }
 
   stop(): void {
     if (this.recentTimer) clearInterval(this.recentTimer);
     if (this.fullTimer) clearInterval(this.fullTimer);
-    if (this.fullScheduleTimer) clearTimeout(this.fullScheduleTimer);
     this.recentTimer = undefined;
     this.fullTimer = undefined;
-    this.fullScheduleTimer = undefined;
   }
 
   isRunning(): boolean {
-    return !!this.recentTimer || !!this.fullTimer || !!this.fullScheduleTimer;
+    return !!this.recentTimer || !!this.fullTimer;
   }
 }
