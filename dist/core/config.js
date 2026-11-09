@@ -109,8 +109,6 @@ exports.config = {
     providerReconciliationEnabled: isProviderReconciliationAutoEnabled(),
     providerReconciliationRecentIntervalMs: Number(process.env.PROVIDER_RECONCILIATION_RECENT_INTERVAL_MS || 900000),
     providerReconciliationFullIntervalMs: Number(process.env.PROVIDER_RECONCILIATION_FULL_INTERVAL_MS || 21600000),
-    providerReconciliationFullTime: process.env.PROVIDER_RECONCILIATION_FULL_TIME || "03:00",
-    organizerReconciliationDelayMs: Number(process.env.ORGANIZER_RECONCILIATION_DELAY_MS || 1800000),
     providerReconciliationRecentLimit: Number(process.env.PROVIDER_RECONCILIATION_RECENT_LIMIT || 30),
     providerReconciliationRunFullOnStart: String(process.env.PROVIDER_RECONCILIATION_RUN_FULL_ON_START ?? "true").toLowerCase() !== "false",
     providerReconciliationDryRun: String(process.env.PROVIDER_RECONCILIATION_DRY_RUN ?? "false").toLowerCase() === "true",

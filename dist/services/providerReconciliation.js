@@ -845,63 +845,25 @@ class ProviderReconciliationWorker {
             return events;
         });
     }
-    scheduleFullRun() {
-        const match = this.intervals.fullTime?.match(/^(\d{2}):(\d{2})$/);
-        if (match) {
-            const now = new Date();
-            const next = new Date(now);
-            next.setHours(Number(match[1]), Number(match[2]), 0, 0);
-            if (next.getTime() <= now.getTime())
-                next.setDate(next.getDate() + 1);
-            this.fullScheduleTimer = setTimeout(async () => {
-                try {
-                    await this.runFull();
-                    await this.intervals.onFullComplete?.();
-                }
-                catch {
-                    // The queued worker already logs failures; keep the daily scheduler alive.
-                }
-                finally {
-                    this.scheduleFullRun();
-                }
-            }, next.getTime() - now.getTime());
-            return;
-        }
-        if (this.intervals.fullTime)
-            console.warn(`[provider-reconciliation] invalid PROVIDER_RECONCILIATION_FULL_TIME=${this.intervals.fullTime}; using interval`);
-        this.fullTimer = setInterval(async () => {
-            try {
-                await this.runFull();
-                await this.intervals.onFullComplete?.();
-            }
-            catch {
-                // The queued worker already logs failures; keep the interval alive.
-            }
-        }, this.intervals.fullMs);
-    }
     start() {
         if (this.recentTimer || this.fullTimer)
             return;
         void this.runRecent().catch(() => undefined);
-        if (this.intervals.runFullOnStart !== false) {
-            void this.runFull().then(() => this.intervals.onFullComplete?.()).catch(() => undefined);
-        }
+        if (this.intervals.runFullOnStart !== false)
+            void this.runFull().catch(() => undefined);
         this.recentTimer = setInterval(() => { void this.runRecent().catch(() => undefined); }, this.intervals.recentMs);
-        this.scheduleFullRun();
+        this.fullTimer = setInterval(() => { void this.runFull().catch(() => undefined); }, this.intervals.fullMs);
     }
     stop() {
         if (this.recentTimer)
             clearInterval(this.recentTimer);
         if (this.fullTimer)
             clearInterval(this.fullTimer);
-        if (this.fullScheduleTimer)
-            clearTimeout(this.fullScheduleTimer);
         this.recentTimer = undefined;
         this.fullTimer = undefined;
-        this.fullScheduleTimer = undefined;
     }
     isRunning() {
-        return !!this.recentTimer || !!this.fullTimer || !!this.fullScheduleTimer;
+        return !!this.recentTimer || !!this.fullTimer;
     }
 }
 exports.ProviderReconciliationWorker = ProviderReconciliationWorker;
