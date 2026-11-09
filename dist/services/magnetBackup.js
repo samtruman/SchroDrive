@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.magnetBackupDirectory = magnetBackupDirectory;
 exports.createMagnetBackup = createMagnetBackup;
 exports.listMagnetBackups = listMagnetBackups;
+exports.getMagnetBackupFile = getMagnetBackupFile;
 exports.readMagnetBackup = readMagnetBackup;
 exports.verifyMagnetBackup = verifyMagnetBackup;
 exports.getMagnetBackupSchedule = getMagnetBackupSchedule;
@@ -88,6 +89,16 @@ async function createMagnetBackup(providerId, mode = "FULL") {
     return record;
 }
 function listMagnetBackups(providerId) { return readIndex().filter((record) => !providerId || record.provider === providerId).map((record) => ({ ...record, file: node_path_1.default.basename(record.file) })); }
+function getMagnetBackupFile(id) {
+    const record = readIndex().find((item) => item.id === id);
+    if (!record)
+        return undefined;
+    const file = node_path_1.default.resolve(record.file);
+    const backupRoot = `${node_path_1.default.resolve(root())}${node_path_1.default.sep}`;
+    if (!file.startsWith(backupRoot) || !node_fs_1.default.existsSync(file))
+        return undefined;
+    return { record, file };
+}
 function readMagnetBackup(id) { const record = readIndex().find((item) => item.id === id); if (!record)
     return undefined; try {
     return JSON.parse(node_fs_1.default.readFileSync(record.file, "utf8"));

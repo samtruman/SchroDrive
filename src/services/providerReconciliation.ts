@@ -836,11 +836,12 @@ export class ProviderReconciliationIntake {
 export class ProviderReconciliationWorker {
   private recentTimer: ReturnType<typeof setInterval> | undefined;
   private fullTimer: ReturnType<typeof setInterval> | undefined;
+  private fullScheduleTimer: ReturnType<typeof setTimeout> | undefined;
   private runQueue: Promise<unknown> = Promise.resolve();
 
   constructor(
     private readonly intake: ProviderReconciliationIntake | ProviderReconciliationIntake[],
-    private readonly intervals: { recentMs: number; fullMs: number; recentLimit?: number; runFullOnStart?: boolean },
+    private readonly intervals: { recentMs: number; fullMs: number; fullTime?: string; recentLimit?: number; runFullOnStart?: boolean; onFullComplete?: () => Promise<void> },
   ) {}
 
   private intakes(): ProviderReconciliationIntake[] { return Array.isArray(this.intake) ? this.intake : [this.intake]; }
@@ -867,22 +868,56 @@ export class ProviderReconciliationWorker {
     return this.enqueue('full', async () => (await Promise.all(this.intakes().map((intake) => intake.reconcile('full')))).flat());
   }
 
+  private scheduleFullRun(): void {
+    const match = this.intervals.fullTime?.match(/^(\d{2}):(\d{2})$/);
+    if (match) {
+      const now = new Date();
+      const next = new Date(now);
+      next.setHours(Number(match[1]), Number(match[2]), 0, 0);
+      if (next.getTime() <= now.getTime()) next.setDate(next.getDate() + 1);
+      this.fullScheduleTimer = setTimeout(async () => {
+        try {
+          await this.runFull();
+          await this.intervals.onFullComplete?.();
+        } catch {
+          // The queued worker already logs failures; keep the daily scheduler alive.
+        } finally {
+          this.scheduleFullRun();
+        }
+      }, next.getTime() - now.getTime());
+      return;
+    }
+    if (this.intervals.fullTime) console.warn(`[provider-reconciliation] invalid PROVIDER_RECONCILIATION_FULL_TIME=${this.intervals.fullTime}; using interval`);
+    this.fullTimer = setInterval(async () => {
+      try {
+        await this.runFull();
+        await this.intervals.onFullComplete?.();
+      } catch {
+        // The queued worker already logs failures; keep the interval alive.
+      }
+    }, this.intervals.fullMs);
+  }
+
   start(): void {
     if (this.recentTimer || this.fullTimer) return;
     void this.runRecent().catch(() => undefined);
-    if (this.intervals.runFullOnStart !== false) void this.runFull().catch(() => undefined);
+    if (this.intervals.runFullOnStart !== false) {
+      void this.runFull().then(() => this.intervals.onFullComplete?.()).catch(() => undefined);
+    }
     this.recentTimer = setInterval(() => { void this.runRecent().catch(() => undefined); }, this.intervals.recentMs);
-    this.fullTimer = setInterval(() => { void this.runFull().catch(() => undefined); }, this.intervals.fullMs);
+    this.scheduleFullRun();
   }
 
   stop(): void {
     if (this.recentTimer) clearInterval(this.recentTimer);
     if (this.fullTimer) clearInterval(this.fullTimer);
+    if (this.fullScheduleTimer) clearTimeout(this.fullScheduleTimer);
     this.recentTimer = undefined;
     this.fullTimer = undefined;
+    this.fullScheduleTimer = undefined;
   }
 
   isRunning(): boolean {
-    return !!this.recentTimer || !!this.fullTimer;
+    return !!this.recentTimer || !!this.fullTimer || !!this.fullScheduleTimer;
   }
 }

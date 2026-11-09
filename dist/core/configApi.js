@@ -99,6 +99,8 @@ exports.CONFIG_SCHEMA = {
     PROVIDER_RECONCILIATION_ENABLED: { type: "boolean", default: "false", category: "arr", label: "Enable Provider Reconciliation" },
     PROVIDER_RECONCILIATION_RECENT_INTERVAL_MS: { type: "number", default: "900000", category: "arr", label: "Recent Scan Interval (ms)" },
     PROVIDER_RECONCILIATION_FULL_INTERVAL_MS: { type: "number", default: "21600000", category: "arr", label: "Full Scan Interval (ms)" },
+    PROVIDER_RECONCILIATION_FULL_TIME: { type: "string", default: "03:00", category: "arr", label: "Full Scan Time (local)" },
+    ORGANIZER_RECONCILIATION_DELAY_MS: { type: "number", default: "1800000", category: "organizer", label: "Organizer Delay After Full Scan (ms)" },
     PROVIDER_RECONCILIATION_RECENT_LIMIT: { type: "number", default: "30", category: "arr", label: "Recent Items Limit" },
     PROVIDER_RECONCILIATION_RUN_FULL_ON_START: { type: "boolean", default: "true", category: "arr", label: "Run Full Scan on Startup" },
     PROVIDER_RECONCILIATION_RADARR_URL: { type: "string", default: "", category: "arr", label: "Radarr URL" },

@@ -669,14 +669,28 @@ class AllDebridProvider {
         }
         try {
             const magnets = await this.fetchMagnetStatus();
-            // Only include fully downloaded magnets (statusCode 4 = finished)
+            // Normally only statusCode 4 magnets are exposed by AllDebrid as ready.
+            // During the provider's finalisation phase, however, /magnet/files can
+            // already return a complete file tree while /magnet/status still says
+            // downloading/compressing/uploading. Probe those non-error candidates
+            // too, otherwise a playable file remains invisible until the provider
+            // eventually updates its lifecycle status.
             const completed = magnets.filter((m) => {
                 const statusCode = typeof m.statusCode === 'number' ? m.statusCode : -1;
                 return statusCode === FINISHED_STATUS_CODE;
             });
-            console.log(`[${new Date().toISOString()}][ad] fetched ${completed.length} completed magnets out of ${magnets.length} total`);
-            const fileTrees = await this.fetchFileTrees(completed.map((m) => String(m.id)));
-            return completed.map((m) => {
+            const finalising = magnets.filter((m) => {
+                const statusCode = typeof m.statusCode === 'number' ? m.statusCode : -1;
+                return statusCode >= 0 && statusCode < FINISHED_STATUS_CODE;
+            });
+            console.log(`[${new Date().toISOString()}][ad] fetched ${completed.length} completed magnets and probing ${finalising.length} finalising magnets out of ${magnets.length} total`);
+            const candidates = [...completed, ...finalising];
+            const fileTrees = await this.fetchFileTrees(candidates.map((m) => String(m.id)));
+            const visible = [
+                ...completed,
+                ...finalising.filter((m) => (fileTrees.get(String(m.id)) || []).length > 0),
+            ];
+            return visible.map((m) => {
                 const id = String(m.id);
                 const files = (fileTrees.get(id) || []).map((file) => ({
                     id: file.path,

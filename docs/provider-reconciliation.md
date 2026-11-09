@@ -63,6 +63,16 @@ disabled by default in Docker and is reserved for intentional full recovery
 scans. The Dashboard/provider refresh remains an explicit on-demand trigger,
 not a prerequisite for normal automatic processing.
 
+The automatic recovery schedule is deliberately split into two phases. A full
+provider reconciliation runs once per day at the configured local time
+(`PROVIDER_RECONCILIATION_FULL_TIME`, default `03:00`). After that provider
+pass has completed, SchröDrive waits for
+`ORGANIZER_RECONCILIATION_DELAY_MS` (default 30 minutes) and runs one complete
+organizer pass. The organizer watch remains disabled, so this recovery job does
+not scan every few minutes and does not create additional provider requests.
+The provider worker serializes recent and full passes; a delayed organizer pass
+cannot overlap another provider pass.
+
 If a provider reuses an item ID after deletion, the persisted lifecycle state
 allows the same file tree to be processed again; the previous `added` event is
 not treated as a duplicate of the new post-deletion addition.

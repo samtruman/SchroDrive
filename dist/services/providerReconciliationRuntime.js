@@ -16,6 +16,7 @@ const providerReconciliation_1 = require("./providerReconciliation");
 let organizerRefreshScheduled = false;
 let organizerRefreshPromise = Promise.resolve();
 const pendingOrganizerPaths = new Set();
+let nightlyOrganizerScheduled = false;
 /**
  * Refresh the organised view after provider reconciliation without running a
  * full scan once per file in a season pack. Calls arriving during the same
@@ -45,6 +46,25 @@ function scheduleOrganizerRefresh(paths = []) {
         }
     })();
     return organizerRefreshPromise;
+}
+async function runNightlyOrganizerPass() {
+    if (nightlyOrganizerScheduled)
+        return;
+    nightlyOrganizerScheduled = true;
+    try {
+        const delayMs = Math.max(0, config_1.config.organizerReconciliationDelayMs);
+        console.log(`[provider-reconciliation] full provider pass complete; organizer pass scheduled in ${delayMs}ms`);
+        if (delayMs > 0)
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+        await (0, organizer_1.organizeOnce)();
+        console.log("[provider-reconciliation] nightly organizer pass completed");
+    }
+    catch (error) {
+        console.error("[provider-reconciliation] nightly organizer pass failed", error?.message || String(error));
+    }
+    finally {
+        nightlyOrganizerScheduled = false;
+    }
 }
 function providerReconciliationRoutes(providerId = "alldebrid") {
     const sourcePathPrefix = `${config_1.config.providerReconciliationMountBase.replace(/\/$/, '')}/${providerId}`;
@@ -136,7 +156,12 @@ function createProviderReconciliationWorker() {
         return undefined;
     }
     return new providerReconciliation_1.ProviderReconciliationWorker(intakes, {
-        recentMs: Math.max(1000, config_1.config.providerReconciliationRecentIntervalMs), fullMs: Math.max(1000, config_1.config.providerReconciliationFullIntervalMs), recentLimit: Math.max(1, config_1.config.providerReconciliationRecentLimit), runFullOnStart: config_1.config.providerReconciliationRunFullOnStart,
+        recentMs: Math.max(1000, config_1.config.providerReconciliationRecentIntervalMs),
+        fullMs: Math.max(1000, config_1.config.providerReconciliationFullIntervalMs),
+        fullTime: config_1.config.providerReconciliationFullTime,
+        recentLimit: Math.max(1, config_1.config.providerReconciliationRecentLimit),
+        runFullOnStart: config_1.config.providerReconciliationRunFullOnStart,
+        onFullComplete: runNightlyOrganizerPass,
     });
 }
 function startProviderReconciliation() {

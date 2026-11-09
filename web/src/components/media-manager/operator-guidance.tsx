@@ -179,7 +179,9 @@ export function DeleteImpactCards({ items, scope, busyId, selectedIds, onChangeS
         const toggleRelease = (nextChecked: boolean) => {
           if (!nextChecked) return onChangeSelection([], [release.key]);
           const affectedEpisodes = group.episodes.filter((episode) => episode.versions.some((version: any) => selectionKey(physicalRef(version)) === release.key));
-          const conflicts = uniqueRefs(affectedEpisodes.flatMap((episode) => episode.versions)).map(selectionKey).filter((key) => key !== release.key);
+          const conflicts = uniqueRefs(affectedEpisodes.flatMap((episode) => episode.versions))
+            .map(selectionKey)
+            .filter((key) => key !== release.key && (!candidateKeys.has(release.key) || !candidateKeys.has(key)));
           onChangeSelection([release.ref], conflicts);
         };
         return <PhysicalReleaseCard key={release.key} release={release} selected={checked} selectable={selectable} disabled={Boolean(busyId)} onToggle={toggleRelease} />;

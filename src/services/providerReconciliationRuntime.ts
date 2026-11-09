@@ -19,6 +19,7 @@ import type { DeleteImpact } from "./deleteImpact";
 let organizerRefreshScheduled = false;
 let organizerRefreshPromise: Promise<void> = Promise.resolve();
 const pendingOrganizerPaths = new Set<string>();
+let nightlyOrganizerScheduled = false;
 
 /**
  * Refresh the organised view after provider reconciliation without running a
@@ -44,6 +45,22 @@ function scheduleOrganizerRefresh(paths: string[] = []): Promise<void> {
     }
   })();
   return organizerRefreshPromise;
+}
+
+async function runNightlyOrganizerPass(): Promise<void> {
+  if (nightlyOrganizerScheduled) return;
+  nightlyOrganizerScheduled = true;
+  try {
+    const delayMs = Math.max(0, config.organizerReconciliationDelayMs);
+    console.log(`[provider-reconciliation] full provider pass complete; organizer pass scheduled in ${delayMs}ms`);
+    if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+    await organizeOnce();
+    console.log("[provider-reconciliation] nightly organizer pass completed");
+  } catch (error: any) {
+    console.error("[provider-reconciliation] nightly organizer pass failed", error?.message || String(error));
+  } finally {
+    nightlyOrganizerScheduled = false;
+  }
 }
 
 export function providerReconciliationRoutes(providerId = "alldebrid"): { movies: ArrRoute; shows: ArrRoute } {
@@ -136,7 +153,12 @@ export function createProviderReconciliationWorker(): ProviderReconciliationWork
     return undefined;
   }
   return new ProviderReconciliationWorker(intakes, {
-    recentMs: Math.max(1000, config.providerReconciliationRecentIntervalMs), fullMs: Math.max(1000, config.providerReconciliationFullIntervalMs), recentLimit: Math.max(1, config.providerReconciliationRecentLimit), runFullOnStart: config.providerReconciliationRunFullOnStart,
+    recentMs: Math.max(1000, config.providerReconciliationRecentIntervalMs),
+    fullMs: Math.max(1000, config.providerReconciliationFullIntervalMs),
+    fullTime: config.providerReconciliationFullTime,
+    recentLimit: Math.max(1, config.providerReconciliationRecentLimit),
+    runFullOnStart: config.providerReconciliationRunFullOnStart,
+    onFullComplete: runNightlyOrganizerPass,
   });
 }
 
