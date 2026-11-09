@@ -329,19 +329,20 @@ export default function SettingsPage() {
       </Card>
 
       <Tabs defaultValue="general" className="space-y-6">
-        <TabsList className="grid w-full grid-cols-4 lg:grid-cols-12">
-          <TabsTrigger value="general" className="gap-2"><Settings className="h-4 w-4 hidden sm:block" />General</TabsTrigger>
-          <TabsTrigger value="indexers" className="gap-2"><Search className="h-4 w-4 hidden sm:block" />Indexers</TabsTrigger>
-          <TabsTrigger value="torbox" className="gap-2"><Database className="h-4 w-4 hidden sm:block" />TorBox</TabsTrigger>
-          <TabsTrigger value="realdebrid" className="gap-2"><Database className="h-4 w-4 hidden sm:block" />Real-Debrid</TabsTrigger>
-          <TabsTrigger value="alldebrid" className="gap-2"><Database className="h-4 w-4 hidden sm:block" />AllDebrid</TabsTrigger>
-          <TabsTrigger value="premiumize" className="gap-2"><Database className="h-4 w-4 hidden sm:block" />Premiumize</TabsTrigger>
-          <TabsTrigger value="overseerr" className="gap-2"><Tv className="h-4 w-4 hidden sm:block" />Overseerr</TabsTrigger>
-          <TabsTrigger value="arr" className="gap-2"><Server className="h-4 w-4 hidden sm:block" />ARR</TabsTrigger>
-          <TabsTrigger value="mounts" className="gap-2"><HardDrive className="h-4 w-4 hidden sm:block" />Mounts</TabsTrigger>
-          <TabsTrigger value="services" className="gap-2"><Server className="h-4 w-4 hidden sm:block" />Services</TabsTrigger>
-          <TabsTrigger value="organizer" className="gap-2"><FolderSync className="h-4 w-4 hidden sm:block" />Organiser</TabsTrigger>
-          <TabsTrigger value="updates" className="gap-2"><RefreshCw className="h-4 w-4 hidden sm:block" />Updates</TabsTrigger>
+        <TabsList className="flex h-auto w-full flex-nowrap justify-start gap-0 overflow-x-auto p-1">
+          <TabsTrigger value="general" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Settings className="hidden h-4 w-4 xl:block" />General</TabsTrigger>
+          <TabsTrigger value="indexers" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Search className="hidden h-4 w-4 xl:block" />Indexers</TabsTrigger>
+          <TabsTrigger value="torbox" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Database className="hidden h-4 w-4 xl:block" />TorBox</TabsTrigger>
+          <TabsTrigger value="realdebrid" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Database className="hidden h-4 w-4 xl:block" />Real-Debrid</TabsTrigger>
+          <TabsTrigger value="alldebrid" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Database className="hidden h-4 w-4 xl:block" />AllDebrid</TabsTrigger>
+          <TabsTrigger value="premiumize" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Database className="hidden h-4 w-4 xl:block" />Premiumize</TabsTrigger>
+          <TabsTrigger value="overseerr" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Tv className="hidden h-4 w-4 xl:block" />Seerr</TabsTrigger>
+          <TabsTrigger value="arr" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Server className="hidden h-4 w-4 xl:block" />ARR</TabsTrigger>
+          <TabsTrigger value="media_servers" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Tv className="hidden h-4 w-4 xl:block" />Media Servers</TabsTrigger>
+          <TabsTrigger value="mounts" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><HardDrive className="hidden h-4 w-4 xl:block" />Mounts</TabsTrigger>
+          <TabsTrigger value="services" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><Server className="hidden h-4 w-4 xl:block" />Services</TabsTrigger>
+          <TabsTrigger value="organizer" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><FolderSync className="hidden h-4 w-4 xl:block" />Organiser</TabsTrigger>
+          <TabsTrigger value="updates" className="shrink-0 gap-1 whitespace-nowrap px-2 text-xs"><RefreshCw className="hidden h-4 w-4 xl:block" />Updates</TabsTrigger>
         </TabsList>
 
         {/* General Settings */}
@@ -533,7 +534,7 @@ export default function SettingsPage() {
             </CardHeader>
             <CardContent className="space-y-6">
               <div className="grid gap-6 md:grid-cols-2">
-                <ConfigField label="Overseerr URL" envVar="SEERR_URL" description="Must include /api/v1" value={getValue("SEERR_URL")} source={getSource("SEERR_URL")} onChange={(v) => updateValue("SEERR_URL", v)} />
+                <ConfigField label="Seerr URL" envVar="SEERR_URL" description="Service URL, for example http://seerr:5055" value={getValue("SEERR_URL")} source={getSource("SEERR_URL")} onChange={(v) => updateValue("SEERR_URL", v)} />
                 <ConfigField label="API Key" envVar="SEERR_API_KEY" type="password" value={getValue("SEERR_API_KEY")} source={getSource("SEERR_API_KEY")} onChange={(v) => updateValue("SEERR_API_KEY", v)} />
               </div>
               <Separator />
@@ -577,10 +578,38 @@ export default function SettingsPage() {
                   <ConfigField label="Recent Scan Interval (ms)" envVar="PROVIDER_RECONCILIATION_RECENT_INTERVAL_MS" type="number" value={getValue("PROVIDER_RECONCILIATION_RECENT_INTERVAL_MS")} source={getSource("PROVIDER_RECONCILIATION_RECENT_INTERVAL_MS")} onChange={(v) => updateValue("PROVIDER_RECONCILIATION_RECENT_INTERVAL_MS", v)} />
                   <ConfigField label="Full Scan Interval (ms)" envVar="PROVIDER_RECONCILIATION_FULL_INTERVAL_MS" type="number" value={getValue("PROVIDER_RECONCILIATION_FULL_INTERVAL_MS")} source={getSource("PROVIDER_RECONCILIATION_FULL_INTERVAL_MS")} onChange={(v) => updateValue("PROVIDER_RECONCILIATION_FULL_INTERVAL_MS", v)} />
                   <ConfigField label="Recent Items Limit" envVar="PROVIDER_RECONCILIATION_RECENT_LIMIT" type="number" value={getValue("PROVIDER_RECONCILIATION_RECENT_LIMIT")} source={getSource("PROVIDER_RECONCILIATION_RECENT_LIMIT")} onChange={(v) => updateValue("PROVIDER_RECONCILIATION_RECENT_LIMIT", v)} />
+                  <ConfigField label="ARR Downloads Path" envVar="ARR_DOWNLOADS_PATH" description="Optional staging path shared with Radarr/Sonarr; defaults to MOUNT_BASE/downloads" value={getValue("ARR_DOWNLOADS_PATH")} source={getSource("ARR_DOWNLOADS_PATH")} onChange={(v) => updateValue("ARR_DOWNLOADS_PATH", v)} />
                 </div>
                 <SwitchField label="Run Full Scan on Startup" envVar="PROVIDER_RECONCILIATION_RUN_FULL_ON_START" description="Perform a complete provider snapshot when SchroDrive starts" value={getBoolValue("PROVIDER_RECONCILIATION_RUN_FULL_ON_START")} source={getSource("PROVIDER_RECONCILIATION_RUN_FULL_ON_START")} onChange={(v) => updateBoolValue("PROVIDER_RECONCILIATION_RUN_FULL_ON_START", v)} />
               </ConfigSection>
               <p className="text-xs text-muted-foreground">Mount base and organized library paths are configured in the Mounts and Organiser tabs.</p>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Optional media-server metadata providers */}
+        <TabsContent value="media_servers" className="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Media Server Metadata Providers</CardTitle>
+              <CardDescription>Plex and Jellyfin are optional evidence/enrichment sources for Version Manager. TMDb and filename parsing remain independent.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <ConfigSection title="Plex" description="Optional library identity, path and media metadata evidence">
+                <div className="grid gap-6 md:grid-cols-2">
+                  <ConfigField label="Plex URL" envVar="PLEX_URL" value={getValue("PLEX_URL")} source={getSource("PLEX_URL")} onChange={(v) => updateValue("PLEX_URL", v)} />
+                  <ConfigField label="Plex Token" envVar="PLEX_TOKEN" type="password" value={getValue("PLEX_TOKEN")} source={getSource("PLEX_TOKEN")} onChange={(v) => updateValue("PLEX_TOKEN", v)} />
+                  <ConfigField label="Plex Mount Path" envVar="PLEX_MOUNT_DIR" value={getValue("PLEX_MOUNT_DIR")} source={getSource("PLEX_MOUNT_DIR")} onChange={(v) => updateValue("PLEX_MOUNT_DIR", v)} />
+                </div>
+              </ConfigSection>
+              <Separator />
+              <ConfigSection title="Jellyfin" description="Optional library identity, path, external IDs and media-stream evidence">
+                <div className="grid gap-6 md:grid-cols-2">
+                  <ConfigField label="Jellyfin URL" envVar="JELLYFIN_URL" value={getValue("JELLYFIN_URL")} source={getSource("JELLYFIN_URL")} onChange={(v) => updateValue("JELLYFIN_URL", v)} />
+                  <ConfigField label="Jellyfin API Key" envVar="JELLYFIN_API_KEY" type="password" value={getValue("JELLYFIN_API_KEY")} source={getSource("JELLYFIN_API_KEY")} onChange={(v) => updateValue("JELLYFIN_API_KEY", v)} />
+                  <ConfigField label="Jellyfin User ID" envVar="JELLYFIN_USER_ID" value={getValue("JELLYFIN_USER_ID")} source={getSource("JELLYFIN_USER_ID")} onChange={(v) => updateValue("JELLYFIN_USER_ID", v)} />
+                </div>
+              </ConfigSection>
             </CardContent>
           </Card>
         </TabsContent>
@@ -672,7 +701,6 @@ export default function SettingsPage() {
               </div>
               <div className="grid gap-6 md:grid-cols-2">
                 <ConfigField label="Organizer Mode" envVar="ORGANIZER_MODE" type="select" options={["symlink", "copy", "move"]} value={getValue("ORGANIZER_MODE")} source={getSource("ORGANIZER_MODE")} onChange={(v) => updateValue("ORGANIZER_MODE", v)} />
-                <ConfigField label="Organizer Filename Mode" envVar="ORGANIZER_FILENAME_MODE" description="Use canonical names or preserve source release basenames" type="select" options={["canonical", "original"]} value={getValue("ORGANIZER_FILENAME_MODE")} source={getSource("ORGANIZER_FILENAME_MODE")} onChange={(v) => updateValue("ORGANIZER_FILENAME_MODE", v)} />
                 <ConfigField label="Scan Interval (seconds)" envVar="ORG_SCAN_INTERVAL_S" description="How often to scan for new media" type="number" value={getValue("ORG_SCAN_INTERVAL_S")} source={getSource("ORG_SCAN_INTERVAL_S")} onChange={(v) => updateValue("ORG_SCAN_INTERVAL_S", v)} />
               </div>
             </CardContent>

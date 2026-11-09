@@ -622,8 +622,6 @@ All configuration is done via environment variables. Below is the complete refer
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PROVIDERS` | `torbox,realdebrid` | Comma-separated list of active providers (order = priority) |
-
-> Upgrade note: credentials alone do not activate a provider. If you configure a provider API key, include its lowercase provider id in PROVIDERS; otherwise it remains configured but inactive.
 | `ADD_STRATEGY` | `all` | How magnets are distributed: `all`, `failover`, or `single` |
 
 #### TorBox
@@ -911,15 +909,16 @@ All configuration is done via environment variables. Below is the complete refer
 |----------|---------|-------------|
 | `ARR_BRIDGE_ENABLED` | `false` | Enable the fake qBittorrent API server |
 | `ARR_BRIDGE_PORT` | `8282` | Port for the *arr bridge (add as qBittorrent in Radarr/Sonarr) |
-| `ARR_DOWNLOADS_PATH` | `<MOUNT_BASE>/downloads` | Optional staging path when Radarr/Sonarr share a custom path; it must be visible at the same path to the bridge and *arr |
-
-The bridge matches tracked downloads by the provider and persisted torrent ID.
-An ID is considered deleted only when the provider returns a complete,
-authoritative inventory without that ID. Provider outages, rate limits, cached
-responses, empty partial listings, and downloads that are still present are not
-treated as failures; no timeout is applied to the download duration.
+| `ARR_DOWNLOADS_PATH` | `<MOUNT_BASE>/downloads` | Optional staging path shared with Radarr/Sonarr; it must be visible at the same path to the bridge and *arr |
 
 ### 🔄 Provider Reconciliation
+
+The bridge matches tracked downloads by provider and persisted torrent ID.
+An ID is considered deleted only when every submitted provider has returned a
+complete, authoritative inventory and the corresponding ID is absent from all
+of them. Provider outages, rate limits, cached responses, empty partial
+listings, and downloads that are still present are not treated as failures; no
+timeout is applied to the download duration.
 
 After the initial historical library import performed in Radarr/Sonarr,
 provider reconciliation detects newly completed files added directly to a
@@ -958,7 +957,7 @@ deletion transition.
 | `TMDB_API_KEY` | — | TMDB API key for metadata lookup |
 | `ORGANIZED_BASE` | `<MOUNT_BASE>/organized` | Output directory for organised symlinks |
 | `ORGANIZER_MODE` | `symlink` | `symlink`, `copy`, or `move` |
-| `ORGANIZER_FILENAME_MODE` | `canonical` | `canonical` keeps the existing name; `original` preserves the source release basename |
+| `ORGANIZER_GROUP_VERSIONS` | `false` | Keeps equivalent releases in one canonical media folder when enabled; generated symlinks always preserve original release basenames |
 | `ORG_SCAN_INTERVAL_S` | `300` | Organiser scan interval (seconds) |
 
 ### 🔍 Dead Scanner

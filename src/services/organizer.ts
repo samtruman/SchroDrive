@@ -173,7 +173,7 @@ function pad4(n: number): string { return `${n}`.padStart(4, "0"); }
  * Result of parsing a media filename. Contains the classified type and
  * extracted metadata (title/show name, season, episode, year, etc.).
  */
-export interface Parsed {
+interface Parsed {
   /** The classified media type. */
   type: MediaType;
   /** Movie title (only for type "movie"). */
@@ -615,34 +615,48 @@ async function itunesMovieSearch(title: string, year?: number): Promise<{
  * @param srcFullPath - The full path to the source file (used for torrent dir classification).
  * @returns The absolute target path, or `null` if type is unknown.
  */
-export type OrganizerFilenameMode = "canonical" | "original";
 
 /**
- * Selects the final basename without changing the canonical directory layout.
- * The source basename is already a filesystem basename, so preserving it does
- * not allow a release filename to escape the computed destination directory.
+ * Returns the provider release directory used when version grouping is off.
+ * The organized tree still retains the canonical title, but each release gets
+ * its own sibling folder instead of sharing the media folder with alternatives.
  */
-export function selectOrganizerFilename(
-  mode: OrganizerFilenameMode,
-  canonicalFilename: string,
-  sourceFilename: string,
+function sourceReleaseName(srcFullPath: string | undefined, srcBaseName: string): string {
+  if (srcFullPath) {
+    const segments = srcFullPath.split(path.sep);
+    const allIdx = segments.lastIndexOf("__all__");
+    const linksIdx = segments.lastIndexOf("links");
+    const rootIdx = Math.max(allIdx, linksIdx);
+    const release = rootIdx >= 0 ? segments[rootIdx + 1] : undefined;
+    const cleaned = release ? sanitize(release) : "";
+    if (cleaned) return cleaned;
+  }
+  return sanitize(path.parse(srcBaseName).name) || "release";
+}
+
+function organizedVersionFolder(
+  canonicalFolder: string,
+  srcFullPath: string | undefined,
+  srcBaseName: string,
 ): string {
-  return mode === "original" ? path.basename(sourceFilename) : canonicalFilename;
+  if (config.organizerGroupVersions) return canonicalFolder;
+  const release = sourceReleaseName(srcFullPath, srcBaseName);
+  return path.join(path.dirname(canonicalFolder), `${path.basename(canonicalFolder)} [${release}]`);
 }
 
 export function computeTarget(
   p: Parsed,
   srcBaseName: string,
   srcFullPath?: string,
-  filenameMode: OrganizerFilenameMode = config.organizerFilenameMode,
 ): string | null {
   const orgBase = config.organizedBase;
   if (p.type === "movie") {
     const title = p.title ? sanitize(p.title) : sanitize(path.parse(srcBaseName).name);
-    const folder = p.year ? `${title} (${p.year})` : title;
-    const dstDir = path.join(orgBase, "Movies", folder);
-    const dstName = selectOrganizerFilename(filenameMode, `${folder}${p.ext}`, srcBaseName);
-    return path.join(dstDir, dstName);
+    const canonical = canonicalLibraryPath(orgBase, {
+      category: "Movies", title, year: p.year, sourceFilename: srcBaseName,
+    });
+    const dstDir = organizedVersionFolder(path.dirname(canonical), srcFullPath, srcBaseName);
+    return path.join(dstDir, path.basename(canonical));
   }
   if (p.type === "tv") {
     // Check if the content is anime using the media classifier.
@@ -669,36 +683,26 @@ export function computeTarget(
       if (typeof p.season === "number" && typeof p.episode === "number") {
         const seasonDir = `Season ${pad2(p.season)}`;
         const epStr = `${show} S${pad2(p.season)}E${pad2(p.episode)}`;
-        const dstName = selectOrganizerFilename(filenameMode, `${epStr}${p.ext}`, srcBaseName);
-        return path.join(orgBase, "Anime", showDir, seasonDir, dstName);
+        return path.join(orgBase, "Anime", organizedShowDir, seasonDir, path.basename(srcBaseName));
       }
       if (typeof p.absolute === "number") {
-        const dstName = selectOrganizerFilename(filenameMode, `${show} - ${pad4(p.absolute)}${p.ext}`, srcBaseName);
-        return path.join(orgBase, "Anime", showDir, dstName);
+        return path.join(orgBase, "Anime", organizedShowDir, path.basename(srcBaseName));
       }
-      const dstName = selectOrganizerFilename(filenameMode, `${show}${p.ext}`, srcBaseName);
-      return path.join(orgBase, "Anime", showDir, dstName);
+      return path.join(orgBase, "Anime", organizedShowDir, path.basename(srcBaseName));
     }
 
     if (typeof p.season === "number" && typeof p.episode === "number") {
       const seasonDir = `Season ${pad2(p.season)}`;
-      const dstDir = path.join(orgBase, "TV", showDir, seasonDir);
-      const fileName = selectOrganizerFilename(
-        filenameMode,
-        `${show} S${pad2(p.season)}E${pad2(p.episode)}${p.ext}`,
-        srcBaseName,
-      );
-      return path.join(dstDir, fileName);
+      const dstDir = path.join(orgBase, "TV", organizedShowDir, seasonDir);
+      return path.join(dstDir, path.basename(srcBaseName));
     }
     if (typeof p.absolute === "number") {
-      const dstDir = path.join(orgBase, "TV", showDir);
-      const fileName = selectOrganizerFilename(filenameMode, `${show} - ${pad4(p.absolute)}${p.ext}`, srcBaseName);
-      return path.join(dstDir, fileName);
+      const dstDir = path.join(orgBase, "TV", organizedShowDir);
+      return path.join(dstDir, path.basename(srcBaseName));
     }
     // TV with no episode info — place directly in the show directory
-    const dstDir = path.join(orgBase, "TV", showDir);
-    const fileName = selectOrganizerFilename(filenameMode, `${show}${p.ext}`, srcBaseName);
-    return path.join(dstDir, fileName);
+    const dstDir = path.join(orgBase, "TV", organizedShowDir);
+    return path.join(dstDir, path.basename(srcBaseName));
   }
   return null;
 }
@@ -722,7 +726,7 @@ async function ensureDir(p: string) {
  * @param dst - The absolute path where the symlink should be created.
  * @param dryRun - If `true`, log but do not actually create the symlink.
  */
-export async function makeSymlink(src: string, dst: string, dryRun: boolean, avoidCollision = false) {
+export async function makeSymlink(src: string, dst: string, dryRun: boolean, avoidCollision = false): Promise<boolean> {
   const dstDir = path.dirname(dst);
   if (!dryRun) await ensureDir(dstDir);
   const relTarget = path.relative(dstDir, src);
@@ -733,15 +737,8 @@ export async function makeSymlink(src: string, dst: string, dryRun: boolean, avo
         // Check if existing symlink already points to the correct target
         const cur = await fsp.readlink(dst).catch(() => "");
         const resolved = path.resolve(dstDir, cur);
-        if (resolved === src) return; // Already correct — skip
-        if (avoidCollision) {
-          console.warn(`[${new Date().toISOString()}][organize] filename collision; keeping existing symlink`, {
-            path: dst,
-            existingTarget: resolved,
-            incomingTarget: src,
-          });
-          return;
-        }
+        if (resolved === src) return false; // Already correct — skip
+        if (avoidCollision) return false;
         await fsp.unlink(dst);
       } else {
         // Exists as a regular file/directory — leave it to avoid data loss
@@ -812,61 +809,6 @@ async function organizerSourceKey(source: string): Promise<string> {
   const absolute = path.normalize(path.resolve(source));
   const mountBase = path.normalize(path.resolve(config.mountBase));
   if (absolute === mountBase || absolute.startsWith(`${mountBase}${path.sep}`)) return absolute;
-  return fsp.realpath(absolute).then((resolved) => path.normalize(resolved)).catch(() => absolute);
-}
-
-/**
- * Allocates a deterministic alternate target when the canonical destination
- * is already owned by another source. Existing symlinks are never removed by
- * this function; the source path is part of the suffix so discovery order
- * cannot change the alternate name.
- */
-export async function resolveCollisionTarget(src: string, dst: string): Promise<string> {
-  const dstDir = path.dirname(dst);
-  const ext = path.extname(dst);
-  const stem = path.basename(dst, ext);
-  const fingerprint = createHash("sha1").update(src).digest("hex").slice(0, 8);
-  let candidate = dst;
-
-  for (let index = 0; index < 100; index += 1) {
-    const st = await fsp.lstat(candidate).catch(() => null);
-    if (!st) return candidate;
-    if (st.isSymbolicLink()) {
-      const current = await fsp.readlink(candidate).catch(() => "");
-      const currentTarget = path.resolve(path.dirname(candidate), current);
-      if (await organizerSourcesMatch(src, currentTarget)) return candidate;
-    }
-    const suffix = index === 0 ? ` - ${fingerprint}` : ` - ${fingerprint}-${index}`;
-    candidate = path.join(dstDir, `${stem}${suffix}${ext}`);
-  }
-
-  throw new Error(`unable to allocate collision-safe organizer target for ${dst}`);
-}
-
-/** Compare sources across symlinked/container mount aliases. */
-async function organizerSourcesMatch(left: string, right: string): Promise<boolean> {
-  const leftAbsolute = path.normalize(path.resolve(left));
-  const rightAbsolute = path.normalize(path.resolve(right));
-  if (leftAbsolute === rightAbsolute) return true;
-
-  // realpath() performs I/O against the target. For provider-backed FUSE
-  // mounts that I/O can block when the remote is degraded, so mounted
-  // sources skip realpath and conservatively compare as non-matching.
-  const mountBase = path.normalize(path.resolve(config.mountBase));
-  const isMountedPath = (value: string) => value === mountBase || value.startsWith(mountBase + path.sep);
-  if (isMountedPath(leftAbsolute) || isMountedPath(rightAbsolute)) return false;
-
-  const [leftReal, rightReal] = await Promise.all([
-    fsp.realpath(leftAbsolute).catch(() => leftAbsolute),
-    fsp.realpath(rightAbsolute).catch(() => rightAbsolute),
-  ]);
-  return path.normalize(leftReal) === path.normalize(rightReal);
-}
-
-async function organizerSourceKey(source: string): Promise<string> {
-  const absolute = path.normalize(path.resolve(source));
-  const mountBase = path.normalize(path.resolve(config.mountBase));
-  if (absolute === mountBase || absolute.startsWith(mountBase + path.sep)) return absolute;
   return fsp.realpath(absolute).then((resolved) => path.normalize(resolved)).catch(() => absolute);
 }
 
@@ -988,11 +930,12 @@ async function reconcileObsoleteSymlinks(
     return { removedLinks, removedDirs };
   }
 
-  // When Arr reconciliation exposes a category-root source, the provider's
-  // __all__ view is only an aggregation alias. If both roots are scanned, the
-  // same media file is discovered twice and collision handling creates a
-  // second, suffixed organised symlink. Record category targets in this
-  // directory so old __all__ aliases can be removed safely.
+  // A previous organiser pass scanned the provider's __all__ aggregation in
+  // addition to its category roots. That created a second, collision-suffixed
+  // link for the same media item when ARR reconciliation had already exposed
+  // the category-root source. Build the category target set for this folder
+  // first so those historical aliases can be removed safely without touching
+  // the valid Movies/TV/Anime link.
   const categoryTargetLeaves = new Set<string>();
   for (const ent of entries) {
     if (!ent.isSymbolicLink()) continue;
@@ -1121,56 +1064,24 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number; so
   );
   const hasUnavailableSource = mountStatuses.some((status) => !status.ready);
 
-  const mountStatuses = await getConfiguredMountReadiness();
-  const readinessByPath = new Map(
-    mountStatuses.filter((status) => status.path).map((status) => [path.resolve(status.path!), status]),
-  );
-  const hasUnavailableSource = mountStatuses.some((status) => !status.ready);
-
-  // --- Prune stale symlinks before scanning ---
   const orgBase = config.organizedBase;
   const movieDir = path.join(orgBase, "Movies");
   const tvDir = path.join(orgBase, "TV");
   const animeDir = path.join(orgBase, "Anime");
-
-  try {
-    const rootStat = await fsp.stat(orgBase);
-    if (!rootStat.isDirectory()) {
-      throw new Error("organized root is not a directory");
-    }
-    await fsp.access(
-      orgBase,
-      dryRun
-        ? fs.constants.R_OK | fs.constants.X_OK
-        : fs.constants.R_OK | fs.constants.W_OK | fs.constants.X_OK,
-    );
-  } catch (err: any) {
-    throw new Error(`organized root unavailable: ${orgBase}: ${err?.message || String(err)}`);
-  }
-
   let totalRemovedLinks = 0;
   let totalRemovedDirs = 0;
 
-  if (!hasUnavailableSource) {
-    for (const dir of [movieDir, tvDir, animeDir]) {
-      try {
-        const st = await fsp.stat(dir);
-        if (st.isDirectory()) {
-          const { removedLinks, removedDirs } = await pruneStaleSymlinks(dir);
-          totalRemovedLinks += removedLinks;
-          totalRemovedDirs += removedDirs;
-        }
-      } catch { /* directory may not exist yet */ }
+  // The organized root is required for every mode. Category directories are
+  // deliberately optional: they are created lazily by makeSymlink only when
+  // a discovered item actually needs that destination.
+  try {
+    const rootStat = await fsp.stat(orgBase);
+    if (!rootStat.isDirectory()) {
+      throw new Error(`organized root is not a directory: ${orgBase}`);
     }
-  } else {
-    console.warn(`[${new Date().toISOString()}][organize] skipping stale-content pruning while a source mount is not ready`);
-  }
-
-  if (totalRemovedLinks > 0 || totalRemovedDirs > 0) {
-    console.log(`[${new Date().toISOString()}][organize] pruned stale content`, {
-      removedSymlinks: totalRemovedLinks,
-      removedEmptyDirs: totalRemovedDirs,
-    });
+    await fsp.access(orgBase, dryRun ? fs.constants.R_OK | fs.constants.X_OK : fs.constants.R_OK | fs.constants.W_OK | fs.constants.X_OK);
+  } catch (err) {
+    throw new Error(`organized root unavailable: ${orgBase}: ${(err as Error)?.message || String(err)}`);
   }
 
   // --- Scan mounted providers for video files ---
@@ -1202,19 +1113,56 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number; so
     }
   }
   const files: string[] = [];
-  for (const r of roots) {
+  const scanRoots = incremental
+    ? incrementalPaths.flatMap((sourcePath) => {
+        const relative = sourcePath.replace(/^\/+/, "");
+        return config.providers.map((providerId) => path.join(config.mountBase, providerId, relative));
+      })
+    : roots;
+  for (const r of scanRoots) {
     try {
       const st = await fsp.stat(r);
-      if (st.isDirectory()) {
-        await walkDir(r, files, limit);
+      if (st.isDirectory()) await walkDir(r, files, limit);
+      else if (st.isFile()) files.push(r);
+    } catch (err) {
+      if (!incremental || (err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        throw new Error(`organizer source unavailable: ${r}: ${(err as Error)?.message || String(err)}`);
       }
-    } catch (_) { /* ignore — directory may not exist yet */ }
+    }
   }
-  console.log(`[${new Date().toISOString()}][organize] scan`, { roots, files: files.length });
+  console.log(`[${new Date().toISOString()}][organize] scan`, { roots: scanRoots, files: files.length, incremental });
 
   // Filesystem traversal order is not stable across providers/filesystems.
-  // Sorting makes collision assignment deterministic for a given source set.
+  // Sorting makes canonical-vs-collision assignment deterministic for a
+  // given source set without ever replacing an existing valid symlink.
   files.sort((a, b) => a.localeCompare(b));
+
+  // An empty discovery is ambiguous: it can mean an empty library, but it can
+  // also mean that a provider mount is temporarily unavailable. Never prune
+  // existing organized links in that state.
+  if (!incremental && !dryRun && files.length > 0 && !hasUnavailableSource) {
+    for (const dir of [movieDir, tvDir, animeDir]) {
+      try {
+        const st = await fsp.stat(dir);
+        if (!st.isDirectory()) throw new Error(`organized category is not a directory: ${dir}`);
+        const { removedLinks, removedDirs } = await pruneStaleSymlinks(dir);
+        totalRemovedLinks += removedLinks;
+        totalRemovedDirs += removedDirs;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException)?.code === "ENOENT") continue;
+        throw new Error(`organized library unavailable: ${dir}: ${(err as Error)?.message || String(err)}`);
+      }
+    }
+  } else if (!incremental && !dryRun && hasUnavailableSource) {
+    console.warn(`[${new Date().toISOString()}][organize] skipping stale-content pruning while a source mount is not ready`);
+  }
+
+  if (totalRemovedLinks > 0 || totalRemovedDirs > 0) {
+    console.log(`[${new Date().toISOString()}][organize] pruned stale content`, {
+      removedSymlinks: totalRemovedLinks,
+      removedEmptyDirs: totalRemovedDirs,
+    });
+  }
 
   let processed = 0;
   let changed = false;
@@ -1223,6 +1171,10 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number; so
   let unknownCount = 0;
   const unknownSamples: string[] = [];
   const desiredBySource = new Map<string, string>();
+  let arrRecords: ArrLibraryRecords | undefined;
+  if (!dryRun && (config.providerReconciliationRadarrUrl || config.providerReconciliationSonarrUrl)) {
+    arrRecords = await loadArrLibraryRecords();
+  }
   for (const src of files) {
     const base = path.basename(src);
     const structuredIdentity = parseMediaFilename(base, src);
@@ -1325,23 +1277,18 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number; so
       : computeTarget(parsed, base, src);
     if (!dst) continue;
 
-    let organizedTarget = dst;
-    if (config.organizerFilenameMode === "original") {
-      // Original release filenames: never silently replace a different
-      // symlink on collision — keep the existing one.
-      await makeSymlink(src, dst, dryRun, true);
-    } else {
-      // Canonical filenames: preserve colliding media versions under a
-      // deterministic alternate target instead of replacing them.
-      const safeDst = dryRun ? dst : await resolveCollisionTarget(src, dst);
-      await makeSymlink(src, safeDst, dryRun);
-      organizedTarget = safeDst;
+    const safeDst = dryRun ? dst : await resolveCollisionTarget(src, dst);
+    if (dryRun && !(await fsp.stat(path.dirname(safeDst)).catch(() => null))) {
+      console.log(`[${new Date().toISOString()}][organize] would create directory`, { path: path.dirname(safeDst) });
     }
-    if (!dryRun) desiredBySource.set(await organizerSourceKey(src), organizedTarget);
+    if (await makeSymlink(src, safeDst, dryRun, true)) changed = true;
+    if (!dryRun) desiredBySource.set(await organizerSourceKey(src), safeDst);
     processed++;
   }
 
-  if (!dryRun && desiredBySource.size > 0) {
+  const discoveryComplete = !dryRun && files.length > 0 && !hasUnavailableSource && processed === files.length && unknownCount === 0;
+
+  if (!incremental && discoveryComplete && desiredBySource.size > 0) {
     let removedLinks = 0;
     let removedDirs = 0;
     for (const dir of [movieDir, tvDir, animeDir]) {
@@ -1350,11 +1297,37 @@ export async function organizeOnce(opts?: { dryRun?: boolean; limit?: number; so
       removedDirs += result.removedDirs;
     }
     if (removedLinks || removedDirs) {
+      changed = true;
       console.log(`[${new Date().toISOString()}][organize] reconciled obsolete content`, {
         removedSymlinks: removedLinks,
         removedEmptyDirs: removedDirs,
       });
     }
+  }
+
+  // Arr integration is an optional second phase. The Organizer remains fully
+  // standalone, but when Radarr/Sonarr are configured, reconcile both the
+  // initial library bootstrap and later AllDebrid manifest additions against
+  // their authoritative library paths before refreshing media servers.
+  if (!dryRun && !incremental) {
+    try {
+      const arrReconciliation = await reconcileOrganizedLibraryWithArr();
+      if (arrReconciliation.scanned > 0) {
+        console.log(`[${new Date().toISOString()}][organize] Arr path reconciliation`, arrReconciliation);
+      }
+      if (arrReconciliation.moved > 0) changed = true;
+    } catch (err) {
+      // Arr is optional: a temporary outage must not block standalone
+      // organization or cause source/provider links to be removed.
+      console.warn(`[${new Date().toISOString()}][organize] Arr path reconciliation deferred`, {
+        err: (err as Error)?.message || String(err),
+      });
+    }
+  }
+
+  if (!dryRun && changed) {
+    if (config.refreshJellyfinOnAdd) await refreshJellyfinLibrary();
+    if (config.refreshPlexOnAdd) await refreshPlexLibrary();
   }
 
   console.log(

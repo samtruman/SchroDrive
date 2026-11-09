@@ -65,12 +65,16 @@ export const CONFIG_SCHEMA = {
   PROVIDER_RECONCILIATION_ENABLED: { type: "boolean", default: "false", category: "arr", label: "Enable Provider Reconciliation" },
   PROVIDER_RECONCILIATION_RECENT_INTERVAL_MS: { type: "number", default: "900000", category: "arr", label: "Recent Scan Interval (ms)" },
   PROVIDER_RECONCILIATION_FULL_INTERVAL_MS: { type: "number", default: "21600000", category: "arr", label: "Full Scan Interval (ms)" },
+  PROVIDER_RECONCILIATION_FULL_TIME: { type: "string", default: "03:00", category: "arr", label: "Full Scan Time (local)" },
+  ORGANIZER_RECONCILIATION_DELAY_MS: { type: "number", default: "1800000", category: "organizer", label: "Organizer Delay After Full Scan (ms)" },
   PROVIDER_RECONCILIATION_RECENT_LIMIT: { type: "number", default: "30", category: "arr", label: "Recent Items Limit" },
   PROVIDER_RECONCILIATION_RUN_FULL_ON_START: { type: "boolean", default: "true", category: "arr", label: "Run Full Scan on Startup" },
   PROVIDER_RECONCILIATION_RADARR_URL: { type: "string", default: "", category: "arr", label: "Radarr URL" },
   PROVIDER_RECONCILIATION_RADARR_API_KEY: { type: "password", default: "", category: "arr", label: "Radarr API Key" },
   PROVIDER_RECONCILIATION_SONARR_URL: { type: "string", default: "", category: "arr", label: "Sonarr URL" },
   PROVIDER_RECONCILIATION_SONARR_API_KEY: { type: "password", default: "", category: "arr", label: "Sonarr API Key" },
+  ARR_DOWNLOADS_PATH: { type: "string", default: "", category: "arr", label: "ARR Downloads Path" },
+  PROVIDER_RECONCILIATION_MOUNT_READY_POLL_MS: { type: "number", default: "500", category: "arr", label: "Provider Mount Ready Poll (ms)" },
 
   // Runtime Services
   RUN_WEBHOOK: { type: "boolean", default: "true", category: "services", label: "Run Webhook Server" },
@@ -79,7 +83,6 @@ export const CONFIG_SCHEMA = {
   RUN_DEAD_SCANNER: { type: "boolean", default: "false", category: "services", label: "Run Dead Scanner" },
   RUN_DEAD_SCANNER_WATCH: { type: "boolean", default: "false", category: "services", label: "Dead Scanner Watch Mode" },
   RUN_ORGANIZER_WATCH: { type: "boolean", default: "false", category: "services", label: "Organizer Watch Mode" },
-  ARR_DOWNLOADS_PATH: { type: "string", default: "", category: "arr", label: "ARR Downloads Path" },
 
   // Mount Settings
   MOUNT_BASE: { type: "string", default: "/mnt/schrodrive", category: "mounts", label: "Mount Base Path" },
@@ -110,7 +113,7 @@ export const CONFIG_SCHEMA = {
   TMDB_API_KEY: { type: "password", default: "", category: "organizer", label: "TMDB API Key" },
   ORGANIZED_BASE: { type: "string", default: "", category: "organizer", label: "Organized Base Path" },
   ORGANIZER_MODE: { type: "select", default: "symlink", options: ["symlink", "copy", "move"], category: "organizer", label: "Organizer Mode" },
-  ORGANIZER_FILENAME_MODE: { type: "select", default: "canonical", options: ["canonical", "original"], category: "organizer", label: "Organizer Filename Mode" },
+  ORGANIZER_GROUP_VERSIONS: { type: "boolean", default: "true", category: "organizer", label: "Group media versions" },
   ORG_SCAN_INTERVAL_S: { type: "number", default: "300", category: "organizer", label: "Organizer Scan Interval (seconds)" },
 
   // Optional media-server metadata providers
@@ -144,6 +147,10 @@ const CONFIG_KEY_ALIASES: Record<string, readonly string[]> = {
   PREMIUMIZE_WEBDAV_PASSWORD: ["PM_WEBDAV_PASSWORD"],
 };
 
+const LEGACY_TO_CANONICAL_KEY = new Map(
+  Object.entries(CONFIG_KEY_ALIASES).flatMap(([canonical, aliases]) => aliases.map((alias) => [alias, canonical] as const)),
+);
+
 interface ConfigValue {
   value: string;
   source: "env" | "file" | "default";
@@ -154,33 +161,6 @@ interface ConfigValue {
 }
 
 export type ConfigData = Record<ConfigKey, ConfigValue>;
-export type ConfigProvenance = ConfigData[ConfigKey]["provenance"];
-
-export interface ConfigSourceOptions {
-  /** Test/embedding override; production reads the original process env. */
-  containerEnvKeys?: ReadonlySet<string>;
-  envPath?: string;
-}
-
-/**
- * Bun can load .env values into process.env before application modules run.
- * Reading /proc/self/environ preserves the original environment boundary on
- * Linux/Docker so persisted values are not incorrectly shown as locked.
- */
-export function getOriginalEnvironmentKeys(): Set<string> {
-  try {
-    const raw = fs.readFileSync("/proc/self/environ");
-    return new Set(
-      raw
-        .toString("utf8")
-        .split("\0")
-        .map((entry) => entry.slice(0, entry.indexOf("=")))
-        .filter(Boolean),
-    );
-  } catch {
-    return new Set(Object.keys(process.env));
-  }
-}
 
 export type ConfigProvenance = ConfigValue["provenance"];
 
@@ -279,25 +259,21 @@ function parseEnvFile(filePath: string): Map<string, string> {
   return result;
 }
 
-/** Resolve a runtime setting, falling back to the value persisted in .env. */
-export function resolveRuntimeOrPersistedValue(runtimeValue: string | undefined, persistedValue: string | undefined): string {
-  return runtimeValue !== undefined && runtimeValue !== "" ? runtimeValue : persistedValue || "";
-}
-
 /** Read one persisted setting without exposing or logging its value. */
-export function getPersistedEnvValue(key: ConfigKey): string {
-  return parseEnvFile(findEnvPath()).get(key) || "";
+export function getPersistedEnvValue(key: ConfigKey, envPath = findEnvPath()): string {
+  const fileValues = parseEnvFile(envPath);
+  const canonical = fileValues.get(key);
+  if (canonical !== undefined && canonical !== "") return canonical;
+  for (const alias of CONFIG_KEY_ALIASES[key] || []) {
+    const legacy = fileValues.get(alias);
+    if (legacy !== undefined && legacy !== "") return legacy;
+  }
+  return canonical || "";
 }
 
 /**
- * Make persisted GUI settings available to the runtime configuration.
- *
- * Docker may provide empty placeholders for settings that are saved in the
- * mounted .env file.  The settings API already knows how to read that file,
- * but modules constructing the runtime config read process.env directly.
- * Hydrate only missing/empty schema keys so real container environment values
- * retain precedence while every GUI-backed setting follows the same startup
- * path.
+ * Hydrate GUI-persisted settings for runtime modules at startup.
+ * Real container environment values retain precedence over the persisted file.
  */
 export function loadPersistedConfigIntoRuntimeEnv(): void {
   const fileValues = parseEnvFile(findEnvPath());
@@ -326,22 +302,20 @@ export function getConfigWithSources(options: ConfigSourceOptions = {}): { confi
   for (const [key, schema] of Object.entries(CONFIG_SCHEMA)) {
     const k = key as ConfigKey;
     const aliases = CONFIG_KEY_ALIASES[key] || [];
-    const runtimeKey = [key, ...aliases].find((candidate) => process.env[candidate] !== undefined && process.env[candidate] !== "");
+    const lookupKeys = [key, ...aliases];
+    const runtimeKey = lookupKeys.find((candidate) => containerEnvKeys.has(candidate) && process.env[candidate] !== undefined && process.env[candidate] !== "");
     const canonicalFileValue = fileValues.get(key);
     const legacyFileValue = aliases.map((alias) => fileValues.get(alias)).find((candidate) => candidate !== undefined && candidate !== "");
     const fileValue = canonicalFileValue !== undefined && canonicalFileValue !== "" ? canonicalFileValue : legacyFileValue ?? canonicalFileValue;
-
-    const runtimeValue = runtimeKey ? process.env[runtimeKey] || "" : undefined;
 
     let value: string;
     let source: "env" | "file" | "default";
     let provenance: ConfigProvenance;
     let locked: boolean;
 
-    if (runtimeKey !== undefined && containerEnvKeys.has(runtimeKey)) {
-      // Original container environment variable (canonical key or legacy
-      // alias) takes priority and is locked for editing in the UI.
-      value = runtimeValue as string;
+    if (runtimeKey) {
+      // Canonical runtime value wins; legacy runtime names remain readable.
+      value = process.env[runtimeKey] || "";
       source = "env";
       provenance = "CONTAINER_ENV";
       locked = true;

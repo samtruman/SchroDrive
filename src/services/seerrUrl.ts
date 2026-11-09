@@ -1,6 +1,6 @@
 /**
- * Normalises a configured Seerr service URL to its API root.
- * Both a service root and an already-entered /api/v1 URL are accepted.
+ * Normalises the configured Seerr service URL to its API root.
+ * Both the service root and an already-entered /api/v1 URL are accepted.
  */
 export function seerrApiBaseUrl(value: string): string {
   const base = value.replace(/\/+$/, "");

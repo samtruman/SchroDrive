@@ -40,6 +40,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 RUN grep -qxF 'user_allow_other' /etc/fuse.conf || printf 'user_allow_other\n' >> /etc/fuse.conf
 
+# Build metadata changes on every commit. Keep it after the expensive system
+# dependency layer so a new revision does not reinstall FFmpeg and rclone.
+ARG SCHRODRIVE_BUILD_COMMIT=unknown
+ARG SCHRODRIVE_BUILD_TIME=unknown
+ARG SCHRODRIVE_IMAGE=unknown
+
 # Copy web GUI before the backend artifact so backend-only changes do not
 # invalidate the large web dependency/artifact layers below.
 COPY package.json ./
@@ -51,6 +57,10 @@ COPY --from=web-build /app/web/node_modules ./web/node_modules
 
 # Keep the small, frequently changing backend artifact last.
 COPY --from=build /app/dist ./dist
+
+# Embed immutable build identity in the image. Runtime state is not required
+# to report which source revision produced this image.
+RUN printf '%s\n' "{\"version\":\"0.11.5\",\"commit\":\"$SCHRODRIVE_BUILD_COMMIT\",\"builtAt\":\"$SCHRODRIVE_BUILD_TIME\",\"image\":\"$SCHRODRIVE_IMAGE\",\"runtimeCommit\":\"$SCHRODRIVE_BUILD_COMMIT\",\"frontendCommit\":\"$SCHRODRIVE_BUILD_COMMIT\"}" > /app/BUILD_INFO.json
 
 # Copy entrypoint script
 COPY docker-entrypoint.sh /docker-entrypoint.sh

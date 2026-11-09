@@ -310,8 +310,8 @@ export class AllDebridProvider implements DebridProvider {
    *
    * @returns An array of normalised torrent info objects.
    */
-  async listTorrents(): Promise<TorrentInfo[]> {
-    return (await this.listTorrentsWithStatus()).torrents;
+  async listTorrents(requireFresh = false): Promise<TorrentInfo[]> {
+    return (await this.listTorrentsWithStatus(requireFresh)).torrents;
   }
 
   /**
@@ -328,6 +328,10 @@ export class AllDebridProvider implements DebridProvider {
       const url = buildUrl('/v4.1/magnet/status', { id: torrentId });
       const res = await axiosIPv4.post(url, null, { headers: authHeaders(), timeout: 20000 });
       rateLimiter.recordSuccess(PROVIDER_NAME);
+      const providerError = `${res?.data?.error?.code || ''} ${res?.data?.error?.message || ''}`.toLowerCase();
+      if (res?.data?.status === 'error' && /not[ _-]?found|does not exist|unknown id|invalid/.test(providerError)) {
+        return { status: 'missing' };
+      }
       const data = unwrapResponse(res, 'get magnet status');
       const magnet = Array.isArray(data?.magnets) ? data.magnets[0] : data?.magnets;
       if (!magnet || typeof magnet !== 'object') {
@@ -354,8 +358,11 @@ export class AllDebridProvider implements DebridProvider {
    * returned during rate limits/errors are deliberately marked incomplete so
    * callers never interpret them as proof that a submitted magnet vanished.
    */
-  async listTorrentsWithStatus(): Promise<{ torrents: TorrentInfo[]; complete: boolean }> {
-    if (!this.isConfigured()) return { torrents: [], complete: false };
+  async listTorrentsWithStatus(requireFresh = false): Promise<{ torrents: TorrentInfo[]; complete: boolean }> {
+    if (!this.isConfigured()) {
+      if (requireFresh) throw new Error('Provider not configured');
+      return { torrents: [], complete: false };
+    }
 
     // Return cached data if rate-limited
     if (rateLimiter.isRateLimited(PROVIDER_NAME)) {

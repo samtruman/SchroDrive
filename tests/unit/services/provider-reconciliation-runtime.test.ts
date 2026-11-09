@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { config, isProviderReconciliationAutoEnabled } from '../../../src/core/config';
-import { providerReconciliationRoutes, startProviderReconciliation } from '../../../src/services/providerReconciliationRuntime';
+import { normalizeProviderItemId, providerReconciliationRoutes, startProviderReconciliation } from '../../../src/services/providerReconciliationRuntime';
 
 const original = {
   enabled: config.providerReconciliationEnabled,

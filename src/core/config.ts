@@ -3,7 +3,30 @@ import { asBool, asNumber, splitCsv } from './utils';
 import { getPersistedEnvValue, loadPersistedConfigIntoRuntimeEnv, resolveRuntimeOrPersistedValue } from './configApi';
 
 loadPersistedConfigIntoRuntimeEnv();
+
 const persistedTmdbApiKey = getPersistedEnvValue("TMDB_API_KEY");
+const persistedSeerrUrl = getPersistedEnvValue("SEERR_URL");
+const persistedSeerrApiKey = getPersistedEnvValue("SEERR_API_KEY");
+const persistedSeerrAuth = getPersistedEnvValue("SEERR_AUTH");
+const persistedPlexUrl = getPersistedEnvValue("PLEX_URL");
+const persistedPlexToken = getPersistedEnvValue("PLEX_TOKEN");
+const persistedPlexMountDir = getPersistedEnvValue("PLEX_MOUNT_DIR");
+const persistedJellyfinUrl = getPersistedEnvValue("JELLYFIN_URL");
+const persistedJellyfinApiKey = getPersistedEnvValue("JELLYFIN_API_KEY");
+const persistedJellyfinUserId = getPersistedEnvValue("JELLYFIN_USER_ID");
+const persistedOrganizerGroupVersions = getPersistedEnvValue("ORGANIZER_GROUP_VERSIONS");
+const persistedRdAccessToken = getPersistedEnvValue("RD_ACCESS_TOKEN");
+const persistedRdWebdavUrl = getPersistedEnvValue("RD_WEBDAV_URL");
+const persistedRdWebdavUsername = getPersistedEnvValue("RD_WEBDAV_USERNAME");
+const persistedRdWebdavPassword = getPersistedEnvValue("RD_WEBDAV_PASSWORD");
+const persistedAllDebridApiKey = getPersistedEnvValue("ALLDEBRID_API_KEY");
+const persistedAllDebridWebdavUrl = getPersistedEnvValue("ALLDEBRID_WEBDAV_URL");
+const persistedAllDebridWebdavUsername = getPersistedEnvValue("ALLDEBRID_WEBDAV_USERNAME");
+const persistedAllDebridWebdavPassword = getPersistedEnvValue("ALLDEBRID_WEBDAV_PASSWORD");
+const persistedPremiumizeApiKey = getPersistedEnvValue("PREMIUMIZE_API_KEY");
+const persistedPremiumizeWebdavUrl = getPersistedEnvValue("PREMIUMIZE_WEBDAV_URL");
+const persistedPremiumizeWebdavUsername = getPersistedEnvValue("PREMIUMIZE_WEBDAV_USERNAME");
+const persistedPremiumizeWebdavPassword = getPersistedEnvValue("PREMIUMIZE_WEBDAV_PASSWORD");
 
 const defaultMountBase = (process.env.MOUNT_BASE || (process.platform === 'darwin' ? "/Volumes/SchroDrive" : "/mnt/schrodrive"));
 
@@ -78,7 +101,7 @@ export const config = {
   torboxWebdavUsername: process.env.TORBOX_WEBDAV_USERNAME || "",
   torboxWebdavPassword: process.env.TORBOX_WEBDAV_PASSWORD || "",
   // AllDebrid API
-  alldebridApiKey: process.env.ALLDEBRID_API_KEY || process.env.AD_API_KEY || "",
+  alldebridApiKey: resolveRuntimeOrPersistedValue(process.env.ALLDEBRID_API_KEY || process.env.AD_API_KEY, persistedAllDebridApiKey),
   alldebridApiBase: process.env.ALLDEBRID_API_BASE || "https://api.alldebrid.com/v4",
   alldebridAgent: process.env.ALLDEBRID_AGENT || "schrodrive",
   // Provider reconciliation starts automatically when both Arr integrations
@@ -99,16 +122,16 @@ export const config = {
   providerReconciliationMoviesLibraryPath: process.env.PROVIDER_RECONCILIATION_MOVIES_LIBRARY_PATH || "",
   providerReconciliationShowsLibraryPath: process.env.PROVIDER_RECONCILIATION_SHOWS_LIBRARY_PATH || "",
   // AllDebrid WebDAV (if supported)
-  alldebridWebdavUrl: process.env.ALLDEBRID_WEBDAV_URL || process.env.AD_WEBDAV_URL || "",
-  alldebridWebdavUsername: process.env.ALLDEBRID_WEBDAV_USERNAME || process.env.AD_WEBDAV_USERNAME || "",
-  alldebridWebdavPassword: process.env.ALLDEBRID_WEBDAV_PASSWORD || process.env.AD_WEBDAV_PASSWORD || "",
+  alldebridWebdavUrl: resolveRuntimeOrPersistedValue(process.env.ALLDEBRID_WEBDAV_URL || process.env.AD_WEBDAV_URL, persistedAllDebridWebdavUrl),
+  alldebridWebdavUsername: resolveRuntimeOrPersistedValue(process.env.ALLDEBRID_WEBDAV_USERNAME || process.env.AD_WEBDAV_USERNAME, persistedAllDebridWebdavUsername),
+  alldebridWebdavPassword: resolveRuntimeOrPersistedValue(process.env.ALLDEBRID_WEBDAV_PASSWORD || process.env.AD_WEBDAV_PASSWORD, persistedAllDebridWebdavPassword),
   // Premiumize API
-  premiumizeApiKey: process.env.PREMIUMIZE_API_KEY || process.env.PM_API_KEY || "",
+  premiumizeApiKey: resolveRuntimeOrPersistedValue(process.env.PREMIUMIZE_API_KEY || process.env.PM_API_KEY, persistedPremiumizeApiKey),
   premiumizeApiBase: process.env.PREMIUMIZE_API_BASE || "https://www.premiumize.me/api",
   // Premiumize WebDAV
-  premiumizeWebdavUrl: process.env.PREMIUMIZE_WEBDAV_URL || process.env.PM_WEBDAV_URL || "https://webdav.premiumize.me",
-  premiumizeWebdavUsername: process.env.PREMIUMIZE_WEBDAV_USERNAME || process.env.PM_WEBDAV_USERNAME || "",
-  premiumizeWebdavPassword: process.env.PREMIUMIZE_WEBDAV_PASSWORD || process.env.PM_WEBDAV_PASSWORD || '',
+  premiumizeWebdavUrl: resolveRuntimeOrPersistedValue(process.env.PREMIUMIZE_WEBDAV_URL || process.env.PM_WEBDAV_URL, persistedPremiumizeWebdavUrl) || "https://webdav.premiumize.me",
+  premiumizeWebdavUsername: resolveRuntimeOrPersistedValue(process.env.PREMIUMIZE_WEBDAV_USERNAME || process.env.PM_WEBDAV_USERNAME, persistedPremiumizeWebdavUsername),
+  premiumizeWebdavPassword: resolveRuntimeOrPersistedValue(process.env.PREMIUMIZE_WEBDAV_PASSWORD || process.env.PM_WEBDAV_PASSWORD, persistedPremiumizeWebdavPassword),
   // --- Download Token Rotation (Zurg-style 503 bypass) ---
   rdDownloadTokens: splitCsv(process.env.RD_DOWNLOAD_TOKENS),
   torboxDownloadTokens: splitCsv(process.env.TORBOX_DOWNLOAD_TOKENS),
@@ -204,14 +227,13 @@ export const config = {
   runDeadScanner: asBool(process.env.RUN_DEAD_SCANNER),
   runDeadScannerWatch: asBool(process.env.RUN_DEAD_SCANNER_WATCH),
   // Organiser (symlinked view)
-  // Docker may provide an empty placeholder while Settings persists the real key in .env.
+  // The Settings UI persists this value in .env. Docker may still provide an
+  // empty TMDB_API_KEY placeholder, so use the persisted value only when the
+  // runtime environment does not contain a non-empty value.
   tmdbApiKey: resolveRuntimeOrPersistedValue(process.env.TMDB_API_KEY, persistedTmdbApiKey),
   organizedBase: process.env.ORGANIZED_BASE || `${defaultMountBase}/organized`,
   organizerMode: (process.env.ORGANIZER_MODE || "symlink") as "symlink" | "copy" | "move",
-  // Filename policy for the organised view. Canonical preserves the existing behaviour; original keeps the source release basename in the symlink.
-  organizerFilenameMode: (process.env.ORGANIZER_FILENAME_MODE || "canonical").toLowerCase() === "original"
-    ? "original" as const
-    : "canonical" as const,
+  organizerGroupVersions: asBool(resolveRuntimeOrPersistedValue(process.env.ORGANIZER_GROUP_VERSIONS, persistedOrganizerGroupVersions), true),
   runOrganizerWatch: asBool(process.env.RUN_ORGANIZER_WATCH),
   orgScanIntervalSeconds: asNumber(process.env.ORG_SCAN_INTERVAL_S, 300),
   // --- Media Server Integration ---
