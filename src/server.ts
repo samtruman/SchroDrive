@@ -1835,13 +1835,28 @@ export function startServer() {
   });
 
   /**
+   * Keep the magnet hash intact while giving *arr the canonical display name
+   * selected by the user.  The fake qBittorrent bridge uses dn as the torrent
+   * name, which is what Radarr/Sonarr use when associating a manual download.
+   */
+  function withCanonicalMagnetName(magnet: string, title: string, year?: number): string {
+    try {
+      const parsed = new URL(magnet);
+      parsed.searchParams.set("dn", `${title}${year ? ` (${year})` : ""}`);
+      return parsed.toString();
+    } catch {
+      return magnet;
+    }
+  }
+
+  /**
    * POST /api/add/intake — provider-neutral manual intake.
    *
-   * `mode=arr` delegates to the existing qBittorrent-compatible bridge so
-   * Sonarr/Radarr retain ownership of parsing, naming and importing.
-   * `mode=standalone` adds directly to the selected provider and records the
-   * confirmed TMDB identity for the standalone organizer. The legacy /api/add
-   * endpoint remains unchanged for clients that only need provider addition.
+   * Both modes require a confirmed TMDB identity.  `mode=arr` delegates to
+   * the existing qBittorrent-compatible bridge with the canonical title and
+   * the correct category; `mode=standalone` adds directly to the provider and
+   * records the identity for the organizer. The legacy /api/add endpoint
+   * remains unchanged for clients that only need provider addition.
    */
   app.post("/api/add/intake", async (req, res) => {
     try {
@@ -1858,19 +1873,29 @@ export function startServer() {
 
       if (mode === "arr") {
         if (!config.arrBridgeEnabled) return res.status(503).json({ ok: false, error: "Arr bridge is not enabled" });
+        if (!identity || typeof identity !== "object") {
+          return res.status(400).json({ ok: false, error: "TMDB identity is required before Arr intake" });
+        }
+        const tmdbId = String(identity.tmdbId || "").trim();
+        const title = String(identity.title || "").trim();
+        const year = Number(identity.year) || undefined;
+        if (!tmdbId || !title) {
+          return res.status(400).json({ ok: false, error: "TMDB identity requires tmdbId and title" });
+        }
+        const canonicalMagnet = withCanonicalMagnetName(magnet, title, year);
         const bridgeResponse = await fetch(`http://127.0.0.1:${config.arrBridgePort}/api/v2/torrents/add`, {
           method: "POST",
           headers: { "Content-Type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({
-            urls: magnet,
+            urls: canonicalMagnet,
             category: mediaType === "tv" ? "sonarr" : "radarr",
-            tags: "schrodrive-manual-intake",
+            tags: `schrodrive-manual-intake,tmdb-${tmdbId}`,
           }),
         });
         if (!bridgeResponse.ok) {
           return res.status(502).json({ ok: false, error: `Arr bridge rejected intake: HTTP ${bridgeResponse.status}` });
         }
-        return res.status(202).json({ ok: true, mode, mediaType, delegatedTo: mediaType === "tv" ? "sonarr" : "radarr", status: "queued" });
+        return res.status(202).json({ ok: true, mode, mediaType, identity, delegatedTo: mediaType === "tv" ? "sonarr" : "radarr", status: "queued" });
       }
 
       const provider = targetProvider ? registry.get(String(targetProvider)) : registry.configured()[0];

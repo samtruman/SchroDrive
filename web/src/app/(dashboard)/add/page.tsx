@@ -35,7 +35,7 @@ export default function AddContentPage() {
   const [identityQuery, setIdentityQuery] = useState("")
   const [identityCandidates, setIdentityCandidates] = useState<any[]>([])
   const [selectedIdentity, setSelectedIdentity] = useState<any>(null)
-  const [pendingAddition, setPendingAddition] = useState<{ provider: string; title?: string } | null>(null)
+  const [pendingAddition, setPendingAddition] = useState<{ provider: string; title?: string; magnet: string; mode: "standalone" | "arr"; mediaType: "movie" | "tv" } | null>(null)
   const [providers, setProviders] = useState<Provider[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -101,47 +101,14 @@ export default function AddContentPage() {
       return
     }
 
-    setIsAdding(true)
-    
-    try {
-      const res = await fetch("/api/add/intake", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          magnet: magnetUrl,
-          mode: intakeMode,
-          mediaType,
-          provider: selectedProvider,
-        }),
-      })
-      
-      const data = await res.json()
-      
-      if (data.ok) {
-        const destination = data.provider || data.delegatedTo || data.mode || "provider"
-        if (data.mode === "arr") {
-          toast.success(`Magnet inviato a ${destination}`)
-          toast.info("Sonarr/Radarr gestiscono identità TMDB, importazione e organizzazione.")
-        } else {
-          toast.success(`Added to ${destination}`)
-        }
-        setMagnetUrl("")
-        if (data.mode === "standalone" && data.identityRequired) {
-          const title = magnetDisplayName(magnetUrl)
-          setPendingAddition({ provider: data.provider, title })
-          setIdentityQuery(title)
-          setIdentityCandidates([])
-          setSelectedIdentity(null)
-          toast.info("Magnet aggiunto. Ora identifica il contenuto con TMDB.")
-        }
-      } else {
-        toast.error(data.error || "Failed to add magnet")
-      }
-    } catch (err: any) {
-      toast.error(err.message || "Failed to add magnet")
-    } finally {
-      setIsAdding(false)
-    }
+    const title = magnetDisplayName(magnetUrl)
+    setPendingAddition({ provider: selectedProvider, title, magnet: magnetUrl, mode: intakeMode, mediaType })
+    setIdentityQuery(title)
+    setIdentityCandidates([])
+    setSelectedIdentity(null)
+    setMagnetUrl("")
+    toast.info("Magnet acquisito. Ora conferma l’identità TMDB prima dell’invio.")
+    if (title) void resolveIdentity(title, mediaType)
   }
 
   const handleSearchAndAdd = async () => {
@@ -177,40 +144,13 @@ export default function AddContentPage() {
 
       toast.info(`Found: ${best.title}`)
       
-      // Add it
-      const addRes = await fetch("/api/add/intake", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          magnet: best.magnetUrl,
-          name: best.title,
-          mode: intakeMode,
-          mediaType,
-          provider: selectedProvider,
-        }),
-      })
-      
-      const addData = await addRes.json()
-      
-      if (addData.ok) {
-        const destination = addData.provider || addData.delegatedTo || addData.mode || "provider"
-        if (addData.mode === "arr") {
-          toast.success(`"${best.title}" inviato a ${destination}`)
-          toast.info("Sonarr/Radarr gestiscono identità TMDB, importazione e organizzazione.")
-        } else {
-          toast.success(`Added "${best.title}" to ${destination}`)
-        }
-        setSearchQuery("")
-        if (addData.mode === "standalone" && addData.identityRequired) {
-          setPendingAddition({ provider: addData.provider, title: best.title })
-          setIdentityQuery(best.title)
-          setIdentityCandidates([])
-          setSelectedIdentity(null)
-          toast.info("Magnet aggiunto. Conferma ora il film o la serie con TMDB.")
-        }
-      } else {
-        toast.error(addData.error || "Failed to add")
-      }
+      setPendingAddition({ provider: selectedProvider, title: best.title, magnet: best.magnetUrl, mode: intakeMode, mediaType })
+      setIdentityQuery(best.title)
+      setIdentityCandidates([])
+      setSelectedIdentity(null)
+      setSearchQuery("")
+      toast.info("Risultato selezionato. Conferma ora l’identità TMDB prima dell’invio.")
+      void resolveIdentity(best.title, mediaType)
     } catch (err: any) {
       toast.error(err.message || "Failed to search and add")
     } finally {
@@ -288,7 +228,7 @@ export default function AddContentPage() {
                   Aggiungi e associa contenuto
                 </CardTitle>
                 <CardDescription>
-                  {pendingAddition ? "Step 2: identifica il contenuto con TMDB per completare l’organizzazione." : "Step 1: aggiungi il magnet, poi conferma film o serie e l’identità TMDB."}
+                  {pendingAddition ? "Step 2: identifica il contenuto con TMDB prima dell’invio." : "Step 1: acquisisci il magnet, poi conferma film o serie e l’identità TMDB."}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -300,7 +240,7 @@ export default function AddContentPage() {
                       <Button type="button" variant={intakeMode === "arr" ? "default" : "outline"} onClick={() => setIntakeMode("arr")} className="flex-1">Sonarr/Radarr</Button>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      {intakeMode === "standalone" ? "SchroDrive organizza il contenuto dopo la conferma TMDB." : "Sonarr/Radarr ricevono il magnet e gestiscono importazione e nomi."}
+                      {intakeMode === "standalone" ? "SchroDrive organizza il contenuto dopo la conferma TMDB." : "Dopo TMDB il magnet viene consegnato a Sonarr/Radarr con titolo canonico e categoria corretta."}
                     </p>
                   </div>
                   <div className="space-y-2">
@@ -310,7 +250,7 @@ export default function AddContentPage() {
                       <Button type="button" aria-pressed={mediaType === "tv"} variant={mediaType === "tv" ? "default" : "outline"} onClick={() => setMediaType("tv")}>Serie</Button>
                     </div>
                     <p className="text-xs text-muted-foreground">
-                      {intakeMode === "standalone" ? "Dopo l’aggiunta userò questa scelta per cercare l’identità TMDB." : "Questa scelta viene inviata a Radarr o Sonarr."}
+                      "Questa scelta determina la ricerca TMDB e il percorso Film/Serie."
                     </p>
                   </div>
                   <div className="space-y-2">
@@ -333,7 +273,7 @@ export default function AddContentPage() {
                 </>}
 
                 {pendingAddition && <div className="space-y-4 rounded-lg border border-primary/40 bg-primary/5 p-4">
-                  <div className="flex items-center gap-2 text-sm font-medium"><CheckCircle2 className="h-4 w-4 text-primary" />Magnet aggiunto a {pendingAddition.provider}</div>
+                  <div className="flex items-center gap-2 text-sm font-medium"><CheckCircle2 className="h-4 w-4 text-primary" />Magnet acquisito, in attesa di conferma TMDB</div>
                   {pendingAddition.title && <p className="text-xs text-muted-foreground">Titolo rilevato dal magnet: <span className="font-medium text-foreground">{pendingAddition.title}</span></p>}
                   <div className="space-y-2">
                     <Label>Tipo di contenuto</Label>
@@ -354,10 +294,11 @@ export default function AddContentPage() {
                   <Button type="button" className="w-full" disabled={!selectedIdentity || isSearching} onClick={async () => {
                     setIsSearching(true)
                     try {
-                      const response = await fetch("/api/add/intake/identity", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: pendingAddition.provider, identity: selectedIdentity }) })
+                      const response = await fetch("/api/add/intake", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ magnet: pendingAddition.magnet, mode: pendingAddition.mode, mediaType, provider: pendingAddition.provider, name: selectedIdentity.title, identity: selectedIdentity }) })
                       const body = await response.json()
                       if (!response.ok || !body.ok) throw new Error(body.error || "Identity confirmation failed")
-                      toast.success("Identità confermata; organizzazione avviata")
+                      const destination = body.provider || body.delegatedTo || body.mode || "provider"
+                      toast.success(`Identità confermata; inviato a ${destination}`)
                       setPendingAddition(null)
                       setSelectedIdentity(null)
                       setIdentityCandidates([])
