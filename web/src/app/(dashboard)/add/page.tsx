@@ -27,6 +27,7 @@ export default function AddContentPage() {
   const [identityQuery, setIdentityQuery] = useState("")
   const [identityCandidates, setIdentityCandidates] = useState<any[]>([])
   const [selectedIdentity, setSelectedIdentity] = useState<any>(null)
+  const [pendingAddition, setPendingAddition] = useState<{ provider: string; title?: string } | null>(null)
   const [providers, setProviders] = useState<Provider[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -73,7 +74,6 @@ export default function AddContentPage() {
           magnet: magnetUrl,
           mode: intakeMode,
           mediaType,
-          identity: selectedIdentity,
           provider: selectedProvider,
         }),
       })
@@ -83,6 +83,12 @@ export default function AddContentPage() {
       if (data.ok) {
         toast.success(`Added to ${data.provider}`)
         setMagnetUrl("")
+        if (data.mode === "standalone" && data.identityRequired) {
+          setPendingAddition({ provider: data.provider })
+          setIdentityCandidates([])
+          setSelectedIdentity(null)
+          toast.info("Magnet aggiunto. Ora identifica il contenuto con TMDB.")
+        }
       } else {
         toast.error(data.error || "Failed to add magnet")
       }
@@ -135,7 +141,6 @@ export default function AddContentPage() {
           name: best.title,
           mode: intakeMode,
           mediaType,
-          identity: selectedIdentity,
           provider: selectedProvider,
         }),
       })
@@ -145,6 +150,13 @@ export default function AddContentPage() {
       if (addData.ok) {
         toast.success(`Added "${best.title}" to ${addData.provider}`)
         setSearchQuery("")
+        if (addData.mode === "standalone" && addData.identityRequired) {
+          setPendingAddition({ provider: addData.provider, title: best.title })
+          setIdentityQuery(best.title)
+          setIdentityCandidates([])
+          setSelectedIdentity(null)
+          toast.info("Magnet aggiunto. Conferma ora il film o la serie con TMDB.")
+        }
       } else {
         toast.error(addData.error || "Failed to add")
       }
@@ -218,16 +230,12 @@ export default function AddContentPage() {
               </CardContent>
             </Card>
 
-            <Card>
+            {pendingAddition && <Card className="border-primary">
               <CardHeader>
-                <CardTitle>Import mode</CardTitle>
-                <CardDescription>Choose who owns the final media organization</CardDescription>
+                <CardTitle>Conferma contenuto aggiunto</CardTitle>
+                <CardDescription>Il magnet è già stato aggiunto. Ora scegli film/serie e conferma l’identità TMDB.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="flex gap-2">
-                  <Button type="button" variant={intakeMode === "standalone" ? "default" : "outline"} onClick={() => setIntakeMode("standalone")} className="flex-1">Standalone</Button>
-                  <Button type="button" variant={intakeMode === "arr" ? "default" : "outline"} onClick={() => setIntakeMode("arr")} className="flex-1">Sonarr/Radarr</Button>
-                </div>
                 <div className="flex gap-2">
                   <Button type="button" variant={mediaType === "movie" ? "secondary" : "outline"} onClick={() => setMediaType("movie")}>Film</Button>
                   <Button type="button" variant={mediaType === "tv" ? "secondary" : "outline"} onClick={() => setMediaType("tv")}>Serie</Button>
@@ -253,6 +261,37 @@ export default function AddContentPage() {
                   {identityCandidates.map((candidate) => <Button key={candidate.tmdbId} type="button" variant={selectedIdentity?.tmdbId === candidate.tmdbId ? "default" : "outline"} className="w-full justify-start" onClick={() => setSelectedIdentity({ ...candidate, kind: mediaType })}>{candidate.title} {candidate.year ? `(${candidate.year})` : ""}</Button>)}
                 </div>}
                 {selectedIdentity && <p className="text-xs text-muted-foreground">Identità selezionata: {selectedIdentity.title} · TMDB {selectedIdentity.tmdbId}</p>}
+                <Button type="button" className="w-full" disabled={!selectedIdentity || isSearching} onClick={async () => {
+                  setIsSearching(true)
+                  try {
+                    const response = await fetch("/api/add/intake/identity", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: pendingAddition.provider, identity: selectedIdentity }) })
+                    const body = await response.json()
+                    if (!response.ok || !body.ok) throw new Error(body.error || "Identity confirmation failed")
+                    toast.success("Identità confermata; organizzazione avviata")
+                    setPendingAddition(null)
+                    setSelectedIdentity(null)
+                    setIdentityCandidates([])
+                    setIdentityQuery("")
+                  } catch (error: any) { toast.error(error.message || "Identity confirmation failed") }
+                  finally { setIsSearching(false) }
+                }}>Conferma identità e organizza</Button>
+              </CardContent>
+            </Card>}
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Import mode</CardTitle>
+                <CardDescription>Choose who owns the final media organization</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex gap-2">
+                  <Button type="button" variant={intakeMode === "standalone" ? "default" : "outline"} onClick={() => setIntakeMode("standalone")} className="flex-1">Standalone</Button>
+                  <Button type="button" variant={intakeMode === "arr" ? "default" : "outline"} onClick={() => setIntakeMode("arr")} className="flex-1">Sonarr/Radarr</Button>
+                </div>
+                {intakeMode === "arr" && <div className="flex gap-2">
+                  <Button type="button" variant={mediaType === "movie" ? "secondary" : "outline"} onClick={() => setMediaType("movie")}>Film</Button>
+                  <Button type="button" variant={mediaType === "tv" ? "secondary" : "outline"} onClick={() => setMediaType("tv")}>Serie</Button>
+                </div>}
               </CardContent>
             </Card>
 

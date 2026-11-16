@@ -1895,10 +1895,35 @@ export function startServer() {
       void refreshProviderActivity().catch((error: any) => {
         console.warn(`[${new Date().toISOString()}][api/add/intake] organizer refresh deferred`, error?.message || String(error));
       });
-      return res.status(202).json({ ok: true, mode, provider: provider.id, result, status: "queued", materialization: "organizer" });
+      return res.status(202).json({ ok: true, mode, provider: provider.id, result, status: "queued", identityRequired: !identity, materialization: "organizer" });
     } catch (err: any) {
       console.error(`[${new Date().toISOString()}][api/add/intake] error`, err?.message || String(err));
       return res.status(500).json({ ok: false, error: err?.message || "Intake failed" });
+    }
+  });
+
+  /** POST /api/add/intake/identity — confirms identity after provider intake. */
+  app.post("/api/add/intake/identity", async (req, res) => {
+    try {
+      const { provider: targetProvider, identity } = req.body || {};
+      const provider = targetProvider ? registry.get(String(targetProvider)) : registry.configured()[0];
+      if (!provider || !provider.isConfigured()) return res.status(400).json({ ok: false, error: "No configured provider selected" });
+      if (!identity || typeof identity !== "object") return res.status(400).json({ ok: false, error: "identity is required after adding the magnet" });
+      const tmdbId = String(identity.tmdbId || "").trim();
+      const title = String(identity.title || "").trim();
+      const kind = identity.kind === "tv" || identity.kind === "episode" ? "episode" : "movie";
+      if (!tmdbId || !title) return res.status(400).json({ ok: false, error: "identity requires tmdbId and title" });
+      saveManualIdentityOverride(
+        { kind, title, year: Number(identity.year) || undefined, tmdbId },
+        { tmdbId, title, year: Number(identity.year) || undefined, kind, imdbId: identity.imdbId, tvdbId: identity.tvdbId, season: Number(identity.season) || undefined, episode: Number(identity.episode) || undefined },
+      );
+      void refreshProviderActivity().catch((error: any) => {
+        console.warn(`[${new Date().toISOString()}][api/add/intake/identity] organizer refresh deferred`, error?.message || String(error));
+      });
+      return res.status(202).json({ ok: true, provider: provider.id, identity, status: "identity-confirmed" });
+    } catch (err: any) {
+      console.error(`[${new Date().toISOString()}][api/add/intake/identity] error`, err?.message || String(err));
+      return res.status(500).json({ ok: false, error: err?.message || "Identity confirmation failed" });
     }
   });
 
