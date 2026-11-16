@@ -38,10 +38,13 @@ export default function AddContentPage() {
         const data = await res.json()
         if (data.ok !== false && data.providers) {
           setProviders(data.providers)
-          // Select first connected provider by default
-          const firstConnected = data.providers.find((p: Provider) => p.connected)
-          if (firstConnected) {
-            setSelectedProvider(firstConnected.id)
+          // AllDebrid is the default provider for the manual intake flow.
+          // Keep the first connected provider as a fallback for installations
+          // where AllDebrid is not configured.
+          const defaultProvider = data.providers.find((p: Provider) => p.id === "alldebrid" && p.connected)
+            || data.providers.find((p: Provider) => p.connected)
+          if (defaultProvider) {
+            setSelectedProvider(defaultProvider.id)
           }
         }
       } catch (error) {
@@ -255,8 +258,8 @@ export default function AddContentPage() {
                   {intakeMode === "arr" && <div className="space-y-2">
                     <Label>Tipo di contenuto</Label>
                     <div className="flex gap-2">
-                      <Button type="button" variant={mediaType === "movie" ? "secondary" : "outline"} onClick={() => setMediaType("movie")}>Film</Button>
-                      <Button type="button" variant={mediaType === "tv" ? "secondary" : "outline"} onClick={() => setMediaType("tv")}>Serie</Button>
+                      <Button type="button" aria-pressed={mediaType === "movie"} variant={mediaType === "movie" ? "default" : "outline"} onClick={() => setMediaType("movie")}>Film</Button>
+                      <Button type="button" aria-pressed={mediaType === "tv"} variant={mediaType === "tv" ? "default" : "outline"} onClick={() => setMediaType("tv")}>Serie</Button>
                     </div>
                   </div>}
                   <div className="space-y-2">
@@ -283,8 +286,8 @@ export default function AddContentPage() {
                   <div className="space-y-2">
                     <Label>Tipo di contenuto</Label>
                     <div className="flex gap-2">
-                      <Button type="button" variant={mediaType === "movie" ? "secondary" : "outline"} onClick={() => { setMediaType("movie"); setSelectedIdentity(null); setIdentityCandidates([]) }}>Film</Button>
-                      <Button type="button" variant={mediaType === "tv" ? "secondary" : "outline"} onClick={() => { setMediaType("tv"); setSelectedIdentity(null); setIdentityCandidates([]) }}>Serie</Button>
+                      <Button type="button" aria-pressed={mediaType === "movie"} variant={mediaType === "movie" ? "default" : "outline"} onClick={() => { setMediaType("movie"); setSelectedIdentity(null); setIdentityCandidates([]) }}>Film</Button>
+                      <Button type="button" aria-pressed={mediaType === "tv"} variant={mediaType === "tv" ? "default" : "outline"} onClick={() => { setMediaType("tv"); setSelectedIdentity(null); setIdentityCandidates([]) }}>Serie</Button>
                     </div>
                   </div>
                   <div className="flex gap-2">
