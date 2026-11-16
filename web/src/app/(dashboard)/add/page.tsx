@@ -16,6 +16,14 @@ interface Provider {
   connected: boolean
 }
 
+function magnetDisplayName(value: string): string {
+  try {
+    return new URL(value).searchParams.get("dn")?.trim() || ""
+  } catch {
+    return ""
+  }
+}
+
 export default function AddContentPage() {
   const [magnetUrl, setMagnetUrl] = useState("")
   const [searchQuery, setSearchQuery] = useState("")
@@ -30,6 +38,32 @@ export default function AddContentPage() {
   const [pendingAddition, setPendingAddition] = useState<{ provider: string; title?: string } | null>(null)
   const [providers, setProviders] = useState<Provider[]>([])
   const [loading, setLoading] = useState(true)
+
+  const resolveIdentity = async (query: string, type: "movie" | "tv") => {
+    if (!query.trim()) {
+      toast.error("Inserisci il titolo da cercare su TMDB")
+      return
+    }
+    setIsSearching(true)
+    try {
+      const params = new URLSearchParams({ query: query.trim(), type, candidates: "true" })
+      const response = await fetch(`/api/metadata/tmdb/resolve?${params}`, { cache: "no-store" })
+      const body = await response.json()
+      if (!response.ok) throw new Error(body.error || "TMDB resolution failed")
+      const candidates = body.candidates || []
+      setIdentityCandidates(candidates)
+      setSelectedIdentity(candidates[0]
+        ? { ...candidates[0], kind: type }
+        : body.resolution?.metadata
+          ? { ...body.resolution.metadata, kind: type }
+          : null)
+      if (candidates.length === 0 && !body.resolution?.metadata) toast.info("Nessun risultato TMDB trovato")
+    } catch (error: any) {
+      toast.error(error.message || "TMDB resolution failed")
+    } finally {
+      setIsSearching(false)
+    }
+  }
 
   useEffect(() => {
     async function fetchProviders() {
@@ -87,7 +121,9 @@ export default function AddContentPage() {
         toast.success(`Added to ${data.provider}`)
         setMagnetUrl("")
         if (data.mode === "standalone" && data.identityRequired) {
-          setPendingAddition({ provider: data.provider })
+          const title = magnetDisplayName(magnetUrl)
+          setPendingAddition({ provider: data.provider, title })
+          setIdentityQuery(title)
           setIdentityCandidates([])
           setSelectedIdentity(null)
           toast.info("Magnet aggiunto. Ora identifica il contenuto con TMDB.")
@@ -283,32 +319,21 @@ export default function AddContentPage() {
 
                 {pendingAddition && <div className="space-y-4 rounded-lg border border-primary/40 bg-primary/5 p-4">
                   <div className="flex items-center gap-2 text-sm font-medium"><CheckCircle2 className="h-4 w-4 text-primary" />Magnet aggiunto a {pendingAddition.provider}</div>
+                  {pendingAddition.title && <p className="text-xs text-muted-foreground">Titolo rilevato dal magnet: <span className="font-medium text-foreground">{pendingAddition.title}</span></p>}
                   <div className="space-y-2">
                     <Label>Tipo di contenuto</Label>
                     <div className="flex gap-2">
-                      <Button type="button" aria-pressed={mediaType === "movie"} variant={mediaType === "movie" ? "default" : "outline"} onClick={() => { setMediaType("movie"); setSelectedIdentity(null); setIdentityCandidates([]) }}>Film</Button>
-                      <Button type="button" aria-pressed={mediaType === "tv"} variant={mediaType === "tv" ? "default" : "outline"} onClick={() => { setMediaType("tv"); setSelectedIdentity(null); setIdentityCandidates([]) }}>Serie</Button>
+                      <Button type="button" aria-pressed={mediaType === "movie"} variant={mediaType === "movie" ? "default" : "outline"} onClick={() => { setMediaType("movie"); setSelectedIdentity(null); setIdentityCandidates([]); void resolveIdentity(identityQuery, "movie") }}>Film</Button>
+                      <Button type="button" aria-pressed={mediaType === "tv"} variant={mediaType === "tv" ? "default" : "outline"} onClick={() => { setMediaType("tv"); setSelectedIdentity(null); setIdentityCandidates([]); void resolveIdentity(identityQuery, "tv") }}>Serie</Button>
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <Input placeholder="Cerca il titolo su TMDB" value={identityQuery} onChange={(e) => setIdentityQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && document.getElementById("tmdb-resolve")?.click()} />
-                    <Button id="tmdb-resolve" type="button" variant="outline" disabled={!identityQuery.trim() || isSearching} onClick={async () => {
-                      setIsSearching(true)
-                      try {
-                        const params = new URLSearchParams({ query: identityQuery.trim(), type: mediaType, candidates: "true" })
-                        const response = await fetch(`/api/metadata/tmdb/resolve?${params}`, { cache: "no-store" })
-                        const body = await response.json()
-                        if (!response.ok) throw new Error(body.error || "TMDB resolution failed")
-                        const candidates = body.candidates || []
-                        setIdentityCandidates(candidates)
-                        setSelectedIdentity(candidates[0] ? { ...candidates[0], kind: mediaType } : body.resolution?.metadata ? { ...body.resolution.metadata, kind: mediaType } : null)
-                      } catch (error: any) {
-                        toast.error(error.message || "TMDB resolution failed")
-                      } finally { setIsSearching(false) }
-                    }}>{isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : "Cerca TMDB"}</Button>
+                    <Input placeholder="Cerca il titolo su TMDB" value={identityQuery} onChange={(e) => setIdentityQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void resolveIdentity(identityQuery, mediaType)} />
+                    <Button type="button" variant="outline" disabled={!identityQuery.trim() || isSearching} onClick={() => void resolveIdentity(identityQuery, mediaType)}>{isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : "Cerca TMDB"}</Button>
                   </div>
                   {identityCandidates.length > 0 && <div className="space-y-2">
-                    {identityCandidates.map((candidate) => <Button key={candidate.tmdbId} type="button" variant={selectedIdentity?.tmdbId === candidate.tmdbId ? "default" : "outline"} className="w-full justify-start" onClick={() => setSelectedIdentity({ ...candidate, kind: mediaType })}>{candidate.title} {candidate.year ? `(${candidate.year})` : ""}</Button>)}
+                    <p className="text-xs text-muted-foreground">Seleziona l’identità corretta:</p>
+                    {identityCandidates.map((candidate) => <Button key={candidate.tmdbId} type="button" variant={selectedIdentity?.tmdbId === candidate.tmdbId ? "default" : "outline"} className="w-full justify-start" onClick={() => setSelectedIdentity({ ...candidate, kind: mediaType })}>{candidate.title} {candidate.year ? `(${candidate.year})` : ""} · TMDB {candidate.tmdbId}</Button>)}
                   </div>}
                   {selectedIdentity && <p className="text-xs text-muted-foreground">Selezionato: {selectedIdentity.title} · TMDB {selectedIdentity.tmdbId}</p>}
                   <Button type="button" className="w-full" disabled={!selectedIdentity || isSearching} onClick={async () => {
