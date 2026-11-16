@@ -118,7 +118,13 @@ export default function AddContentPage() {
       const data = await res.json()
       
       if (data.ok) {
-        toast.success(`Added to ${data.provider}`)
+        const destination = data.provider || data.delegatedTo || data.mode || "provider"
+        if (data.mode === "arr") {
+          toast.success(`Magnet inviato a ${destination}`)
+          toast.info("Sonarr/Radarr gestiscono identità TMDB, importazione e organizzazione.")
+        } else {
+          toast.success(`Added to ${destination}`)
+        }
         setMagnetUrl("")
         if (data.mode === "standalone" && data.identityRequired) {
           const title = magnetDisplayName(magnetUrl)
@@ -187,7 +193,13 @@ export default function AddContentPage() {
       const addData = await addRes.json()
       
       if (addData.ok) {
-        toast.success(`Added "${best.title}" to ${addData.provider}`)
+        const destination = addData.provider || addData.delegatedTo || addData.mode || "provider"
+        if (addData.mode === "arr") {
+          toast.success(`"${best.title}" inviato a ${destination}`)
+          toast.info("Sonarr/Radarr gestiscono identità TMDB, importazione e organizzazione.")
+        } else {
+          toast.success(`Added "${best.title}" to ${destination}`)
+        }
         setSearchQuery("")
         if (addData.mode === "standalone" && addData.identityRequired) {
           setPendingAddition({ provider: addData.provider, title: best.title })
@@ -291,13 +303,16 @@ export default function AddContentPage() {
                       {intakeMode === "standalone" ? "SchroDrive organizza il contenuto dopo la conferma TMDB." : "Sonarr/Radarr ricevono il magnet e gestiscono importazione e nomi."}
                     </p>
                   </div>
-                  {intakeMode === "arr" && <div className="space-y-2">
+                  <div className="space-y-2">
                     <Label>Tipo di contenuto</Label>
                     <div className="flex gap-2">
                       <Button type="button" aria-pressed={mediaType === "movie"} variant={mediaType === "movie" ? "default" : "outline"} onClick={() => setMediaType("movie")}>Film</Button>
                       <Button type="button" aria-pressed={mediaType === "tv"} variant={mediaType === "tv" ? "default" : "outline"} onClick={() => setMediaType("tv")}>Serie</Button>
                     </div>
-                  </div>}
+                    <p className="text-xs text-muted-foreground">
+                      {intakeMode === "standalone" ? "Dopo l’aggiunta userò questa scelta per cercare l’identità TMDB." : "Questa scelta viene inviata a Radarr o Sonarr."}
+                    </p>
+                  </div>
                   <div className="space-y-2">
                     <Label htmlFor="magnet">Magnet URL</Label>
                     <Input
