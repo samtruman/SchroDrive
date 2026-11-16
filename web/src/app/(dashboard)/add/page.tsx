@@ -230,97 +230,99 @@ export default function AddContentPage() {
               </CardContent>
             </Card>
 
-            {pendingAddition && <Card className="border-primary">
-              <CardHeader>
-                <CardTitle>Conferma contenuto aggiunto</CardTitle>
-                <CardDescription>Il magnet è già stato aggiunto. Ora scegli film/serie e conferma l’identità TMDB.</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex gap-2">
-                  <Button type="button" variant={mediaType === "movie" ? "secondary" : "outline"} onClick={() => setMediaType("movie")}>Film</Button>
-                  <Button type="button" variant={mediaType === "tv" ? "secondary" : "outline"} onClick={() => setMediaType("tv")}>Serie</Button>
-                </div>
-                <div className="flex gap-2">
-                  <Input placeholder="Titolo da confermare con TMDB" value={identityQuery} onChange={(e) => setIdentityQuery(e.target.value)} />
-                  <Button type="button" variant="outline" disabled={!identityQuery.trim() || isSearching} onClick={async () => {
-                    setIsSearching(true)
-                    try {
-                      const params = new URLSearchParams({ query: identityQuery.trim(), type: mediaType, candidates: "true" })
-                      const response = await fetch(`/api/metadata/tmdb/resolve?${params}`, { cache: "no-store" })
-                      const body = await response.json()
-                      if (!response.ok) throw new Error(body.error || "TMDB resolution failed")
-                      const candidates = body.candidates || []
-                      setIdentityCandidates(candidates)
-                      setSelectedIdentity(candidates[0] ? { ...candidates[0], kind: mediaType } : body.resolution?.metadata ? { ...body.resolution.metadata, kind: mediaType } : null)
-                    } catch (error: any) {
-                      toast.error(error.message || "TMDB resolution failed")
-                    } finally { setIsSearching(false) }
-                  }}>Resolve</Button>
-                </div>
-                {identityCandidates.length > 0 && <div className="space-y-2">
-                  {identityCandidates.map((candidate) => <Button key={candidate.tmdbId} type="button" variant={selectedIdentity?.tmdbId === candidate.tmdbId ? "default" : "outline"} className="w-full justify-start" onClick={() => setSelectedIdentity({ ...candidate, kind: mediaType })}>{candidate.title} {candidate.year ? `(${candidate.year})` : ""}</Button>)}
-                </div>}
-                {selectedIdentity && <p className="text-xs text-muted-foreground">Identità selezionata: {selectedIdentity.title} · TMDB {selectedIdentity.tmdbId}</p>}
-                <Button type="button" className="w-full" disabled={!selectedIdentity || isSearching} onClick={async () => {
-                  setIsSearching(true)
-                  try {
-                    const response = await fetch("/api/add/intake/identity", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: pendingAddition.provider, identity: selectedIdentity }) })
-                    const body = await response.json()
-                    if (!response.ok || !body.ok) throw new Error(body.error || "Identity confirmation failed")
-                    toast.success("Identità confermata; organizzazione avviata")
-                    setPendingAddition(null)
-                    setSelectedIdentity(null)
-                    setIdentityCandidates([])
-                    setIdentityQuery("")
-                  } catch (error: any) { toast.error(error.message || "Identity confirmation failed") }
-                  finally { setIsSearching(false) }
-                }}>Conferma identità e organizza</Button>
-              </CardContent>
-            </Card>}
-
-            <Card>
-              <CardHeader>
-                <CardTitle>Import mode</CardTitle>
-                <CardDescription>Choose who owns the final media organization</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex gap-2">
-                  <Button type="button" variant={intakeMode === "standalone" ? "default" : "outline"} onClick={() => setIntakeMode("standalone")} className="flex-1">Standalone</Button>
-                  <Button type="button" variant={intakeMode === "arr" ? "default" : "outline"} onClick={() => setIntakeMode("arr")} className="flex-1">Sonarr/Radarr</Button>
-                </div>
-                {intakeMode === "arr" && <div className="flex gap-2">
-                  <Button type="button" variant={mediaType === "movie" ? "secondary" : "outline"} onClick={() => setMediaType("movie")}>Film</Button>
-                  <Button type="button" variant={mediaType === "tv" ? "secondary" : "outline"} onClick={() => setMediaType("tv")}>Serie</Button>
-                </div>}
-              </CardContent>
-            </Card>
-
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Link className="h-5 w-5" />
-                  Add Magnet Link
+                  Aggiungi e associa contenuto
                 </CardTitle>
-                <CardDescription>Paste a magnet link to add directly</CardDescription>
+                <CardDescription>
+                  {pendingAddition ? "Step 2: identifica il contenuto con TMDB per completare l’organizzazione." : "Step 1: aggiungi il magnet, poi conferma film o serie e l’identità TMDB."}
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="magnet">Magnet URL</Label>
-                  <Input
-                    id="magnet"
-                    placeholder="magnet:?xt=urn:btih:..."
-                    value={magnetUrl}
-                    onChange={(e) => setMagnetUrl(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleAddMagnet()}
-                  />
-                </div>
-                <Button onClick={handleAddMagnet} disabled={!magnetUrl.trim() || isAdding} className="w-full">
-                  {isAdding ? (
-                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Adding...</>
-                  ) : (
-                    <><Plus className="mr-2 h-4 w-4" />Add to {providers.find(p => p.id === selectedProvider)?.name || selectedProvider}</>
-                  )}
-                </Button>
+                {!pendingAddition && <>
+                  <div className="space-y-2">
+                    <Label>Modalità di importazione</Label>
+                    <div className="flex gap-2">
+                      <Button type="button" variant={intakeMode === "standalone" ? "default" : "outline"} onClick={() => setIntakeMode("standalone")} className="flex-1">Standalone</Button>
+                      <Button type="button" variant={intakeMode === "arr" ? "default" : "outline"} onClick={() => setIntakeMode("arr")} className="flex-1">Sonarr/Radarr</Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {intakeMode === "standalone" ? "SchroDrive organizza il contenuto dopo la conferma TMDB." : "Sonarr/Radarr ricevono il magnet e gestiscono importazione e nomi."}
+                    </p>
+                  </div>
+                  {intakeMode === "arr" && <div className="space-y-2">
+                    <Label>Tipo di contenuto</Label>
+                    <div className="flex gap-2">
+                      <Button type="button" variant={mediaType === "movie" ? "secondary" : "outline"} onClick={() => setMediaType("movie")}>Film</Button>
+                      <Button type="button" variant={mediaType === "tv" ? "secondary" : "outline"} onClick={() => setMediaType("tv")}>Serie</Button>
+                    </div>
+                  </div>}
+                  <div className="space-y-2">
+                    <Label htmlFor="magnet">Magnet URL</Label>
+                    <Input
+                      id="magnet"
+                      placeholder="magnet:?xt=urn:btih:..."
+                      value={magnetUrl}
+                      onChange={(e) => setMagnetUrl(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && handleAddMagnet()}
+                    />
+                  </div>
+                  <Button onClick={handleAddMagnet} disabled={!magnetUrl.trim() || isAdding} className="w-full">
+                    {isAdding ? (
+                      <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Aggiunta in corso...</>
+                    ) : (
+                      <><Plus className="mr-2 h-4 w-4" />Aggiungi a {providers.find(p => p.id === selectedProvider)?.name || selectedProvider}</>
+                    )}
+                  </Button>
+                </>}
+
+                {pendingAddition && <div className="space-y-4 rounded-lg border border-primary/40 bg-primary/5 p-4">
+                  <div className="flex items-center gap-2 text-sm font-medium"><CheckCircle2 className="h-4 w-4 text-primary" />Magnet aggiunto a {pendingAddition.provider}</div>
+                  <div className="space-y-2">
+                    <Label>Tipo di contenuto</Label>
+                    <div className="flex gap-2">
+                      <Button type="button" variant={mediaType === "movie" ? "secondary" : "outline"} onClick={() => { setMediaType("movie"); setSelectedIdentity(null); setIdentityCandidates([]) }}>Film</Button>
+                      <Button type="button" variant={mediaType === "tv" ? "secondary" : "outline"} onClick={() => { setMediaType("tv"); setSelectedIdentity(null); setIdentityCandidates([]) }}>Serie</Button>
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <Input placeholder="Cerca il titolo su TMDB" value={identityQuery} onChange={(e) => setIdentityQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && document.getElementById("tmdb-resolve")?.click()} />
+                    <Button id="tmdb-resolve" type="button" variant="outline" disabled={!identityQuery.trim() || isSearching} onClick={async () => {
+                      setIsSearching(true)
+                      try {
+                        const params = new URLSearchParams({ query: identityQuery.trim(), type: mediaType, candidates: "true" })
+                        const response = await fetch(`/api/metadata/tmdb/resolve?${params}`, { cache: "no-store" })
+                        const body = await response.json()
+                        if (!response.ok) throw new Error(body.error || "TMDB resolution failed")
+                        const candidates = body.candidates || []
+                        setIdentityCandidates(candidates)
+                        setSelectedIdentity(candidates[0] ? { ...candidates[0], kind: mediaType } : body.resolution?.metadata ? { ...body.resolution.metadata, kind: mediaType } : null)
+                      } catch (error: any) {
+                        toast.error(error.message || "TMDB resolution failed")
+                      } finally { setIsSearching(false) }
+                    }}>{isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : "Cerca TMDB"}</Button>
+                  </div>
+                  {identityCandidates.length > 0 && <div className="space-y-2">
+                    {identityCandidates.map((candidate) => <Button key={candidate.tmdbId} type="button" variant={selectedIdentity?.tmdbId === candidate.tmdbId ? "default" : "outline"} className="w-full justify-start" onClick={() => setSelectedIdentity({ ...candidate, kind: mediaType })}>{candidate.title} {candidate.year ? `(${candidate.year})` : ""}</Button>)}
+                  </div>}
+                  {selectedIdentity && <p className="text-xs text-muted-foreground">Selezionato: {selectedIdentity.title} · TMDB {selectedIdentity.tmdbId}</p>}
+                  <Button type="button" className="w-full" disabled={!selectedIdentity || isSearching} onClick={async () => {
+                    setIsSearching(true)
+                    try {
+                      const response = await fetch("/api/add/intake/identity", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ provider: pendingAddition.provider, identity: selectedIdentity }) })
+                      const body = await response.json()
+                      if (!response.ok || !body.ok) throw new Error(body.error || "Identity confirmation failed")
+                      toast.success("Identità confermata; organizzazione avviata")
+                      setPendingAddition(null)
+                      setSelectedIdentity(null)
+                      setIdentityCandidates([])
+                      setIdentityQuery("")
+                    } catch (error: any) { toast.error(error.message || "Identity confirmation failed") }
+                    finally { setIsSearching(false) }
+                  }}>Conferma identità e organizza</Button>
+                </div>}
               </CardContent>
             </Card>
 
