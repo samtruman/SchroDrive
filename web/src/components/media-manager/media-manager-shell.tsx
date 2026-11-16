@@ -219,9 +219,10 @@ function IdentityResolver({
     try {
       const params = new URLSearchParams({ query: query.trim(), type });
       if (year.trim()) params.set("year", year.trim());
-      const response = await fetch(`/api/version-manager/identity/search?${params}`, { cache: "no-store" });
+      params.set("candidates", "true");
+      const response = await fetch(`/api/metadata/tmdb/resolve?${params}`, { cache: "no-store" });
       const body = await readJsonResponse<any>(response, "TMDb search");
-      setResults(body.results || []);
+      setResults(body.candidates || body.results || []);
     } catch (error: any) { setMessage(error.message || "TMDb search failed"); }
     finally { setBusy(false); }
   }

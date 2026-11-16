@@ -35,9 +35,16 @@ export interface TmdbManualCandidate {
 }
 
 export interface TmdbRequestOptions {
+  /** Optional injected credential for callers outside the global app config. */
+  apiKey?: string;
   timeoutMs?: number;
   retries?: number;
   backoffMs?: number;
+  maxCandidates?: number;
+}
+
+function resolveApiKey(options: TmdbRequestOptions): string {
+  return String(options.apiKey ?? config.tmdbApiKey ?? "").trim();
 }
 
 /**
@@ -52,7 +59,8 @@ export async function getTmdbExternalIds(
   kind: TmdbSearchKind,
   options: TmdbRequestOptions = {},
 ): Promise<TmdbMetadata | undefined> {
-  if (!config.tmdbApiKey) return undefined;
+  const apiKey = resolveApiKey(options);
+  if (!apiKey) return undefined;
 
   const id = String(tmdbId).trim();
   if (!id) return undefined;
@@ -61,14 +69,14 @@ export async function getTmdbExternalIds(
     const [external, details] = await Promise.all([
       requestWithRetry(
         () => axios.get(`https://api.themoviedb.org/3/${kind}/${id}/external_ids`, {
-          params: { api_key: config.tmdbApiKey },
+          params: { api_key: apiKey },
           timeout: options.timeoutMs ?? 10000,
         }),
         options,
       ),
       requestWithRetry(
         () => axios.get(`https://api.themoviedb.org/3/${kind}/${id}`, {
-          params: { api_key: config.tmdbApiKey },
+          params: { api_key: apiKey },
           timeout: options.timeoutMs ?? 10000,
         }),
         options,
@@ -126,20 +134,21 @@ export async function searchTmdbCandidates(
   year?: number,
   options: TmdbRequestOptions = {},
 ): Promise<TmdbManualCandidate[]> {
-  if (!config.tmdbApiKey) throw new Error("TMDB_API_KEY is not configured");
-  const params: Record<string, string | number | boolean> = { api_key: config.tmdbApiKey, query, include_adult: false };
+  const apiKey = resolveApiKey(options);
+  if (!apiKey) throw new Error("TMDB_API_KEY is not configured");
+  const params: Record<string, string | number | boolean> = { api_key: apiKey, query, include_adult: false };
   if (year) params[kind === "movie" ? "year" : "first_air_date_year"] = year;
   const response = await requestWithRetry(
     () => axios.get(`https://api.themoviedb.org/3/search/${kind}`, { params, timeout: options.timeoutMs ?? 10000 }),
     options,
   );
-  const results = Array.isArray(response.data?.results) ? response.data.results.slice(0, 10) : [];
+  const results = Array.isArray(response.data?.results) ? response.data.results.slice(0, options.maxCandidates ?? 10) : [];
   return Promise.all(results.map(async (item: any): Promise<TmdbManualCandidate> => {
     const id = String(item.id);
     let external: any = {};
     try {
       const response = await requestWithRetry(
-        () => axios.get(`https://api.themoviedb.org/3/${kind}/${id}/external_ids`, { params: { api_key: config.tmdbApiKey }, timeout: options.timeoutMs ?? 10000 }),
+        () => axios.get(`https://api.themoviedb.org/3/${kind}/${id}/external_ids`, { params: { api_key: apiKey }, timeout: options.timeoutMs ?? 10000 }),
         options,
       );
       external = response.data || {};
@@ -164,9 +173,10 @@ export async function searchTmdbCandidates(
 
 /** Shared read-only TMDb lookup used by Organizer and Version Manager. */
 export async function searchTmdb(title: string, kind: TmdbSearchKind, year?: number, options: TmdbRequestOptions = {}): Promise<TmdbLookupResult> {
-  if (!config.tmdbApiKey) return { status: "configuration_unavailable", reason: "TMDB_API_KEY is not configured" };
+  const apiKey = resolveApiKey(options);
+  if (!apiKey) return { status: "configuration_unavailable", reason: "TMDB_API_KEY is not configured" };
   try {
-    const params: Record<string, string | number | boolean> = { api_key: config.tmdbApiKey, query: title, include_adult: false };
+    const params: Record<string, string | number | boolean> = { api_key: apiKey, query: title, include_adult: false };
     if (year) params[kind === "movie" ? "year" : "first_air_date_year"] = year;
     const searchUrl = `https://api.themoviedb.org/3/search/${kind}`;
     const response = await requestWithRetry(() => axios.get(searchUrl, { params, timeout: options.timeoutMs ?? 10000 }), options);
@@ -190,8 +200,8 @@ export async function searchTmdb(title: string, kind: TmdbSearchKind, year?: num
     const hit = results.find((item: any) => String(item.id) === String(selectedCandidate.id));
     if (!hit) return { status: "not_matched", reason: "TMDb candidate disappeared before enrichment" };
     const [external, details] = await Promise.all([
-      requestWithRetry(() => axios.get(`https://api.themoviedb.org/3/${kind === "movie" ? "movie" : "tv"}/${hit.id}/external_ids`, { params: { api_key: config.tmdbApiKey }, timeout: options.timeoutMs ?? 10000 }), options),
-      requestWithRetry(() => axios.get(`https://api.themoviedb.org/3/${kind === "movie" ? "movie" : "tv"}/${hit.id}`, { params: { api_key: config.tmdbApiKey }, timeout: options.timeoutMs ?? 10000 }), options),
+      requestWithRetry(() => axios.get(`https://api.themoviedb.org/3/${kind === "movie" ? "movie" : "tv"}/${hit.id}/external_ids`, { params: { api_key: apiKey }, timeout: options.timeoutMs ?? 10000 }), options),
+      requestWithRetry(() => axios.get(`https://api.themoviedb.org/3/${kind === "movie" ? "movie" : "tv"}/${hit.id}`, { params: { api_key: apiKey }, timeout: options.timeoutMs ?? 10000 }), options),
     ]);
     const releaseDate = kind === "movie" ? hit.release_date : hit.first_air_date;
     return {

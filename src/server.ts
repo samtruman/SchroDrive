@@ -41,7 +41,7 @@ import { SeerrAcquisitionAdapter } from "./services/seerrAcquisitionAdapter";
 import { getLatestVersionManagerRecords, getLatestVersionManagerScan, getLatestVersionManagerSnapshot, getVersionManagerPolicy, getVersionProfiles, listVersionManagerMissingDismissals, saveVersionManagerPolicy, saveVersionManagerPreviewAudit, saveVersionManagerScan, saveVersionManagerSnapshot, saveVersionProfiles, setVersionManagerMissingDismissed } from "./services/versionManagerStore";
 import { probeVersionRecords } from "./services/versionManagerProbe";
 import { enrichVersionMetadata } from "./services/versionManagerMetadata";
-import { searchTmdbCandidates } from "./services/tmdbService";
+import { searchTmdb, searchTmdbCandidates } from "./services/tmdbService";
 import { validateReviewEpisodeAssignments } from "./services/reviewEpisodeAssignments";
 import { getDb } from "./core/db";
 import { applyManualIdentityOverrides, clearManualIdentityOverride, clearManualIdentityOverrideForVersion, identityOverrideKey, saveManualIdentityOverride, saveManualIdentityOverrideForVersion, sourceOverrideKey, type ManualIdentityOverride } from "./services/manualIdentity";
@@ -1113,6 +1113,35 @@ export function startServer() {
     }
   });
 
+  /**
+   * Generic TMDB identity resolution for acquisition/intake clients.
+   *
+   * This deliberately lives outside the Media Manager API: callers such as
+   * /add can resolve a release before choosing an Arr or standalone target.
+   * It is read-only and does not add provider items or create filesystem links.
+   */
+  app.get('/api/metadata/tmdb/resolve', async (req, res) => {
+    const query = String(req.query.query || '').trim();
+    const mediaType = req.query.type === 'tv' ? 'tv' : req.query.type === 'movie' ? 'movie' : undefined;
+    const yearValue = req.query.year === undefined || req.query.year === '' ? undefined : Number(req.query.year);
+    if (!query || query.length > 200) return res.status(400).json({ ok: false, error: 'query is required and must be at most 200 characters' });
+    if (!mediaType) return res.status(400).json({ ok: false, error: 'type must be movie or tv' });
+    if (yearValue !== undefined && (!Number.isInteger(yearValue) || yearValue < 1800 || yearValue > 2200)) return res.status(400).json({ ok: false, error: 'year is invalid' });
+    try {
+      const resolution = await searchTmdb(query, mediaType, yearValue);
+      // Keep the normal path to one TMDB search. Interactive callers may ask
+      // for candidates explicitly; otherwise fetch them only when automatic
+      // resolution cannot safely choose one identity.
+      const includeCandidates = String(req.query.candidates || '').toLowerCase() === 'true';
+      const candidates = includeCandidates || resolution.status !== "matched"
+        ? await searchTmdbCandidates(query, mediaType, yearValue, { maxCandidates: 5 })
+        : [];
+      res.json({ ok: true, query, mediaType, year: yearValue, resolution, candidates });
+    } catch (error: any) {
+      res.status(502).json({ ok: false, error: error?.message || 'TMDB resolution failed' });
+    }
+  });
+
   /** GET /api/infringement-list/check — Checks if a name matches the blacklist. */
   app.get('/api/infringement-list/check', (req, res) => {
     const name = String(req.query.name || '');
@@ -1802,6 +1831,74 @@ export function startServer() {
     } catch (err: any) {
       console.error(`[${new Date().toISOString()}][api/add] error`, err.message);
       res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  /**
+   * POST /api/add/intake — provider-neutral manual intake.
+   *
+   * `mode=arr` delegates to the existing qBittorrent-compatible bridge so
+   * Sonarr/Radarr retain ownership of parsing, naming and importing.
+   * `mode=standalone` adds directly to the selected provider and records the
+   * confirmed TMDB identity for the standalone organizer. The legacy /api/add
+   * endpoint remains unchanged for clients that only need provider addition.
+   */
+  app.post("/api/add/intake", async (req, res) => {
+    try {
+      const { magnet, name, provider: targetProvider, mode = "standalone", mediaType, identity } = req.body || {};
+      if (typeof magnet !== "string" || !magnet.startsWith("magnet:")) {
+        return res.status(400).json({ ok: false, error: "magnet must be a valid magnet URI" });
+      }
+      if (mode !== "arr" && mode !== "standalone") {
+        return res.status(400).json({ ok: false, error: "mode must be arr or standalone" });
+      }
+      if (mode === "arr" && mediaType !== "movie" && mediaType !== "tv") {
+        return res.status(400).json({ ok: false, error: "mediaType must be movie or tv for Arr intake" });
+      }
+
+      if (mode === "arr") {
+        if (!config.arrBridgeEnabled) return res.status(503).json({ ok: false, error: "Arr bridge is not enabled" });
+        const bridgeResponse = await fetch(`http://127.0.0.1:${config.arrBridgePort}/api/v2/torrents/add`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            urls: magnet,
+            category: mediaType === "tv" ? "sonarr" : "radarr",
+            tags: "schrodrive-manual-intake",
+          }),
+        });
+        if (!bridgeResponse.ok) {
+          return res.status(502).json({ ok: false, error: `Arr bridge rejected intake: HTTP ${bridgeResponse.status}` });
+        }
+        return res.status(202).json({ ok: true, mode, mediaType, delegatedTo: mediaType === "tv" ? "sonarr" : "radarr", status: "queued" });
+      }
+
+      const provider = targetProvider ? registry.get(String(targetProvider)) : registry.configured()[0];
+      if (!provider) return res.status(400).json({ ok: false, error: "No configured provider selected" });
+      if (!provider.isConfigured()) return res.status(503).json({ ok: false, error: `${provider.displayName} not configured` });
+
+      if (identity && typeof identity === "object") {
+        const tmdbId = String(identity.tmdbId || "").trim();
+        const title = String(identity.title || "").trim();
+        const kind = identity.kind === "tv" || identity.kind === "episode" ? "episode" : "movie";
+        if (!tmdbId || !title) return res.status(400).json({ ok: false, error: "standalone identity requires tmdbId and title" });
+        saveManualIdentityOverride(
+          { kind, title, year: Number(identity.year) || undefined, tmdbId },
+          { tmdbId, title, year: Number(identity.year) || undefined, kind, imdbId: identity.imdbId, tvdbId: identity.tvdbId, season: Number(identity.season) || undefined, episode: Number(identity.episode) || undefined },
+        );
+      }
+
+      const result = await provider.addMagnet(magnet, name);
+      // Reuse the configured lightweight reconciliation path when available.
+      // It is intentionally fire-and-forget: adding the provider item must
+      // not block on mount readiness or turn this endpoint into a poll loop.
+      void refreshProviderActivity().catch((error: any) => {
+        console.warn(`[${new Date().toISOString()}][api/add/intake] organizer refresh deferred`, error?.message || String(error));
+      });
+      return res.status(202).json({ ok: true, mode, provider: provider.id, result, status: "queued", materialization: "organizer" });
+    } catch (err: any) {
+      console.error(`[${new Date().toISOString()}][api/add/intake] error`, err?.message || String(err));
+      return res.status(500).json({ ok: false, error: err?.message || "Intake failed" });
     }
   });
 

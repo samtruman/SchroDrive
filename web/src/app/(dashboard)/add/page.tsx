@@ -22,6 +22,11 @@ export default function AddContentPage() {
   const [isAdding, setIsAdding] = useState(false)
   const [isSearching, setIsSearching] = useState(false)
   const [selectedProvider, setSelectedProvider] = useState<string>("torbox")
+  const [intakeMode, setIntakeMode] = useState<"standalone" | "arr">("standalone")
+  const [mediaType, setMediaType] = useState<"movie" | "tv">("movie")
+  const [identityQuery, setIdentityQuery] = useState("")
+  const [identityCandidates, setIdentityCandidates] = useState<any[]>([])
+  const [selectedIdentity, setSelectedIdentity] = useState<any>(null)
   const [providers, setProviders] = useState<Provider[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -61,11 +66,14 @@ export default function AddContentPage() {
     setIsAdding(true)
     
     try {
-      const res = await fetch("/api/add", {
+      const res = await fetch("/api/add/intake", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           magnet: magnetUrl,
+          mode: intakeMode,
+          mediaType,
+          identity: selectedIdentity,
           provider: selectedProvider,
         }),
       })
@@ -119,12 +127,15 @@ export default function AddContentPage() {
       toast.info(`Found: ${best.title}`)
       
       // Add it
-      const addRes = await fetch("/api/add", {
+      const addRes = await fetch("/api/add/intake", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           magnet: best.magnetUrl,
           name: best.title,
+          mode: intakeMode,
+          mediaType,
+          identity: selectedIdentity,
           provider: selectedProvider,
         }),
       })
@@ -204,6 +215,44 @@ export default function AddContentPage() {
                     </Button>
                   ))}
                 </div>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <CardTitle>Import mode</CardTitle>
+                <CardDescription>Choose who owns the final media organization</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="flex gap-2">
+                  <Button type="button" variant={intakeMode === "standalone" ? "default" : "outline"} onClick={() => setIntakeMode("standalone")} className="flex-1">Standalone</Button>
+                  <Button type="button" variant={intakeMode === "arr" ? "default" : "outline"} onClick={() => setIntakeMode("arr")} className="flex-1">Sonarr/Radarr</Button>
+                </div>
+                <div className="flex gap-2">
+                  <Button type="button" variant={mediaType === "movie" ? "secondary" : "outline"} onClick={() => setMediaType("movie")}>Film</Button>
+                  <Button type="button" variant={mediaType === "tv" ? "secondary" : "outline"} onClick={() => setMediaType("tv")}>Serie</Button>
+                </div>
+                <div className="flex gap-2">
+                  <Input placeholder="Titolo da confermare con TMDB" value={identityQuery} onChange={(e) => setIdentityQuery(e.target.value)} />
+                  <Button type="button" variant="outline" disabled={!identityQuery.trim() || isSearching} onClick={async () => {
+                    setIsSearching(true)
+                    try {
+                      const params = new URLSearchParams({ query: identityQuery.trim(), type: mediaType, candidates: "true" })
+                      const response = await fetch(`/api/metadata/tmdb/resolve?${params}`, { cache: "no-store" })
+                      const body = await response.json()
+                      if (!response.ok) throw new Error(body.error || "TMDB resolution failed")
+                      const candidates = body.candidates || []
+                      setIdentityCandidates(candidates)
+                      setSelectedIdentity(candidates[0] ? { ...candidates[0], kind: mediaType } : body.resolution?.metadata ? { ...body.resolution.metadata, kind: mediaType } : null)
+                    } catch (error: any) {
+                      toast.error(error.message || "TMDB resolution failed")
+                    } finally { setIsSearching(false) }
+                  }}>Resolve</Button>
+                </div>
+                {identityCandidates.length > 0 && <div className="space-y-2">
+                  {identityCandidates.map((candidate) => <Button key={candidate.tmdbId} type="button" variant={selectedIdentity?.tmdbId === candidate.tmdbId ? "default" : "outline"} className="w-full justify-start" onClick={() => setSelectedIdentity({ ...candidate, kind: mediaType })}>{candidate.title} {candidate.year ? `(${candidate.year})` : ""}</Button>)}
+                </div>}
+                {selectedIdentity && <p className="text-xs text-muted-foreground">Identità selezionata: {selectedIdentity.title} · TMDB {selectedIdentity.tmdbId}</p>}
               </CardContent>
             </Card>
 

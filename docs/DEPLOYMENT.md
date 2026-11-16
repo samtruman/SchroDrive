@@ -134,6 +134,30 @@ restart the container. Settings that require a new environment value expose a
 restart-required state and are applied only after an explicit deploy/container
 restart.
 
+## Manual intake and TMDB resolution
+
+The web `Add` flow uses the provider-neutral `POST /api/add/intake` endpoint.
+It supports two explicit modes:
+
+- `mode=arr`: delegates the magnet to the existing qBittorrent-compatible Arr
+  bridge, with `mediaType=movie|tv`, so Radarr or Sonarr retain ownership of
+  parsing, naming, importing, and final library placement;
+- `mode=standalone`: adds the magnet to the selected configured provider and
+  leaves materialization to the existing organizer path. An optional confirmed
+  TMDB identity can be supplied without requiring an Arr installation.
+
+Both modes accept an optional `identity` object containing the confirmed TMDB
+identity. Identity lookup is shared through the read-only
+`GET /api/metadata/tmdb/resolve` endpoint, which returns a safe resolution and
+bounded candidate list. The endpoint does not add provider items or create
+filesystem links.
+
+The standalone path deliberately does not start a polling loop or repeatedly
+query the provider. It submits once and reuses the configured lightweight
+refresh/reconciliation path; production scheduling remains controlled by the
+stack environment variables and must not be enabled solely to service a manual
+add.
+
 Organizer naming and media grouping are separate concerns:
 
 - generated symlinks preserve the original provider release basename;
