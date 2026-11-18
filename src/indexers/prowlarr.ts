@@ -22,6 +22,20 @@ export type ProwlarrResult = {
   [key: string]: any;
 };
 
+function buildProwlarrSearchUrl(
+  baseUrl: URL,
+  query: string,
+  categories?: string[],
+  indexerIds?: string[],
+  limit?: number,
+): string {
+  const params = new URLSearchParams({ query, type: "search" });
+  for (const category of categories ?? []) params.append("categories", category);
+  for (const indexerId of indexerIds ?? []) params.append("indexerIds", indexerId);
+  if (limit) params.set("limit", String(limit));
+  return `${baseUrl.toString()}?${params.toString()}`;
+}
+
 export async function testProwlarrConnection(): Promise<boolean> {
   try {
     const base = normaliseBaseUrl(config.prowlarrUrl ?? "");
@@ -68,19 +82,15 @@ export async function searchProwlarr(query: string, opts?: {
   const originalQuery = String(query || "").slice(0, 200);
   const withoutTmdb = stripTmdbQuery(originalQuery);
   const usedQuery = withoutTmdb || originalQuery;
-  const params: any = { query: usedQuery };
   const searchType = 'search';
-  params.type = searchType;
   const categories = (opts?.categories?.length ? opts.categories : (config.prowlarrCategories?.length ? config.prowlarrCategories : undefined));
-  if (categories?.length) params.categories = categories.join(",");
   const indexerIds = (opts?.indexerIds?.length ? opts.indexerIds : (config.prowlarrIndexerIds?.length ? config.prowlarrIndexerIds : undefined));
-  if (indexerIds?.length) params.indexerIds = indexerIds.join(",");
   const limit = opts?.limit ?? (Number.isFinite(config.prowlarrSearchLimit) ? config.prowlarrSearchLimit : undefined);
-  if (limit) params.limit = limit;
+  const searchUrl = buildProwlarrSearchUrl(url, usedQuery, categories, indexerIds, limit);
 
   const maskedKey = config.prowlarrApiKey ? `${config.prowlarrApiKey.slice(0, 4)}…` : "unset";
   const started = Date.now();
-  console.log(`[${new Date().toISOString()}][prowlarr] GET ${url.toString()}`, {
+  console.log(`[${new Date().toISOString()}][prowlarr] GET ${searchUrl}`, {
     query: originalQuery,
     usedQuery,
     categories,
@@ -92,8 +102,7 @@ export async function searchProwlarr(query: string, opts?: {
   });
   
   const timeoutMs = requestTimeoutMs(config.prowlarrTimeoutMs, 120_000, 15_000);
-  const res = await axios.get<ProwlarrResult[]>(url.toString(), {
-    params,
+  const res = await axios.get<ProwlarrResult[]>(searchUrl, {
     headers: { "X-Api-Key": config.prowlarrApiKey },
     timeout: timeoutMs,
   }).catch((err: any) => {
@@ -103,7 +112,7 @@ export async function searchProwlarr(query: string, opts?: {
       code: err?.code,
       status: err?.response?.status,
       statusText: err?.response?.statusText,
-      url: url.toString(),
+      url: searchUrl,
       timeout: `${timeoutMs}ms`
     });
     
@@ -112,7 +121,7 @@ export async function searchProwlarr(query: string, opts?: {
       console.error(`[${new Date().toISOString()}][prowlarr] timeout diagnostics`, {
         base,
         query,
-        params,
+        url: searchUrl,
         suggestion: 'Check network connectivity to Prowlarr; consider increasing PROWLARR_TIMEOUT_MS, reducing PROWLARR_INDEXER_IDS or categories'
       });
     }
@@ -138,8 +147,8 @@ export async function searchProwlarr(query: string, opts?: {
     const withoutYear = usedQuery.replace(/\b(19|20)\d{2}\b/g, "").replace(/\s{2,}/g, " ").trim();
     if (withoutYear && withoutYear !== usedQuery) {
       const started2 = Date.now();
-      const params2: any = { ...params, query: withoutYear };
-      console.log(`[${new Date().toISOString()}][prowlarr] fallback GET ${url.toString()}`, {
+      const fallbackUrl = buildProwlarrSearchUrl(url, withoutYear, categories, indexerIds, limit);
+      console.log(`[${new Date().toISOString()}][prowlarr] fallback GET ${fallbackUrl}`, {
         originalQuery,
         usedQuery,
         fallbackQuery: withoutYear,
@@ -150,8 +159,7 @@ export async function searchProwlarr(query: string, opts?: {
         timeoutMs: config.prowlarrTimeoutMs,
         type: searchType,
       });
-      const res2 = await axios.get<ProwlarrResult[]>(url.toString(), {
-        params: params2,
+      const res2 = await axios.get<ProwlarrResult[]>(fallbackUrl, {
         headers: { "X-Api-Key": config.prowlarrApiKey },
         timeout: timeoutMs,
       }).catch((err: any) => {
@@ -162,7 +170,7 @@ export async function searchProwlarr(query: string, opts?: {
           code: err?.code,
           status: err?.response?.status,
           statusText: err?.response?.statusText,
-          url: url.toString(),
+          url: fallbackUrl,
         });
         throw err;
       });
@@ -178,9 +186,8 @@ export async function searchProwlarr(query: string, opts?: {
   // Fallback: if still no results and categories were used, try without categories
   if (!data.length && categories?.length) {
     const started3 = Date.now();
-    const params3: any = { ...params };
-    delete params3.categories;
-    console.log(`[${new Date().toISOString()}][prowlarr] fallback (no categories) GET ${url.toString()}`, {
+    const fallbackNoCategoriesUrl = buildProwlarrSearchUrl(url, usedQuery, undefined, indexerIds, limit);
+    console.log(`[${new Date().toISOString()}][prowlarr] fallback (no categories) GET ${fallbackNoCategoriesUrl}`, {
       originalQuery,
       usedQuery,
       categoriesRemoved: true,
@@ -190,8 +197,7 @@ export async function searchProwlarr(query: string, opts?: {
       timeoutMs: config.prowlarrTimeoutMs,
       type: searchType,
     });
-    const res3 = await axios.get<ProwlarrResult[]>(url.toString(), {
-      params: params3,
+    const res3 = await axios.get<ProwlarrResult[]>(fallbackNoCategoriesUrl, {
       headers: { "X-Api-Key": config.prowlarrApiKey },
       timeout: timeoutMs,
     }).catch((err: any) => {
@@ -202,7 +208,7 @@ export async function searchProwlarr(query: string, opts?: {
         code: err?.code,
         status: err?.response?.status,
         statusText: err?.response?.statusText,
-        url: url.toString(),
+        url: fallbackNoCategoriesUrl,
       });
       throw err;
     });

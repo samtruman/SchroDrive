@@ -29,6 +29,8 @@ export default function AddContentPage() {
   const [searchQuery, setSearchQuery] = useState("")
   const [isAdding, setIsAdding] = useState(false)
   const [isSearching, setIsSearching] = useState(false)
+  const [searchResults, setSearchResults] = useState<any[]>([])
+  const [selectedSearchResult, setSelectedSearchResult] = useState<any>(null)
   const [selectedProvider, setSelectedProvider] = useState<string>("torbox")
   const [intakeMode, setIntakeMode] = useState<"standalone" | "arr">("standalone")
   const [mediaType, setMediaType] = useState<"movie" | "tv">("movie")
@@ -137,28 +139,29 @@ export default function AddContentPage() {
         return
       }
 
-      // Get best result (first one - backend sorts by seeders)
-      const best = searchData.results[0]
-      
-      if (!best.magnetUrl) {
-        toast.error("Best result has no magnet URL")
-        return
-      }
-
-      toast.info(`Found: ${best.title}`)
-      
-      setPendingAddition({ provider: selectedProvider, title: best.title, magnet: best.magnetUrl, mode: intakeMode, mediaType })
-      setIdentityQuery(best.title)
-      setIdentityCandidates([])
-      setSelectedIdentity(null)
+      setSearchResults(searchData.results || [])
+      setSelectedSearchResult(null)
       setSearchQuery("")
-      toast.info("Risultato selezionato. Conferma ora l’identità TMDB prima dell’invio.")
-      void resolveIdentity(best.title, mediaType)
+      toast.success(`${searchData.results.length} risultati trovati. Seleziona quello corretto.`)
     } catch (err: any) {
       toast.error(err.message || "Failed to search and add")
     } finally {
       setIsSearching(false)
     }
+  }
+
+  const selectSearchResult = (result: any) => {
+    if (!result?.magnetUrl) {
+      toast.error("Questo risultato non contiene un magnet utilizzabile")
+      return
+    }
+    setSelectedSearchResult(result)
+    setPendingAddition({ provider: selectedProvider, title: result.title, magnet: result.magnetUrl, mode: intakeMode, mediaType })
+    setIdentityQuery(result.title || "")
+    setIdentityCandidates([])
+    setSelectedIdentity(null)
+    toast.info("Risultato selezionato. Conferma ora l’identità TMDB nel riquadro sotto.")
+    if (result.title) void resolveIdentity(result.title, mediaType)
   }
 
   if (loading) {
@@ -183,7 +186,7 @@ export default function AddContentPage() {
         <p className="text-muted-foreground">Add torrents to your debrid service</p>
       </div>
 
-      <div className="max-w-2xl space-y-6">
+      <div className="max-w-7xl space-y-6 flex flex-col">
         {connectedProviders.length === 0 ? (
           <Card className="border-yellow-500/50 bg-yellow-500/5">
             <CardContent className="py-6">
@@ -200,7 +203,7 @@ export default function AddContentPage() {
           </Card>
         ) : (
           <>
-            <Card>
+            <Card className="order-1">
               <CardHeader>
                 <CardTitle>Select Provider</CardTitle>
                 <CardDescription>Choose which service to add content to</CardDescription>
@@ -224,14 +227,16 @@ export default function AddContentPage() {
               </CardContent>
             </Card>
 
-            <Card>
+            <div className="grid items-start gap-6 lg:grid-cols-2">
+            <div className="flex flex-col gap-6 lg:order-1">
+            <Card className="order-2">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Link className="h-5 w-5" />
                   Aggiungi e associa contenuto
                 </CardTitle>
                 <CardDescription>
-                  {pendingAddition ? "Step 2: identifica il contenuto con TMDB prima dell’invio." : "Step 1: acquisisci il magnet, poi conferma film o serie e l’identità TMDB."}
+                  {pendingAddition ? "Step 2: conferma con TMDB il risultato selezionato prima dell’invio." : "Step 1: acquisisci un magnet, poi conferma film o serie e l’identità TMDB."}
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -276,7 +281,7 @@ export default function AddContentPage() {
                 </>}
 
                 {pendingAddition && <div className="space-y-4 rounded-lg border border-primary/40 bg-primary/5 p-4">
-                  <div className="flex items-center gap-2 text-sm font-medium"><CheckCircle2 className="h-4 w-4 text-primary" />Magnet acquisito, in attesa di conferma TMDB</div>
+                  <div className="flex items-center gap-2 text-sm font-medium"><CheckCircle2 className="h-4 w-4 text-primary" />Risultato selezionato, in attesa di conferma TMDB</div>
                   {pendingAddition.title && <p className="text-xs text-muted-foreground">Titolo rilevato dal magnet: <span className="font-medium text-foreground">{pendingAddition.title}</span></p>}
                   <div className="space-y-2">
                     <Label>Tipo di contenuto</Label>
@@ -313,13 +318,13 @@ export default function AddContentPage() {
               </CardContent>
             </Card>
 
-            <Card>
+            <Card className="order-1">
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Search className="h-5 w-5" />
                   Search & Add
                 </CardTitle>
-                <CardDescription>Search indexer for content and add the best result automatically</CardDescription>
+                <CardDescription>Cerca nell’indexer; il risultato selezionato passa poi al riquadro TMDB per la conferma.</CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
                 <div className="space-y-2">
@@ -342,10 +347,43 @@ export default function AddContentPage() {
                   </div>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  This will search your configured indexer and automatically add the best result (highest seeders).
+                  La ricerca mostra i risultati dell’indexer; scegli tu il magnet corretto. Non viene inviato finché non confermi l’identità TMDB.
                 </p>
               </CardContent>
             </Card>
+            </div>
+
+            <Card className="lg:order-2">
+              <CardHeader>
+                <CardTitle>Risultati ricerca</CardTitle>
+                <CardDescription>
+                  Seleziona qui il magnet corretto; l’associazione TMDB resta nel pannello a sinistra.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {searchResults.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">I risultati compariranno qui dopo una ricerca.</p>
+                ) : (
+                  <div className="max-h-[48rem] space-y-2 overflow-y-auto">
+                    {searchResults.map((result, index) => {
+                      const selected = selectedSearchResult?.infoHash
+                        ? selectedSearchResult.infoHash === result.infoHash
+                        : selectedSearchResult?.title === result.title
+                      return <div key={result.infoHash || result.magnetUrl || `${result.title}-${index}`} className={`flex items-start justify-between gap-3 rounded-md border p-3 ${selected ? "border-primary bg-primary/10" : ""}`}>
+                        <div className="min-w-0 flex-1">
+                          <p className="break-words text-sm font-medium">{result.title || "Risultato senza titolo"}</p>
+                          <p className="mt-1 text-xs text-muted-foreground">{result.indexer || "Indexer"} · {result.seeders || 0} seed · {result.size ? `${(result.size / 1073741824).toFixed(1)} GB` : "dimensione sconosciuta"}</p>
+                        </div>
+                        <Button type="button" size="sm" variant={selected ? "default" : "outline"} onClick={() => selectSearchResult(result)} disabled={isSearching}>
+                          {selected ? "Selezionato" : "Seleziona"}
+                        </Button>
+                      </div>
+                    })}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+            </div>
           </>
         )}
       </div>
