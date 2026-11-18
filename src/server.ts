@@ -21,7 +21,7 @@ import cors from "cors";
 import fs from "fs";
 import path from "path";
 import { config } from "./core/config";
-import { searchIndexer, pickBestResult, getMagnet, getProviderName, isIndexerConfigured } from "./indexers/index";
+import { searchIndexer, pickBestResult, getMagnet, getMagnetOrResolve, getProviderName, isIndexerConfigured } from "./indexers/index";
 import { registry, type DebridProvider, type RecoverabilityEvidence, type TorrentInfo, type DownloadInfo } from "./providers";
 import { startOverseerrPoller } from "./services/overseerr";
 import { startAutoUpdater } from "./services/autoUpdate";
@@ -60,6 +60,7 @@ import { discoverSeerrArrProfiles } from "./services/seerrArrProfiles";
 import { propagateProviderDeletion, refreshProviderActivity } from "./services/providerReconciliationRuntime";
 import { auditOrganizedLibrary } from "./services/organizedAudit";
 import { getBuildInfo } from "./services/buildInfo";
+import { isValidMagnetUri } from "./indexers/shared";
 
 // ===========================================================================
 // Server Initialisation
@@ -74,6 +75,22 @@ function configuredMediaManagerProvider(requested?: unknown): DebridProvider | u
   const id = typeof requested === "string" ? requested.trim().toLowerCase() : "";
   if (id) return providers.find((provider) => provider.id === id);
   return providers.find((provider) => provider.id === "alldebrid") || providers[0];
+}
+
+function sanitizeIndexerUrl(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const trimmed = value.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return trimmed;
+
+  try {
+    const parsed = new URL(trimmed);
+    for (const key of Array.from(parsed.searchParams.keys())) {
+      if (["apikey", "api_key", "key"].includes(key.toLowerCase())) parsed.searchParams.delete(key);
+    }
+    return parsed.toString();
+  } catch {
+    return trimmed;
+  }
 }
 
 function readVersionManagerGroups(providerId: string): { groups: any[]; snapshotId: string; snapshotCreatedAt: string; snapshotPolicyHash?: string; providerId: string } | null {
@@ -1754,17 +1771,30 @@ export function startServer() {
       const results = await searchIndexer(query, { categories });
       
       // Normalise results to a consistent shape regardless of indexer response format
-      const mappedResults = results.map((r: any) => ({
-        title: r.title || r.Title,
-        size: r.size || r.Size || 0,
-        seeders: r.seeders || r.Seeders || 0,
-        leechers: r.leechers || r.Leechers || 0,
-        magnetUrl: r.magnetUrl || r.MagnetUrl || r.downloadUrl || r.DownloadUrl,
-        infoHash: r.infoHash || r.InfoHash,
-        indexer: r.indexer || r.Indexer || "Unknown",
-        publishDate: r.publishDate || r.PublishDate,
-        categories: r.categories || r.Categories || [],
-      }));
+      const mappedResults = results.map((r: any) => {
+        const directMagnet = r.magnetUrl || r.MagnetUrl || r.MagnetUri;
+        const rawDownloadUrl = r.downloadUrl || r.DownloadUrl || r.download || r.Download;
+        const rawLink = r.link || r.Link;
+        const downloadUrl = sanitizeIndexerUrl(rawDownloadUrl)
+          || (typeof directMagnet === "string" && /^(?:https?):\/\//i.test(directMagnet) ? sanitizeIndexerUrl(directMagnet) : undefined);
+
+        return {
+          title: r.title || r.Title,
+          size: r.size || r.Size || 0,
+          seeders: r.seeders || r.Seeders || 0,
+          leechers: r.leechers || r.Leechers || 0,
+          // HTTP indexer endpoints are resolver inputs, not magnets.
+          magnetUrl: isValidMagnetUri(directMagnet) ? directMagnet : undefined,
+          downloadUrl,
+          download: sanitizeIndexerUrl(r.download || r.Download),
+          link: sanitizeIndexerUrl(rawLink),
+          guid: sanitizeIndexerUrl(r.guid || r.Guid),
+          infoHash: r.infoHash || r.InfoHash || r.infohash,
+          indexer: r.indexer || r.Indexer || "Unknown",
+          publishDate: r.publishDate || r.PublishDate,
+          categories: r.categories || r.Categories || [],
+        };
+      });
 
       res.json({ 
         ok: true, 
@@ -1775,6 +1805,29 @@ export function startServer() {
     } catch (err: any) {
       console.error(`[${new Date().toISOString()}][api/search] error`, err.message);
       res.status(500).json({ ok: false, error: err.message, results: [] });
+    }
+  });
+
+  /**
+   * POST /api/search/resolve — resolves one selected indexer result to a
+   * provider-ready magnet URI without adding anything to a debrid provider.
+   */
+  app.post("/api/search/resolve", async (req, res) => {
+    try {
+      const result = req.body?.result;
+      if (!result || typeof result !== "object" || Array.isArray(result)) {
+        return res.status(400).json({ ok: false, error: "A search result is required" });
+      }
+
+      const resolved = await getMagnetOrResolve(result as any);
+      if (!isValidMagnetUri(resolved)) {
+        return res.status(422).json({ ok: false, error: "Il risultato non contiene un magnet URI risolvibile" });
+      }
+
+      return res.json({ ok: true, magnet: resolved });
+    } catch (err: any) {
+      console.error(`[${new Date().toISOString()}][api/search/resolve] error`, err?.message || String(err));
+      return res.status(502).json({ ok: false, error: "Impossibile risolvere il risultato dell’indexer in un magnet URI" });
     }
   });
 
@@ -1854,7 +1907,7 @@ export function startServer() {
   app.post("/api/add/intake", async (req, res) => {
     try {
       const { magnet, name, provider: targetProvider, mode = "standalone", mediaType, identity } = req.body || {};
-      if (typeof magnet !== "string" || !magnet.startsWith("magnet:")) {
+      if (!isValidMagnetUri(magnet)) {
         return res.status(400).json({ ok: false, error: "magnet must be a valid magnet URI" });
       }
       if (mode !== "arr" && mode !== "standalone") {

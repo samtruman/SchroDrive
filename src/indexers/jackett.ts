@@ -1,7 +1,7 @@
 import axios from "axios";
 import { config } from "../core/config";
 import { requestTimeoutMs } from "../core/httpClient";
-import { buildMagnetFromHash, normaliseBaseUrl, stripTmdbQuery } from "./shared";
+import { buildMagnetFromHash, isValidMagnetUri, normaliseBaseUrl, stripTmdbQuery } from "./shared";
 
 export type JackettResult = {
   Title?: string;
@@ -282,7 +282,7 @@ export function pickBestResult(results: JackettResult[]): JackettResult | undefi
 export function getMagnet(r: JackettResult | undefined): string | undefined {
   if (!r) return undefined;
   const direct = r.magnetUrl || r.MagnetUri || r.guid || r.Guid || r.link || r.Link;
-  const ok = typeof direct === "string" && direct.startsWith("magnet:");
+  const ok = isValidMagnetUri(direct);
   console.log(`[${new Date().toISOString()}][jackett] getMagnet`, { hasCandidate: !!direct, ok });
   if (ok) return direct as string;
 

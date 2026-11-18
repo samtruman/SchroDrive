@@ -24,6 +24,19 @@ function magnetDisplayName(value: string): string {
   }
 }
 
+function isValidMagnetUri(value: unknown): value is string {
+  if (typeof value !== "string" || !value.trim()) return false
+  try {
+    const parsed = new URL(value.trim())
+    return parsed.protocol === "magnet:" && parsed.searchParams.getAll("xt").some((xt) =>
+      /^urn:btih:(?:[0-9a-f]{40}|[a-z2-7]{32})$/i.test(xt)
+      || /^urn:btmh:[A-Za-z0-9]+$/i.test(xt),
+    )
+  } catch {
+    return false
+  }
+}
+
 export default function AddContentPage() {
   const [magnetUrl, setMagnetUrl] = useState("")
   const [searchQuery, setSearchQuery] = useState("")
@@ -101,8 +114,8 @@ export default function AddContentPage() {
       return
     }
     
-    if (!magnetUrl.startsWith("magnet:")) {
-      toast.error("Invalid magnet URL - must start with 'magnet:'")
+    if (!isValidMagnetUri(magnetUrl)) {
+      toast.error("Inserisci una URI magnet valida con xt=urn:btih o xt=urn:btmh")
       return
     }
 
@@ -150,18 +163,39 @@ export default function AddContentPage() {
     }
   }
 
-  const selectSearchResult = (result: any) => {
-    if (!result?.magnetUrl) {
-      toast.error("Questo risultato non contiene un magnet utilizzabile")
+  const selectSearchResult = async (result: any) => {
+    if (!result) {
+      toast.error("Risultato indexer non valido")
       return
     }
-    setSelectedSearchResult(result)
-    setPendingAddition({ provider: selectedProvider, title: result.title, magnet: result.magnetUrl, mode: intakeMode, mediaType })
-    setIdentityQuery(result.title || "")
-    setIdentityCandidates([])
-    setSelectedIdentity(null)
-    toast.info("Risultato selezionato. Conferma ora l’identità TMDB nel riquadro sotto.")
-    if (result.title) void resolveIdentity(result.title, mediaType)
+
+    setIsSearching(true)
+    try {
+      let magnet = result.magnetUrl
+      if (!isValidMagnetUri(magnet)) {
+        const response = await fetch("/api/search/resolve", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ result }),
+        })
+        const body = await response.json()
+        if (!response.ok || !body.ok) throw new Error(body.error || "Il risultato non contiene un magnet risolvibile")
+        magnet = body.magnet
+      }
+      if (!isValidMagnetUri(magnet)) throw new Error("Il risultato non contiene una URI magnet valida")
+
+      setSelectedSearchResult(result)
+      setPendingAddition({ provider: selectedProvider, title: result.title, magnet, mode: intakeMode, mediaType })
+      setIdentityQuery(result.title || "")
+      setIdentityCandidates([])
+      setSelectedIdentity(null)
+      toast.info("Risultato selezionato. Conferma ora l’identità TMDB nel riquadro sotto.")
+      if (result.title) void resolveIdentity(result.title, mediaType)
+    } catch (error: any) {
+      toast.error(error.message || "Impossibile risolvere il magnet dell’indexer")
+    } finally {
+      setIsSearching(false)
+    }
   }
 
   if (loading) {
@@ -203,7 +237,7 @@ export default function AddContentPage() {
           </Card>
         ) : (
           <>
-            <Card className="order-1">
+            <Card>
               <CardHeader>
                 <CardTitle>Select Provider</CardTitle>
                 <CardDescription>Choose which service to add content to</CardDescription>
@@ -284,6 +318,16 @@ export default function AddContentPage() {
                   <div className="flex items-center gap-2 text-sm font-medium"><CheckCircle2 className="h-4 w-4 text-primary" />Risultato selezionato, in attesa di conferma TMDB</div>
                   {pendingAddition.title && <p className="text-xs text-muted-foreground">Titolo rilevato dal magnet: <span className="font-medium text-foreground">{pendingAddition.title}</span></p>}
                   <div className="space-y-2">
+                    <Label>Modalità di importazione</Label>
+                    <div className="flex gap-2">
+                      <Button type="button" variant={intakeMode === "standalone" ? "default" : "outline"} onClick={() => setIntakeMode("standalone")} className="flex-1">Standalone</Button>
+                      <Button type="button" variant={intakeMode === "arr" ? "default" : "outline"} onClick={() => setIntakeMode("arr")} className="flex-1">Sonarr/Radarr</Button>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {intakeMode === "standalone" ? "SchroDrive organizza il contenuto dopo la conferma TMDB." : "Dopo TMDB il magnet viene consegnato a Sonarr/Radarr con titolo canonico e categoria corretta."}
+                    </p>
+                  </div>
+                  <div className="space-y-2">
                     <Label>Tipo di contenuto</Label>
                     <div className="flex gap-2">
                       <Button type="button" aria-pressed={mediaType === "movie"} variant={mediaType === "movie" ? "default" : "outline"} onClick={() => { setMediaType("movie"); setSelectedIdentity(null); setIdentityCandidates([]); void resolveIdentity(identityQuery, "movie") }}>Film</Button>
@@ -302,7 +346,7 @@ export default function AddContentPage() {
                   <Button type="button" className="w-full" disabled={!selectedIdentity || isSearching} onClick={async () => {
                     setIsSearching(true)
                     try {
-                      const response = await fetch("/api/add/intake", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ magnet: pendingAddition.magnet, mode: pendingAddition.mode, mediaType, provider: pendingAddition.provider, name: selectedIdentity.title, identity: selectedIdentity }) })
+                      const response = await fetch("/api/add/intake", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ magnet: pendingAddition.magnet, mode: intakeMode, mediaType, provider: pendingAddition.provider, name: selectedIdentity.title, identity: selectedIdentity }) })
                       const body = await response.json()
                       if (!response.ok || !body.ok) throw new Error(body.error || "Identity confirmation failed")
                       const destination = body.provider || body.delegatedTo || body.mode || "provider"
@@ -313,7 +357,7 @@ export default function AddContentPage() {
                       setIdentityQuery("")
                     } catch (error: any) { toast.error(error.message || "Identity confirmation failed") }
                     finally { setIsSearching(false) }
-                  }}>Conferma identità e organizza</Button>
+                  }}>{intakeMode === "arr" ? "Conferma identità e invia a Sonarr/Radarr" : "Conferma identità e organizza"}</Button>
                 </div>}
               </CardContent>
             </Card>

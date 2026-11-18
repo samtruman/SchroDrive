@@ -1,7 +1,7 @@
 import axios from "axios";
 import { config } from "../core/config";
 import { requestTimeoutMs } from "../core/httpClient";
-import { buildMagnetFromHash, normaliseBaseUrl, stripTmdbQuery } from "./shared";
+import { buildMagnetFromHash, isValidMagnetUri, normaliseBaseUrl, stripTmdbQuery } from "./shared";
 
 export type ProwlarrResult = {
   title?: string;
@@ -247,7 +247,7 @@ export function pickBestResult(results: ProwlarrResult[]): ProwlarrResult | unde
 export function getMagnet(r: ProwlarrResult | undefined): string | undefined {
   if (!r) return undefined;
   const direct = r.magnetUrl || r.guid || r.link;
-  const ok = typeof direct === "string" && direct.startsWith("magnet:");
+  const ok = isValidMagnetUri(direct);
   console.log(`[${new Date().toISOString()}][prowlarr] getMagnet`, { hasCandidate: !!direct, ok });
   if (ok) return direct as string;
 
