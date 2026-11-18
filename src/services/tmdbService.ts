@@ -1,6 +1,6 @@
 import axios from "axios";
 import { config } from "../core/config";
-import { selectMediaCandidate } from "./mediaParser";
+import { parseMediaFilename, selectMediaCandidate } from "./mediaParser";
 
 export type TmdbSearchKind = "movie" | "tv";
 export type TmdbLookupStatus = "matched" | "not_matched" | "ambiguous" | "unavailable" | "configuration_unavailable";
@@ -41,6 +41,32 @@ export interface TmdbRequestOptions {
   retries?: number;
   backoffMs?: number;
   maxCandidates?: number;
+}
+
+export interface TmdbResolvedCandidates {
+  query: string;
+  year?: number;
+  resolution: TmdbLookupResult;
+  candidates: TmdbManualCandidate[];
+}
+
+/** Normalize a release name once for every TMDB consumer. */
+export function normalizeTmdbLookup(query: string, year?: number): { query: string; year?: number } {
+  const parsed = parseMediaFilename(query, query);
+  return { query: parsed.title?.trim() || query.trim(), year: year ?? parsed.year };
+}
+
+/** Shared TMDB resolver for Media Manager, manual intake and future clients. */
+export async function resolveTmdbCandidates(
+  query: string,
+  kind: TmdbSearchKind,
+  year?: number,
+  options: TmdbRequestOptions = {},
+): Promise<TmdbResolvedCandidates> {
+  const normalized = normalizeTmdbLookup(query, year);
+  const resolution = await searchTmdb(normalized.query, kind, normalized.year, options);
+  const candidates = await searchTmdbCandidates(normalized.query, kind, normalized.year, { ...options, maxCandidates: options.maxCandidates ?? 10 });
+  return { ...normalized, resolution, candidates };
 }
 
 function resolveApiKey(options: TmdbRequestOptions): string {
