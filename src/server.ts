@@ -60,6 +60,7 @@ import { discoverSeerrArrProfiles } from "./services/seerrArrProfiles";
 import { propagateProviderDeletion, refreshProviderActivity } from "./services/providerReconciliationRuntime";
 import { auditOrganizedLibrary } from "./services/organizedAudit";
 import { getBuildInfo } from "./services/buildInfo";
+import { parseMediaFilename } from "./services/mediaParser";
 
 // ===========================================================================
 // Server Initialisation
@@ -1128,15 +1129,21 @@ export function startServer() {
     if (!mediaType) return res.status(400).json({ ok: false, error: 'type must be movie or tv' });
     if (yearValue !== undefined && (!Number.isInteger(yearValue) || yearValue < 1800 || yearValue > 2200)) return res.status(400).json({ ok: false, error: 'year is invalid' });
     try {
-      const resolution = await searchTmdb(query, mediaType, yearValue);
+      // Intake callers pass release names, not clean catalog titles. Reuse
+      // the canonical release parser before querying TMDB so codec/language/
+      // source tokens do not make an otherwise valid title unsearchable.
+      const parsed = parseMediaFilename(query, query);
+      const tmdbQuery = parsed.title?.trim() || query;
+      const tmdbYear = yearValue ?? parsed.year;
+      const resolution = await searchTmdb(tmdbQuery, mediaType, tmdbYear);
       // Keep the normal path to one TMDB search. Interactive callers may ask
       // for candidates explicitly; otherwise fetch them only when automatic
       // resolution cannot safely choose one identity.
       const includeCandidates = String(req.query.candidates || '').toLowerCase() === 'true';
       const candidates = includeCandidates || resolution.status !== "matched"
-        ? await searchTmdbCandidates(query, mediaType, yearValue, { maxCandidates: 5 })
+        ? await searchTmdbCandidates(tmdbQuery, mediaType, tmdbYear, { maxCandidates: 5 })
         : [];
-      res.json({ ok: true, query, mediaType, year: yearValue, resolution, candidates });
+      res.json({ ok: true, query, normalizedQuery: tmdbQuery, mediaType, year: tmdbYear, resolution, candidates });
     } catch (error: any) {
       res.status(502).json({ ok: false, error: error?.message || 'TMDB resolution failed' });
     }
