@@ -52,9 +52,12 @@ export default function AddContentPage() {
       if (!response.ok) throw new Error(body.error || "TMDB resolution failed")
       const candidates = body.candidates || []
       setIdentityCandidates(candidates)
-      setSelectedIdentity(candidates[0]
+      // Never silently choose the first TMDB result: localized release names
+      // such as "Odissea" can legitimately match several films. Let the user
+      // confirm the exact identity whenever candidates are ambiguous.
+      setSelectedIdentity(candidates.length === 1
         ? { ...candidates[0], kind: type }
-        : body.resolution?.metadata
+        : candidates.length === 0 && body.resolution?.metadata
           ? { ...body.resolution.metadata, kind: type }
           : null)
       if (candidates.length === 0 && !body.resolution?.metadata) toast.info("Nessun risultato TMDB trovato")
