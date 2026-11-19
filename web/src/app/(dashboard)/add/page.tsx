@@ -50,7 +50,7 @@ export default function AddContentPage() {
   const [identityQuery, setIdentityQuery] = useState("")
   const [identityCandidates, setIdentityCandidates] = useState<any[]>([])
   const [selectedIdentity, setSelectedIdentity] = useState<any>(null)
-  const [pendingAddition, setPendingAddition] = useState<{ provider: string; title?: string; magnet: string; mode: "standalone" | "arr"; mediaType: "movie" | "tv" } | null>(null)
+  const [pendingAddition, setPendingAddition] = useState<{ provider: string; title?: string; magnet: string; mode: "standalone" | "arr"; mediaType: "movie" | "tv"; release?: Record<string, unknown> } | null>(null)
   const [providers, setProviders] = useState<Provider[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -185,7 +185,26 @@ export default function AddContentPage() {
       if (!isValidMagnetUri(magnet)) throw new Error("Il risultato non contiene una URI magnet valida")
 
       setSelectedSearchResult(result)
-      setPendingAddition({ provider: selectedProvider, title: result.title, magnet, mode: intakeMode, mediaType })
+      setPendingAddition({
+        provider: selectedProvider,
+        title: result.title,
+        magnet,
+        mode: intakeMode,
+        mediaType,
+        release: {
+          guid: result.guid,
+          title: result.title,
+          size: result.size,
+          indexerId: result.indexerId,
+          indexer: result.indexer,
+          publishDate: result.publishDate,
+          downloadUrl: result.downloadUrl,
+          infoUrl: result.link,
+          infoHash: result.infoHash,
+          seeders: result.seeders,
+          leechers: result.leechers,
+        },
+      })
       setIdentityQuery(result.title || "")
       setIdentityCandidates([])
       setSelectedIdentity(null)
@@ -346,7 +365,7 @@ export default function AddContentPage() {
                   <Button type="button" className="w-full" disabled={!selectedIdentity || isSearching} onClick={async () => {
                     setIsSearching(true)
                     try {
-                      const response = await fetch("/api/add/intake", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ magnet: pendingAddition.magnet, mode: intakeMode, mediaType, provider: pendingAddition.provider, name: selectedIdentity.title, identity: selectedIdentity }) })
+                      const response = await fetch("/api/add/intake", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ magnet: pendingAddition.magnet, mode: intakeMode, mediaType, provider: pendingAddition.provider, name: selectedIdentity.title, identity: selectedIdentity, release: pendingAddition.release }) })
                       const body = await response.json()
                       if (!response.ok || !body.ok) throw new Error(body.error || "Identity confirmation failed")
                       const destination = body.provider || body.delegatedTo || body.mode || "provider"

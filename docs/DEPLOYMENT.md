@@ -139,9 +139,10 @@ restart.
 The web `Add` flow uses the provider-neutral `POST /api/add/intake` endpoint.
 It supports two explicit modes:
 
-- `mode=arr`: delegates the magnet to the existing qBittorrent-compatible Arr
-  bridge, with `mediaType=movie|tv`, so Radarr or Sonarr retain ownership of
-  parsing, naming, importing, and final library placement;
+- `mode=arr`: pushes the selected release to the configured Radarr or Sonarr
+  `/api/v3/release/push` endpoint, with `mediaType=movie|tv`, so the *arr
+  decision engine performs the same grab/import path as a manual search. The
+  selected indexer release metadata is forwarded together with the magnet;
 - `mode=standalone`: adds the magnet to the selected configured provider and
   leaves materialization to the existing organizer path. An optional confirmed
   TMDB identity can be supplied without requiring an Arr installation.

@@ -61,6 +61,7 @@ import { propagateProviderDeletion, refreshProviderActivity } from "./services/p
 import { auditOrganizedLibrary } from "./services/organizedAudit";
 import { getBuildInfo } from "./services/buildInfo";
 import { isValidMagnetUri } from "./indexers/shared";
+import { pushReleaseToArr, type ArrReleaseInput } from "./services/arrReleasePush";
 
 // ===========================================================================
 // Server Initialisation
@@ -1790,6 +1791,7 @@ export function startServer() {
           link: sanitizeIndexerUrl(rawLink),
           guid: sanitizeIndexerUrl(r.guid || r.Guid),
           infoHash: r.infoHash || r.InfoHash || r.infohash,
+          indexerId: r.indexerId || r.IndexerId,
           indexer: r.indexer || r.Indexer || "Unknown",
           publishDate: r.publishDate || r.PublishDate,
           categories: r.categories || r.Categories || [],
@@ -1881,32 +1883,18 @@ export function startServer() {
   });
 
   /**
-   * Keep the magnet hash intact while giving *arr the canonical display name
-   * selected by the user.  The fake qBittorrent bridge uses dn as the torrent
-   * name, which is what Radarr/Sonarr use when associating a manual download.
-   */
-  function withCanonicalMagnetName(magnet: string, title: string, year?: number): string {
-    try {
-      const parsed = new URL(magnet);
-      parsed.searchParams.set("dn", `${title}${year ? ` (${year})` : ""}`);
-      return parsed.toString();
-    } catch {
-      return magnet;
-    }
-  }
-
-  /**
    * POST /api/add/intake — provider-neutral manual intake.
    *
-   * Both modes require a confirmed TMDB identity.  `mode=arr` delegates to
-   * the existing qBittorrent-compatible bridge with the canonical title and
-   * the correct category; `mode=standalone` adds directly to the provider and
-   * records the identity for the organizer. The legacy /api/add endpoint
-   * remains unchanged for clients that only need provider addition.
+   * Both modes require a confirmed TMDB identity. `mode=arr` pushes the
+   * selected release to the configured Radarr/Sonarr release-push API so the
+   * Arr decision engine performs the same grab path as a manual search;
+   * `mode=standalone` adds directly to the provider and records the identity
+   * for the organizer. The legacy /api/add endpoint remains unchanged for
+   * clients that only need provider addition.
    */
   app.post("/api/add/intake", async (req, res) => {
     try {
-      const { magnet, name, provider: targetProvider, mode = "standalone", mediaType, identity } = req.body || {};
+      const { magnet, name, provider: targetProvider, mode = "standalone", mediaType, identity, release } = req.body || {};
       if (!isValidMagnetUri(magnet)) {
         return res.status(400).json({ ok: false, error: "magnet must be a valid magnet URI" });
       }
@@ -1918,7 +1906,6 @@ export function startServer() {
       }
 
       if (mode === "arr") {
-        if (!config.arrBridgeEnabled) return res.status(503).json({ ok: false, error: "Arr bridge is not enabled" });
         if (!identity || typeof identity !== "object") {
           return res.status(400).json({ ok: false, error: "TMDB identity is required before Arr intake" });
         }
@@ -1928,20 +1915,21 @@ export function startServer() {
         if (!tmdbId || !title) {
           return res.status(400).json({ ok: false, error: "TMDB identity requires tmdbId and title" });
         }
-        const canonicalMagnet = withCanonicalMagnetName(magnet, title, year);
-        const bridgeResponse = await fetch(`http://127.0.0.1:${config.arrBridgePort}/api/v2/torrents/add`, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({
-            urls: canonicalMagnet,
-            category: mediaType === "tv" ? "sonarr" : "radarr",
-            tags: `schrodrive-manual-intake,tmdb-${tmdbId}`,
-          }),
+        const pushed = await pushReleaseToArr(mediaType, {
+          magnet,
+          name: title,
+          release: release && typeof release === "object" ? release as ArrReleaseInput : undefined,
+          identity: { tmdbId, title, year },
         });
-        if (!bridgeResponse.ok) {
-          return res.status(502).json({ ok: false, error: `Arr bridge rejected intake: HTTP ${bridgeResponse.status}` });
-        }
-        return res.status(202).json({ ok: true, mode, mediaType, identity, delegatedTo: mediaType === "tv" ? "sonarr" : "radarr", status: "queued" });
+        return res.status(200).json({
+          ok: true,
+          mode,
+          mediaType,
+          identity,
+          delegatedTo: mediaType === "tv" ? "sonarr" : "radarr",
+          status: "grabbed",
+          result: pushed.response,
+        });
       }
 
       const provider = targetProvider ? registry.get(String(targetProvider)) : registry.configured()[0];
