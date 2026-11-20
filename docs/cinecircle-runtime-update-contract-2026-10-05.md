@@ -31,7 +31,7 @@ replacement of a newer `server.ts` with an older local copy.
 ## Current repository status
 
 The checkout used for the current runtime work is
-`/home/samtruman/projects/schrodrive`, on branch
+`/srv/storage/build-cache/schrodrive`, on branch
 `pr/non-blocking-mount-status-20261012`. Its current work is committed and
 pushed at `b256e2d4cd66e030e79046f9698ec19e496158d3`.
 

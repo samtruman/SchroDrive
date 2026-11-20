@@ -20,7 +20,7 @@ production recreation.
 
 For the SAM server deployment, the canonical operational checkout is always:
 
-    /home/samtruman/projects/schrodrive
+    /srv/storage/build-cache/schrodrive
 
 All source edits, generated `dist` output, validation, commits, image builds,
 and container deployments must be performed from that checkout over SSH on

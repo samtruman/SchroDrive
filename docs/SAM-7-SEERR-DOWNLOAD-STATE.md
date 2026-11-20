@@ -18,7 +18,7 @@ absolute links remain preserved.
 ## Consolidated release
 
 Recovered the job-12 SAM-7 diff onto canonical checkout
-`/home/samtruman/projects/schrodrive`, branch `fix/sam-7-canonical-job-12`,
+`/srv/storage/build-cache/schrodrive`, branch `fix/sam-7-canonical-job-12`,
 base `3f33d04`. The older `5b8aeb3` job worktree is only the patch source.
 Canonical commits after that base include the owner's organizer updates and
 are retained. Five of the six formerly divergent runtime modules match the
