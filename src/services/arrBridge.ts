@@ -432,6 +432,34 @@ function normaliseMountName(value: string): string {
 }
 
 const MIN_FUZZY_MOUNT_NAME_LENGTH = 20;
+const MOUNT_TECHNICAL_TOKENS = new Set([
+  'ita', 'eng', 'spa', 'fre', 'ger', 'multi', 'dual',
+  'bluray', 'brrip', 'webrip', 'webdl', 'web', 'uhd', 'remux',
+  'hdr', 'hdr10', 'dv', 'dolby', 'vision', '2160p', '1080p', '720p', '480p',
+  'hevc', 'h265', 'x265', 'h264', 'x264', 'av1', 'aac', 'ac3', 'ddp', 'dts',
+  'atmos', 'truehd', 'eac3', 'mp3', '10bit', '8bit', 'proper', 'repack',
+  'cyber', 'mircrew', 'mirc', 'webmux', 'complete', 'series', 'pack',
+]);
+
+/**
+ * Extract title-bearing tokens for fuzzy matching.
+ *
+ * Release metadata (year, language, source, codec, HDR and release group)
+ * is deliberately excluded. Those tokens are shared by many unrelated
+ * releases and must never be enough to select a mount entry.
+ */
+function mountIdentityTokens(value: string): Set<string> {
+  return new Set(
+    value
+      .split(' ')
+      .filter((token) => {
+        if (token.length < 4) return false;
+        if (/^(19|20)\d{2}$/.test(token)) return false;
+        if (/^\d{3,4}p$/.test(token)) return false;
+        return !MOUNT_TECHNICAL_TOKENS.has(token);
+      }),
+  );
+}
 
 function episodeKeys(value: string): Set<string> {
   const keys = new Set<string>();
@@ -459,6 +487,11 @@ function mountNameScore(target: string, candidate: string): number {
   const candidateEpisodes = episodeKeys(candidate);
   if (targetEpisodes.size > 0 && candidateEpisodes.size > 0 &&
       ![...targetEpisodes].some((episode) => candidateEpisodes.has(episode))) return -1;
+
+  const targetIdentity = mountIdentityTokens(target);
+  const candidateIdentity = mountIdentityTokens(candidate);
+  const sharedIdentityTokens = [...candidateIdentity].filter((token) => targetIdentity.has(token));
+  if (sharedIdentityTokens.length === 0) return -1;
 
   const shorter = Math.min(target.length, candidate.length);
   const longer = Math.max(target.length, candidate.length);

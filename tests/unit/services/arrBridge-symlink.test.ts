@@ -85,6 +85,20 @@ describe('ARR bridge symlink paths', () => {
     expect(match?.path).toBe(specificSeason);
   });
 
+  test('does not match an unrelated release that only shares technical tokens', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'schrodrive-arr-unrelated-'));
+    const mount = path.join(root, 'mount');
+    const unrelated = path.join(mount, 'Backrooms.2026.iTA-ENG.Bluray.2160p.HEVC.HDR.x265-CYBER.mkv');
+    fs.mkdirSync(unrelated, { recursive: true });
+    fs.writeFileSync(path.join(unrelated, 'Backrooms.2026.iTA-ENG.Bluray.2160p.HEVC.HDR.x265-CYBER.mkv'), 'unrelated');
+
+    const match = await findBestMountMatch(
+      mount,
+      'Odissea 2026 iTA ENG Bluray 2160p HEVC HDR x265 CYBER',
+    );
+    expect(match).toBeNull();
+  });
+
   test('does not match an empty torrent name', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'schrodrive-arr-empty-'));
     fs.writeFileSync(path.join(root, 'unrelated.mkv'), 'media');
