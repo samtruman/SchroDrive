@@ -95,6 +95,14 @@ interface TrackedTorrent {
   pollAttempts: number;
   /** Whether we've already scanned for mount files. */
   mountScanned: boolean;
+  /**
+   * Whether this torrent was newly materialized by the mount scanner and is
+   * therefore eligible for the one-shot Arr import notification.
+   *
+   * This is intentionally separate from mountScanned: older persisted
+   * torrents predate the notifier and must not be re-submitted on startup.
+   */
+  arrImportEligible?: boolean;
   /** Whether Radarr/Sonarr accepted the targeted import command. */
   arrImportRequested?: boolean;
   /** Arr command id returned by the targeted import request. */
@@ -155,7 +163,7 @@ function stateFingerprint(torrent: TrackedTorrent): string {
  * traffic to AllDebrid. Failed notifications are retried with backoff.
  */
 async function requestTargetedArrImport(torrent: TrackedTorrent): Promise<void> {
-  if (!torrent.mountScanned || !torrent.contentPath || torrent.arrImportRequested) return;
+  if (!torrent.arrImportEligible || !torrent.mountScanned || !torrent.contentPath || torrent.arrImportRequested) return;
   if (arrImportInFlight.has(torrent.hash)) return;
   if (torrent.arrImportNextAttemptAt && Date.now() < torrent.arrImportNextAttemptAt) return;
 
@@ -436,6 +444,7 @@ export async function scanMountsForCompleted(): Promise<void> {
         torrent.savePath = path.join(getDownloadsPath(), torrent.category || '');
         torrent.contentPath = torrentDir;
         torrent.size = foundFiles.reduce((sum, f) => sum + f.size, 0);
+        torrent.arrImportEligible = true;
         persistTrackedTorrent(torrent);
 
         console.log(`${LOG_PREFIX} ✅ Torrent "${torrent.name}" completed — ${foundFiles.length} file(s) symlinked to ${torrentDir}`);
