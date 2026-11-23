@@ -101,7 +101,7 @@ function stateFingerprint(torrent) {
  * traffic to AllDebrid. Failed notifications are retried with backoff.
  */
 async function requestTargetedArrImport(torrent) {
-    if (!torrent.mountScanned || !torrent.contentPath || torrent.arrImportRequested)
+    if (!torrent.arrImportEligible || !torrent.mountScanned || !torrent.contentPath || torrent.arrImportRequested)
         return;
     if (arrImportInFlight.has(torrent.hash))
         return;
@@ -371,6 +371,7 @@ async function scanMountsForCompleted() {
                 torrent.savePath = path_1.default.join(getDownloadsPath(), torrent.category || '');
                 torrent.contentPath = torrentDir;
                 torrent.size = foundFiles.reduce((sum, f) => sum + f.size, 0);
+                torrent.arrImportEligible = true;
                 persistTrackedTorrent(torrent);
                 console.log(`${LOG_PREFIX} ✅ Torrent "${torrent.name}" completed — ${foundFiles.length} file(s) symlinked to ${torrentDir}`);
                 await requestTargetedArrImport(torrent);
