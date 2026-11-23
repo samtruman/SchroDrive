@@ -63,6 +63,8 @@ const seerrArrProfiles_1 = require("./services/seerrArrProfiles");
 const providerReconciliationRuntime_1 = require("./services/providerReconciliationRuntime");
 const organizedAudit_1 = require("./services/organizedAudit");
 const buildInfo_1 = require("./services/buildInfo");
+const shared_1 = require("./indexers/shared");
+const arrReleasePush_1 = require("./services/arrReleasePush");
 // ===========================================================================
 // Server Initialisation
 // ===========================================================================
@@ -75,6 +77,24 @@ function configuredMediaManagerProvider(requested) {
     if (id)
         return providers.find((provider) => provider.id === id);
     return providers.find((provider) => provider.id === "alldebrid") || providers[0];
+}
+function sanitizeIndexerUrl(value) {
+    if (typeof value !== "string" || !value.trim())
+        return undefined;
+    const trimmed = value.trim();
+    if (!/^https?:\/\//i.test(trimmed))
+        return trimmed;
+    try {
+        const parsed = new URL(trimmed);
+        for (const key of Array.from(parsed.searchParams.keys())) {
+            if (["apikey", "api_key", "key"].includes(key.toLowerCase()))
+                parsed.searchParams.delete(key);
+        }
+        return parsed.toString();
+    }
+    catch {
+        return trimmed;
+    }
 }
 function readVersionManagerGroups(providerId) {
     const snapshot = (0, versionManagerStore_1.getLatestVersionManagerSnapshot)(providerId);
@@ -1229,8 +1249,8 @@ function startServer() {
         if (yearValue !== undefined && (!Number.isInteger(yearValue) || yearValue < 1800 || yearValue > 2200))
             return res.status(400).json({ ok: false, error: 'year is invalid' });
         try {
-            const results = await (0, tmdbService_1.searchTmdbCandidates)(query, mediaType, yearValue);
-            res.json({ ok: true, query, mediaType, year: yearValue, results });
+            const resolved = await (0, tmdbService_1.resolveTmdbCandidates)(query, mediaType, yearValue);
+            res.json({ ok: true, query, mediaType, year: resolved.year, normalizedQuery: resolved.query, results: resolved.candidates });
         }
         catch (error) {
             res.status(502).json({ ok: false, error: error?.message || 'TMDb search failed' });
@@ -1254,15 +1274,8 @@ function startServer() {
         if (yearValue !== undefined && (!Number.isInteger(yearValue) || yearValue < 1800 || yearValue > 2200))
             return res.status(400).json({ ok: false, error: 'year is invalid' });
         try {
-            const resolution = await (0, tmdbService_1.searchTmdb)(query, mediaType, yearValue);
-            // Keep the normal path to one TMDB search. Interactive callers may ask
-            // for candidates explicitly; otherwise fetch them only when automatic
-            // resolution cannot safely choose one identity.
-            const includeCandidates = String(req.query.candidates || '').toLowerCase() === 'true';
-            const candidates = includeCandidates || resolution.status !== "matched"
-                ? await (0, tmdbService_1.searchTmdbCandidates)(query, mediaType, yearValue, { maxCandidates: 5 })
-                : [];
-            res.json({ ok: true, query, mediaType, year: yearValue, resolution, candidates });
+            const resolved = await (0, tmdbService_1.resolveTmdbCandidates)(query, mediaType, yearValue, { maxCandidates: 5 });
+            res.json({ ok: true, query, normalizedQuery: resolved.query, mediaType, year: resolved.year, resolution: resolved.resolution, candidates: resolved.candidates });
         }
         catch (error) {
             res.status(502).json({ ok: false, error: error?.message || 'TMDB resolution failed' });
@@ -1852,17 +1865,30 @@ function startServer() {
             console.log(`[${new Date().toISOString()}][api/search] searching`, { query, categories });
             const results = await (0, index_1.searchIndexer)(query, { categories });
             // Normalise results to a consistent shape regardless of indexer response format
-            const mappedResults = results.map((r) => ({
-                title: r.title || r.Title,
-                size: r.size || r.Size || 0,
-                seeders: r.seeders || r.Seeders || 0,
-                leechers: r.leechers || r.Leechers || 0,
-                magnetUrl: r.magnetUrl || r.MagnetUrl || r.downloadUrl || r.DownloadUrl,
-                infoHash: r.infoHash || r.InfoHash,
-                indexer: r.indexer || r.Indexer || "Unknown",
-                publishDate: r.publishDate || r.PublishDate,
-                categories: r.categories || r.Categories || [],
-            }));
+            const mappedResults = results.map((r) => {
+                const directMagnet = r.magnetUrl || r.MagnetUrl || r.MagnetUri;
+                const rawDownloadUrl = r.downloadUrl || r.DownloadUrl || r.download || r.Download;
+                const rawLink = r.link || r.Link;
+                const downloadUrl = sanitizeIndexerUrl(rawDownloadUrl)
+                    || (typeof directMagnet === "string" && /^(?:https?):\/\//i.test(directMagnet) ? sanitizeIndexerUrl(directMagnet) : undefined);
+                return {
+                    title: r.title || r.Title,
+                    size: r.size || r.Size || 0,
+                    seeders: r.seeders || r.Seeders || 0,
+                    leechers: r.leechers || r.Leechers || 0,
+                    // HTTP indexer endpoints are resolver inputs, not magnets.
+                    magnetUrl: (0, shared_1.isValidMagnetUri)(directMagnet) ? directMagnet : undefined,
+                    downloadUrl,
+                    download: sanitizeIndexerUrl(r.download || r.Download),
+                    link: sanitizeIndexerUrl(rawLink),
+                    guid: sanitizeIndexerUrl(r.guid || r.Guid),
+                    infoHash: r.infoHash || r.InfoHash || r.infohash,
+                    indexerId: r.indexerId || r.IndexerId,
+                    indexer: r.indexer || r.Indexer || "Unknown",
+                    publishDate: r.publishDate || r.PublishDate,
+                    categories: r.categories || r.Categories || [],
+                };
+            });
             res.json({
                 ok: true,
                 results: mappedResults,
@@ -1873,6 +1899,27 @@ function startServer() {
         catch (err) {
             console.error(`[${new Date().toISOString()}][api/search] error`, err.message);
             res.status(500).json({ ok: false, error: err.message, results: [] });
+        }
+    });
+    /**
+     * POST /api/search/resolve — resolves one selected indexer result to a
+     * provider-ready magnet URI without adding anything to a debrid provider.
+     */
+    app.post("/api/search/resolve", async (req, res) => {
+        try {
+            const result = req.body?.result;
+            if (!result || typeof result !== "object" || Array.isArray(result)) {
+                return res.status(400).json({ ok: false, error: "A search result is required" });
+            }
+            const resolved = await (0, index_1.getMagnetOrResolve)(result);
+            if (!(0, shared_1.isValidMagnetUri)(resolved)) {
+                return res.status(422).json({ ok: false, error: "Il risultato non contiene un magnet URI risolvibile" });
+            }
+            return res.json({ ok: true, magnet: resolved });
+        }
+        catch (err) {
+            console.error(`[${new Date().toISOString()}][api/search/resolve] error`, err?.message || String(err));
+            return res.status(502).json({ ok: false, error: "Impossibile risolvere il risultato dell’indexer in un magnet URI" });
         }
     });
     // ===========================================================================
@@ -1925,16 +1972,20 @@ function startServer() {
     /**
      * POST /api/add/intake — provider-neutral manual intake.
      *
-     * `mode=arr` delegates to the existing qBittorrent-compatible bridge so
-     * Sonarr/Radarr retain ownership of parsing, naming and importing.
-     * `mode=standalone` adds directly to the selected provider and records the
-     * confirmed TMDB identity for the standalone organizer. The legacy /api/add
-     * endpoint remains unchanged for clients that only need provider addition.
+     * Both modes require a confirmed TMDB identity. `mode=arr` pushes the
+     * selected release to the configured Radarr/Sonarr release-push API so the
+     * Arr decision engine performs the same grab path as a manual search;
+     * `mode=standalone` adds directly to the provider and records the identity
+     * for the organizer. The legacy /api/add endpoint remains unchanged for
+     * clients that only need provider addition.
      */
     app.post("/api/add/intake", async (req, res) => {
         try {
-            const { magnet, name, provider: targetProvider, mode = "standalone", mediaType, identity } = req.body || {};
-            if (typeof magnet !== "string" || !magnet.startsWith("magnet:")) {
+            // The normal manual-add path is Arr-owned: Radarr/Sonarr must receive
+            // the selected release and remain responsible for the final import.
+            // Standalone is still available, but only when explicitly requested.
+            const { magnet, name, provider: targetProvider, mode = "arr", mediaType, identity, release } = req.body || {};
+            if (!(0, shared_1.isValidMagnetUri)(magnet)) {
                 return res.status(400).json({ ok: false, error: "magnet must be a valid magnet URI" });
             }
             if (mode !== "arr" && mode !== "standalone") {
@@ -1944,21 +1995,30 @@ function startServer() {
                 return res.status(400).json({ ok: false, error: "mediaType must be movie or tv for Arr intake" });
             }
             if (mode === "arr") {
-                if (!config_1.config.arrBridgeEnabled)
-                    return res.status(503).json({ ok: false, error: "Arr bridge is not enabled" });
-                const bridgeResponse = await fetch(`http://127.0.0.1:${config_1.config.arrBridgePort}/api/v2/torrents/add`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                    body: new URLSearchParams({
-                        urls: magnet,
-                        category: mediaType === "tv" ? "sonarr" : "radarr",
-                        tags: "schrodrive-manual-intake",
-                    }),
-                });
-                if (!bridgeResponse.ok) {
-                    return res.status(502).json({ ok: false, error: `Arr bridge rejected intake: HTTP ${bridgeResponse.status}` });
+                if (!identity || typeof identity !== "object") {
+                    return res.status(400).json({ ok: false, error: "TMDB identity is required before Arr intake" });
                 }
-                return res.status(202).json({ ok: true, mode, mediaType, delegatedTo: mediaType === "tv" ? "sonarr" : "radarr", status: "queued" });
+                const tmdbId = String(identity.tmdbId || "").trim();
+                const title = String(identity.title || "").trim();
+                const year = Number(identity.year) || undefined;
+                if (!tmdbId || !title) {
+                    return res.status(400).json({ ok: false, error: "TMDB identity requires tmdbId and title" });
+                }
+                const pushed = await (0, arrReleasePush_1.pushReleaseToArr)(mediaType, {
+                    magnet,
+                    name: title,
+                    release: release && typeof release === "object" ? release : undefined,
+                    identity: { tmdbId, title, year },
+                });
+                return res.status(200).json({
+                    ok: true,
+                    mode,
+                    mediaType,
+                    identity,
+                    delegatedTo: mediaType === "tv" ? "sonarr" : "radarr",
+                    status: "grabbed",
+                    result: pushed.response,
+                });
             }
             const provider = targetProvider ? providers_1.registry.get(String(targetProvider)) : providers_1.registry.configured()[0];
             if (!provider)
@@ -1974,6 +2034,12 @@ function startServer() {
                 (0, manualIdentity_1.saveManualIdentityOverride)({ kind, title, year: Number(identity.year) || undefined, tmdbId }, { tmdbId, title, year: Number(identity.year) || undefined, kind, imdbId: identity.imdbId, tvdbId: identity.tvdbId, season: Number(identity.season) || undefined, episode: Number(identity.episode) || undefined });
             }
             const result = await provider.addMagnet(magnet, name);
+            // Direct standalone additions bypass the provider registry, which is
+            // where the regular post-add mount invalidation normally happens.
+            // Invalidate the provider VFS before asking the reconciliation worker
+            // to materialize the identity, otherwise the organizer can only see
+            // the stale directory listing and no symlink is created.
+            await (0, mount_1.refreshProviderMountCache)();
             // Reuse the configured lightweight reconciliation path when available.
             // It is intentionally fire-and-forget: adding the provider item must
             // not block on mount readiness or turn this endpoint into a poll loop.

@@ -14,39 +14,6 @@
  *
  * @module services/arrBridge
  */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -69,6 +36,7 @@ const db_1 = require("../core/db");
 const providers_1 = require("../providers");
 const utils_1 = require("../core/utils");
 const arrBridgeStatus_1 = require("./arrBridgeStatus");
+const arrImportNotifier_1 = require("./arrImportNotifier");
 // ===========================================================================
 // Constants
 // ===========================================================================
@@ -127,6 +95,49 @@ function loadTrackedTorrents() {
 function stateFingerprint(torrent) {
     return `${torrent.state}|${torrent.progress}|${torrent.size}|${torrent.completionOn}|${torrent.mountScanned}|${torrent.contentPath}|${torrent.name}|${torrent.pollAttempts}`;
 }
+/**
+ * Notify the Arr client only after the provider-backed staging links exist.
+ * This is an Arr API call, not a provider poll, and therefore does not add
+ * traffic to AllDebrid. Failed notifications are retried with backoff.
+ */
+async function requestTargetedArrImport(torrent) {
+    if (!torrent.mountScanned || !torrent.contentPath || torrent.arrImportRequested)
+        return;
+    if (arrImportInFlight.has(torrent.hash))
+        return;
+    if (torrent.arrImportNextAttemptAt && Date.now() < torrent.arrImportNextAttemptAt)
+        return;
+    const target = (0, arrImportNotifier_1.arrImportTargetForCategory)(torrent.category);
+    if (!target)
+        return;
+    arrImportInFlight.add(torrent.hash);
+    torrent.arrImportAttempts = (torrent.arrImportAttempts || 0) + 1;
+    persistTrackedTorrent(torrent);
+    try {
+        const command = await (0, arrImportNotifier_1.requestArrDownloadedScan)(target, torrent.contentPath);
+        torrent.arrImportRequested = true;
+        torrent.arrImportCommandId = command.commandId;
+        torrent.arrImportError = undefined;
+        torrent.arrImportNextAttemptAt = undefined;
+        persistTrackedTorrent(torrent);
+        console.log(`${LOG_PREFIX} ✅ ${target} targeted import queued for "${torrent.name}" (${command.commandId})`);
+    }
+    catch (error) {
+        const attempts = torrent.arrImportAttempts || 1;
+        torrent.arrImportError = error?.message || String(error);
+        torrent.arrImportNextAttemptAt = Date.now() + Math.min(60000, 5000 * (2 ** Math.min(attempts - 1, 4)));
+        persistTrackedTorrent(torrent);
+        console.warn(`${LOG_PREFIX} Arr targeted import deferred for "${torrent.name}": ${torrent.arrImportError}`);
+    }
+    finally {
+        arrImportInFlight.delete(torrent.hash);
+    }
+}
+async function notifyPendingArrImports() {
+    for (const torrent of tracked.values()) {
+        await requestTargetedArrImport(torrent);
+    }
+}
 /** Express server instance (last started, for backwards compat). */
 let server = null;
 /** All active servers keyed by port — supports parallel test runs that share module state. */
@@ -135,24 +146,8 @@ const servers = new Map();
 let statusPoller = null;
 /** Mount scanning interval handle. */
 let mountScanner = null;
-let organizedRefreshTimer = null;
-/**
- * A completed ARR download is already visible on the provider mount. Queue
- * one lightweight provider/organizer refresh so the Dashboard and organised
- * library do not wait for the 15-minute reconciliation interval. Multiple
- * files completed during the same mount scan share one refresh.
- */
-function scheduleOrganizedRefreshAfterCompletion() {
-    if (organizedRefreshTimer)
-        clearTimeout(organizedRefreshTimer);
-    organizedRefreshTimer = setTimeout(() => {
-        organizedRefreshTimer = null;
-        void Promise.resolve().then(() => __importStar(require('./providerReconciliationRuntime'))).then(({ refreshProviderActivity }) => refreshProviderActivity())
-            .catch((error) => {
-            console.warn(`${LOG_PREFIX} automatic organised refresh failed: ${error?.message || String(error)}`);
-        });
-    }, 500);
-}
+let arrImportNotifier = null;
+const arrImportInFlight = new Set();
 // ===========================================================================
 // Helpers
 // ===========================================================================
@@ -326,7 +321,6 @@ async function scanMountsForCompleted() {
     if (ready.length === 0)
         return;
     await ensureDownloadsDir();
-    let completedCount = 0;
     for (const torrent of ready) {
         try {
             // Search across all provider mount dirs for matching torrent folder
@@ -378,16 +372,17 @@ async function scanMountsForCompleted() {
                 torrent.contentPath = torrentDir;
                 torrent.size = foundFiles.reduce((sum, f) => sum + f.size, 0);
                 persistTrackedTorrent(torrent);
-                completedCount += 1;
                 console.log(`${LOG_PREFIX} ✅ Torrent "${torrent.name}" completed — ${foundFiles.length} file(s) symlinked to ${torrentDir}`);
+                await requestTargetedArrImport(torrent);
             }
         }
         catch (err) {
             console.error(`${LOG_PREFIX} Mount scan error for "${torrent.name}": ${err?.message}`);
         }
     }
-    if (completedCount > 0)
-        scheduleOrganizedRefreshAfterCompletion();
+    // Arr polls qBittorrent-compatible state and imports from contentPath. Do
+    // not invoke SchroDrive's standalone organizer here: Radarr/Sonarr own the
+    // final library folder and must decide its canonical path first.
 }
 function normaliseMountName(value) {
     return value
@@ -398,6 +393,34 @@ function normaliseMountName(value) {
         .trim();
 }
 const MIN_FUZZY_MOUNT_NAME_LENGTH = 20;
+const MOUNT_TECHNICAL_TOKENS = new Set([
+    'ita', 'eng', 'spa', 'fre', 'ger', 'multi', 'dual',
+    'bluray', 'brrip', 'webrip', 'webdl', 'web', 'uhd', 'remux',
+    'hdr', 'hdr10', 'dv', 'dolby', 'vision', '2160p', '1080p', '720p', '480p',
+    'hevc', 'h265', 'x265', 'h264', 'x264', 'av1', 'aac', 'ac3', 'ddp', 'dts',
+    'atmos', 'truehd', 'eac3', 'mp3', '10bit', '8bit', 'proper', 'repack',
+    'cyber', 'mircrew', 'mirc', 'webmux', 'complete', 'series', 'pack',
+]);
+/**
+ * Extract title-bearing tokens for fuzzy matching.
+ *
+ * Release metadata (year, language, source, codec, HDR and release group)
+ * is deliberately excluded. Those tokens are shared by many unrelated
+ * releases and must never be enough to select a mount entry.
+ */
+function mountIdentityTokens(value) {
+    return new Set(value
+        .split(' ')
+        .filter((token) => {
+        if (token.length < 4)
+            return false;
+        if (/^(19|20)\d{2}$/.test(token))
+            return false;
+        if (/^\d{3,4}p$/.test(token))
+            return false;
+        return !MOUNT_TECHNICAL_TOKENS.has(token);
+    }));
+}
 function episodeKeys(value) {
     const keys = new Set();
     const normalized = value.toLowerCase().replace(/[._-]+/g, ' ');
@@ -425,6 +448,11 @@ function mountNameScore(target, candidate) {
     const candidateEpisodes = episodeKeys(candidate);
     if (targetEpisodes.size > 0 && candidateEpisodes.size > 0 &&
         ![...targetEpisodes].some((episode) => candidateEpisodes.has(episode)))
+        return -1;
+    const targetIdentity = mountIdentityTokens(target);
+    const candidateIdentity = mountIdentityTokens(candidate);
+    const sharedIdentityTokens = [...candidateIdentity].filter((token) => targetIdentity.has(token));
+    if (sharedIdentityTokens.length === 0)
         return -1;
     const shorter = Math.min(target.length, candidate.length);
     const longer = Math.max(target.length, candidate.length);
@@ -1070,6 +1098,13 @@ async function startArrBridge() {
             });
         }, MOUNT_SCAN_INTERVAL_MS);
     }
+    if (!arrImportNotifier) {
+        arrImportNotifier = setInterval(() => {
+            notifyPendingArrImports().catch((err) => {
+                console.error(`${LOG_PREFIX} Arr import notification error: ${err?.message}`);
+            });
+        }, MOUNT_SCAN_INTERVAL_MS);
+    }
     return new Promise((resolve, reject) => {
         const s = app.listen(port, () => {
             console.log(`${LOG_PREFIX} ✅ *arr bridge listening on port ${port} (add as qBittorrent in Radarr/Sonarr)`);
@@ -1142,6 +1177,11 @@ async function stopArrBridge() {
             clearInterval(mountScanner);
             mountScanner = null;
         }
+        if (arrImportNotifier) {
+            clearInterval(arrImportNotifier);
+            arrImportNotifier = null;
+        }
+        arrImportInFlight.clear();
     }
     if (targets.length === 0)
         return;

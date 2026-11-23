@@ -243,7 +243,7 @@ function getMagnet(r) {
     if (!r)
         return undefined;
     const direct = r.magnetUrl || r.MagnetUri || r.guid || r.Guid || r.link || r.Link;
-    const ok = typeof direct === "string" && direct.startsWith("magnet:");
+    const ok = (0, shared_1.isValidMagnetUri)(direct);
     console.log(`[${new Date().toISOString()}][jackett] getMagnet`, { hasCandidate: !!direct, ok });
     if (ok)
         return direct;

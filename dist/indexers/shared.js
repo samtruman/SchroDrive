@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.stripTmdbQuery = stripTmdbQuery;
 exports.buildMagnetFromHash = buildMagnetFromHash;
 exports.normaliseBaseUrl = normaliseBaseUrl;
+exports.isValidMagnetUri = isValidMagnetUri;
 function stripTmdbQuery(query) {
     const cleaned = String(query || "").slice(0, 200);
     return cleaned.replace(/\s*TMDB\d+\b/gi, "").replace(/\s{2,}/g, " ").trim();
@@ -19,4 +20,23 @@ function buildMagnetFromHash(hash, title) {
 }
 function normaliseBaseUrl(baseUrl) {
     return baseUrl.replace(/\/+$/, "");
+}
+/**
+ * Accept only magnet URIs carrying a BitTorrent content identifier.
+ * HTTP Prowlarr/Jackett download links must be resolved by the indexer
+ * adapter before they reach provider intake.
+ */
+function isValidMagnetUri(value) {
+    if (typeof value !== "string" || !value.trim())
+        return false;
+    try {
+        const parsed = new URL(value.trim());
+        if (parsed.protocol !== "magnet:")
+            return false;
+        return parsed.searchParams.getAll("xt").some((xt) => /^urn:btih:(?:[0-9a-f]{40}|[a-z2-7]{32})$/i.test(xt)
+            || /^urn:btmh:[A-Za-z0-9]+$/i.test(xt));
+    }
+    catch {
+        return false;
+    }
 }

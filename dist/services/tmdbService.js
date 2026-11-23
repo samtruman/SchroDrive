@@ -3,12 +3,26 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.normalizeTmdbLookup = normalizeTmdbLookup;
+exports.resolveTmdbCandidates = resolveTmdbCandidates;
 exports.getTmdbExternalIds = getTmdbExternalIds;
 exports.searchTmdbCandidates = searchTmdbCandidates;
 exports.searchTmdb = searchTmdb;
 const axios_1 = __importDefault(require("axios"));
 const config_1 = require("../core/config");
 const mediaParser_1 = require("./mediaParser");
+/** Normalize a release name once for every TMDB consumer. */
+function normalizeTmdbLookup(query, year) {
+    const parsed = (0, mediaParser_1.parseMediaFilename)(query, query);
+    return { query: parsed.title?.trim() || query.trim(), year: year ?? parsed.year };
+}
+/** Shared TMDB resolver for Media Manager, manual intake and future clients. */
+async function resolveTmdbCandidates(query, kind, year, options = {}) {
+    const normalized = normalizeTmdbLookup(query, year);
+    const resolution = await searchTmdb(normalized.query, kind, normalized.year, options);
+    const candidates = await searchTmdbCandidates(normalized.query, kind, normalized.year, { ...options, maxCandidates: options.maxCandidates ?? 10 });
+    return { ...normalized, resolution, candidates };
+}
 function resolveApiKey(options) {
     return String(options.apiKey ?? config_1.config.tmdbApiKey ?? "").trim();
 }
