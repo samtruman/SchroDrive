@@ -28,7 +28,7 @@ import { startAutoUpdater } from "./services/autoUpdate";
 import { getConfigWithSources, saveConfigToFile, triggerRestart, isRunningInDocker, CONFIG_SCHEMA } from "./core/configApi";
 import { logBuffer } from "./core/logger";
 import { rateLimiter } from "./core/rateLimiter";
-import { getBridgeStatuses, refreshBridges, getExternalWebdavStatus, getMountReadiness } from "./services/mount";
+import { getBridgeStatuses, refreshBridges, getExternalWebdavStatus, getMountReadiness, refreshProviderMountCache } from "./services/mount";
 import { getPreWarmStatus } from "./services/cloudLinks/bridge";
 import { getBlacklistEntries, getBlacklistCount, addToBlacklist, removeFromBlacklist, isBlacklisted } from "./core/blacklist";
 import { tokenRotator } from "./core/tokenRotator";
@@ -1894,7 +1894,10 @@ export function startServer() {
    */
   app.post("/api/add/intake", async (req, res) => {
     try {
-      const { magnet, name, provider: targetProvider, mode = "standalone", mediaType, identity, release } = req.body || {};
+      // The normal manual-add path is Arr-owned: Radarr/Sonarr must receive
+      // the selected release and remain responsible for the final import.
+      // Standalone is still available, but only when explicitly requested.
+      const { magnet, name, provider: targetProvider, mode = "arr", mediaType, identity, release } = req.body || {};
       if (!isValidMagnetUri(magnet)) {
         return res.status(400).json({ ok: false, error: "magnet must be a valid magnet URI" });
       }
@@ -1948,6 +1951,12 @@ export function startServer() {
       }
 
       const result = await provider.addMagnet(magnet, name);
+      // Direct standalone additions bypass the provider registry, which is
+      // where the regular post-add mount invalidation normally happens.
+      // Invalidate the provider VFS before asking the reconciliation worker
+      // to materialize the identity, otherwise the organizer can only see
+      // the stale directory listing and no symlink is created.
+      await refreshProviderMountCache();
       // Reuse the configured lightweight reconciliation path when available.
       // It is intentionally fire-and-forget: adding the provider item must
       // not block on mount readiness or turn this endpoint into a poll loop.

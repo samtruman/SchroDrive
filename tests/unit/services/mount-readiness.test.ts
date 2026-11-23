@@ -2,12 +2,43 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 import { config } from "../../../src/core/config";
-import { evaluateMountReadiness } from "../../../src/services/mount";
+import { evaluateMountReadiness, refreshProviderMountCache } from "../../../src/services/mount";
 import { organizeOnce } from "../../../src/services/organizer";
 
 const mountInfoFor = (mountPath: string) => `42 24 0:42 / ${mountPath.replace(/ /g, "\\\\040")} rw,relatime - fuse.rclone rclone rw`;
 
 describe("shared mount readiness guard", () => {
+  test("refreshes only the provider VFS directories used by post-add materialization", async () => {
+    const originalPort = config.mountRcloneRcPort;
+    const originalProviders = config.providers;
+    const originalFetch = globalThis.fetch;
+    const requests: Array<{ url: string; body: any }> = [];
+
+    try {
+      config.mountRcloneRcPort = 9200;
+      config.providers = ["alldebrid"];
+      globalThis.fetch = (async (input, init) => {
+        requests.push({ url: String(input), body: JSON.parse(String(init?.body || "{}")) });
+        return new Response("{}", { status: 200 });
+      }) as typeof fetch;
+
+      await refreshProviderMountCache();
+
+      expect(requests).toHaveLength(3);
+      expect(requests.map((request) => request.url)).toEqual([
+        "http://127.0.0.1:9200/vfs/refresh",
+        "http://127.0.0.1:9200/vfs/refresh",
+        "http://127.0.0.1:9200/vfs/refresh",
+      ]);
+      expect(requests.map((request) => request.body.dir)).toEqual(["/", "/__all__", "/shows"]);
+      expect(requests.every((request) => request.body.fs === "alldebrid:" && request.body.recursive === "false")).toBe(true);
+    } finally {
+      config.mountRcloneRcPort = originalPort;
+      config.providers = originalProviders;
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   test("ready mountpoint with a responding non-empty filesystem is ready", async () => {
     const result = await evaluateMountReadiness(["/mnt/media"], {
       platform: "linux",

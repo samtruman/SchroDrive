@@ -26,6 +26,7 @@ import { registry } from '../providers';
 import type { AddMagnetResult, TorrentInfo, TorrentStatusResult } from '../providers';
 import { sanitiseName, base32ToHex } from '../core/utils';
 import { findProviderTorrentWithStatus, shouldPollTorrent, type ProviderInventory } from './arrBridgeStatus';
+import { arrImportTargetForCategory, requestArrDownloadedScan } from './arrImportNotifier';
 
 // ===========================================================================
 // Constants
@@ -94,6 +95,14 @@ interface TrackedTorrent {
   pollAttempts: number;
   /** Whether we've already scanned for mount files. */
   mountScanned: boolean;
+  /** Whether Radarr/Sonarr accepted the targeted import command. */
+  arrImportRequested?: boolean;
+  /** Arr command id returned by the targeted import request. */
+  arrImportCommandId?: string;
+  /** Retry bookkeeping for a temporarily unavailable Arr instance. */
+  arrImportAttempts?: number;
+  arrImportNextAttemptAt?: number;
+  arrImportError?: string;
 }
 
 // ===========================================================================
@@ -140,6 +149,47 @@ function stateFingerprint(torrent: TrackedTorrent): string {
   return `${torrent.state}|${torrent.progress}|${torrent.size}|${torrent.completionOn}|${torrent.mountScanned}|${torrent.contentPath}|${torrent.name}|${torrent.pollAttempts}`;
 }
 
+/**
+ * Notify the Arr client only after the provider-backed staging links exist.
+ * This is an Arr API call, not a provider poll, and therefore does not add
+ * traffic to AllDebrid. Failed notifications are retried with backoff.
+ */
+async function requestTargetedArrImport(torrent: TrackedTorrent): Promise<void> {
+  if (!torrent.mountScanned || !torrent.contentPath || torrent.arrImportRequested) return;
+  if (arrImportInFlight.has(torrent.hash)) return;
+  if (torrent.arrImportNextAttemptAt && Date.now() < torrent.arrImportNextAttemptAt) return;
+
+  const target = arrImportTargetForCategory(torrent.category);
+  if (!target) return;
+
+  arrImportInFlight.add(torrent.hash);
+  torrent.arrImportAttempts = (torrent.arrImportAttempts || 0) + 1;
+  persistTrackedTorrent(torrent);
+  try {
+    const command = await requestArrDownloadedScan(target, torrent.contentPath);
+    torrent.arrImportRequested = true;
+    torrent.arrImportCommandId = command.commandId;
+    torrent.arrImportError = undefined;
+    torrent.arrImportNextAttemptAt = undefined;
+    persistTrackedTorrent(torrent);
+    console.log(`${LOG_PREFIX} ✅ ${target} targeted import queued for "${torrent.name}" (${command.commandId})`);
+  } catch (error: any) {
+    const attempts = torrent.arrImportAttempts || 1;
+    torrent.arrImportError = error?.message || String(error);
+    torrent.arrImportNextAttemptAt = Date.now() + Math.min(60_000, 5_000 * (2 ** Math.min(attempts - 1, 4)));
+    persistTrackedTorrent(torrent);
+    console.warn(`${LOG_PREFIX} Arr targeted import deferred for "${torrent.name}": ${torrent.arrImportError}`);
+  } finally {
+    arrImportInFlight.delete(torrent.hash);
+  }
+}
+
+async function notifyPendingArrImports(): Promise<void> {
+  for (const torrent of tracked.values()) {
+    await requestTargetedArrImport(torrent);
+  }
+}
+
 /** Express server instance (last started, for backwards compat). */
 let server: http.Server | null = null;
 /** All active servers keyed by port — supports parallel test runs that share module state. */
@@ -150,25 +200,8 @@ let statusPoller: ReturnType<typeof setInterval> | null = null;
 
 /** Mount scanning interval handle. */
 let mountScanner: ReturnType<typeof setInterval> | null = null;
-let organizedRefreshTimer: ReturnType<typeof setTimeout> | null = null;
-
-/**
- * A completed ARR download is already visible on the provider mount. Queue
- * one lightweight provider/organizer refresh so the Dashboard and organised
- * library do not wait for the 15-minute reconciliation interval. Multiple
- * files completed during the same mount scan share one refresh.
- */
-function scheduleOrganizedRefreshAfterCompletion(): void {
-  if (organizedRefreshTimer) clearTimeout(organizedRefreshTimer);
-  organizedRefreshTimer = setTimeout(() => {
-    organizedRefreshTimer = null;
-    void import('./providerReconciliationRuntime')
-      .then(({ refreshProviderActivity }) => refreshProviderActivity())
-      .catch((error: any) => {
-        console.warn(`${LOG_PREFIX} automatic organised refresh failed: ${error?.message || String(error)}`);
-      });
-  }, 500);
-}
+let arrImportNotifier: ReturnType<typeof setInterval> | null = null;
+const arrImportInFlight = new Set<string>();
 
 // ===========================================================================
 // Helpers
@@ -350,7 +383,6 @@ export async function scanMountsForCompleted(): Promise<void> {
   if (ready.length === 0) return;
 
   await ensureDownloadsDir();
-  let completedCount = 0;
 
   for (const torrent of ready) {
     try {
@@ -405,15 +437,17 @@ export async function scanMountsForCompleted(): Promise<void> {
         torrent.contentPath = torrentDir;
         torrent.size = foundFiles.reduce((sum, f) => sum + f.size, 0);
         persistTrackedTorrent(torrent);
-        completedCount += 1;
 
         console.log(`${LOG_PREFIX} ✅ Torrent "${torrent.name}" completed — ${foundFiles.length} file(s) symlinked to ${torrentDir}`);
+        await requestTargetedArrImport(torrent);
       }
     } catch (err: any) {
       console.error(`${LOG_PREFIX} Mount scan error for "${torrent.name}": ${err?.message}`);
     }
   }
-  if (completedCount > 0) scheduleOrganizedRefreshAfterCompletion();
+  // Arr polls qBittorrent-compatible state and imports from contentPath. Do
+  // not invoke SchroDrive's standalone organizer here: Radarr/Sonarr own the
+  // final library folder and must decide its canonical path first.
 }
 
 type MountMatch = {
@@ -432,6 +466,34 @@ function normaliseMountName(value: string): string {
 }
 
 const MIN_FUZZY_MOUNT_NAME_LENGTH = 20;
+const MOUNT_TECHNICAL_TOKENS = new Set([
+  'ita', 'eng', 'spa', 'fre', 'ger', 'multi', 'dual',
+  'bluray', 'brrip', 'webrip', 'webdl', 'web', 'uhd', 'remux',
+  'hdr', 'hdr10', 'dv', 'dolby', 'vision', '2160p', '1080p', '720p', '480p',
+  'hevc', 'h265', 'x265', 'h264', 'x264', 'av1', 'aac', 'ac3', 'ddp', 'dts',
+  'atmos', 'truehd', 'eac3', 'mp3', '10bit', '8bit', 'proper', 'repack',
+  'cyber', 'mircrew', 'mirc', 'webmux', 'complete', 'series', 'pack',
+]);
+
+/**
+ * Extract title-bearing tokens for fuzzy matching.
+ *
+ * Release metadata (year, language, source, codec, HDR and release group)
+ * is deliberately excluded. Those tokens are shared by many unrelated
+ * releases and must never be enough to select a mount entry.
+ */
+function mountIdentityTokens(value: string): Set<string> {
+  return new Set(
+    value
+      .split(' ')
+      .filter((token) => {
+        if (token.length < 4) return false;
+        if (/^(19|20)\d{2}$/.test(token)) return false;
+        if (/^\d{3,4}p$/.test(token)) return false;
+        return !MOUNT_TECHNICAL_TOKENS.has(token);
+      }),
+  );
+}
 
 function episodeKeys(value: string): Set<string> {
   const keys = new Set<string>();
@@ -459,6 +521,11 @@ function mountNameScore(target: string, candidate: string): number {
   const candidateEpisodes = episodeKeys(candidate);
   if (targetEpisodes.size > 0 && candidateEpisodes.size > 0 &&
       ![...targetEpisodes].some((episode) => candidateEpisodes.has(episode))) return -1;
+
+  const targetIdentity = mountIdentityTokens(target);
+  const candidateIdentity = mountIdentityTokens(candidate);
+  const sharedIdentityTokens = [...candidateIdentity].filter((token) => targetIdentity.has(token));
+  if (sharedIdentityTokens.length === 0) return -1;
 
   const shorter = Math.min(target.length, candidate.length);
   const longer = Math.max(target.length, candidate.length);
@@ -1175,6 +1242,14 @@ export async function startArrBridge(): Promise<void> {
     }, MOUNT_SCAN_INTERVAL_MS);
   }
 
+  if (!arrImportNotifier) {
+    arrImportNotifier = setInterval(() => {
+      notifyPendingArrImports().catch((err) => {
+        console.error(`${LOG_PREFIX} Arr import notification error: ${err?.message}`);
+      });
+    }, MOUNT_SCAN_INTERVAL_MS);
+  }
+
   return new Promise((resolve, reject) => {
     const s = app.listen(port, () => {
       console.log(`${LOG_PREFIX} ✅ *arr bridge listening on port ${port} (add as qBittorrent in Radarr/Sonarr)`);
@@ -1237,6 +1312,8 @@ export async function stopArrBridge(): Promise<void> {
   if (servers.size === 0) {
     if (statusPoller) { clearInterval(statusPoller); statusPoller = null; }
     if (mountScanner) { clearInterval(mountScanner); mountScanner = null; }
+    if (arrImportNotifier) { clearInterval(arrImportNotifier); arrImportNotifier = null; }
+    arrImportInFlight.clear();
   }
 
   if (targets.length === 0) return;
