@@ -27,6 +27,7 @@ export type ArrReleasePushResult = {
   mediaType: ArrMediaType;
   endpoint: string;
   searchEndpoint: string;
+  arrEntityCreated: boolean;
   response: unknown;
 };
 
@@ -84,6 +85,16 @@ async function arrGet(route: ArrRoute, path: string): Promise<any> {
   return readJson(response, `${route.name} GET ${path}`);
 }
 
+async function arrPost(route: ArrRoute, path: string, body: unknown): Promise<any> {
+  const endpoint = `${normaliseBaseUrl(route.baseUrl)}${path}`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: apiHeaders(route.apiKey),
+    body: JSON.stringify(body),
+  });
+  return readJson(response, `${route.name} POST ${path}`);
+}
+
 function normaliseHash(value: unknown): string {
   return String(value || "").replace(/[^a-f0-9]/gi, "").toLowerCase();
 }
@@ -120,10 +131,69 @@ function releaseMatches(candidate: any, input: ArrReleaseInput | undefined, magn
   return Math.abs(selectedSize - candidateSize) / Math.max(selectedSize, candidateSize) < 0.03;
 }
 
-function findByTmdbId(items: any[], tmdbId: string, label: string): any {
-  const match = (Array.isArray(items) ? items : []).find((item) => String(item?.tmdbId || "") === tmdbId);
-  if (!match) throw new Error(`${label} non contiene il titolo TMDB ${tmdbId}; aggiungilo prima a ${label}`);
-  return match;
+function findByTmdbId(items: any[], tmdbId: string): any | undefined {
+  return (Array.isArray(items) ? items : []).find((item) => String(item?.tmdbId || "") === tmdbId);
+}
+
+function firstConfiguredId(items: any[], label: string): number {
+  const match = (Array.isArray(items) ? items : []).find((item) => Number(item?.id) > 0);
+  if (!match) throw new Error(`${label} non ha un profilo configurato`);
+  return Number(match.id);
+}
+
+function firstAccessibleRootFolder(items: any[], label: string): string {
+  const match = (Array.isArray(items) ? items : []).find((item) => item?.path && item?.accessible !== false);
+  if (!match) throw new Error(`${label} non ha una root folder accessibile`);
+  return String(match.path);
+}
+
+async function lookupArrEntity(route: ArrRoute, mediaType: ArrMediaType, identity: ArrIdentityInput): Promise<any> {
+  const tmdbId = String(identity.tmdbId || "").trim();
+  const title = String(identity.title || "").trim();
+  const endpoint = mediaType === "movie" ? "/api/v3/movie/lookup" : "/api/v3/series/lookup";
+  const terms = [`tmdb:${tmdbId}`, title].filter(Boolean);
+  for (const term of terms) {
+    try {
+      const results = await arrGet(route, `${endpoint}?term=${encodeURIComponent(term)}`);
+      const exact = (Array.isArray(results) ? results : []).find((item) => String(item?.tmdbId || "") === tmdbId);
+      if (exact) return exact;
+    } catch {
+      // Some ARR versions do not accept the tmdb:<id> lookup syntax. The
+      // title fallback below keeps creation compatible with those versions.
+    }
+  }
+  throw new Error(`${route.name} non riesce a risolvere il titolo TMDB ${tmdbId} per la creazione automatica`);
+}
+
+async function ensureArrEntity(route: ArrRoute, mediaType: ArrMediaType, identity: ArrIdentityInput): Promise<{ entity: any; created: boolean }> {
+  const tmdbId = String(identity.tmdbId || "").trim();
+  if (!tmdbId) throw new Error(`Identità TMDB mancante per ${route.name}`);
+
+  const collectionEndpoint = mediaType === "movie" ? "/api/v3/movie" : "/api/v3/series";
+  const existing = findByTmdbId(await arrGet(route, collectionEndpoint), tmdbId);
+  if (existing) return { entity: existing, created: false };
+
+  const metadata = await lookupArrEntity(route, mediaType, identity);
+  const [qualityProfiles, rootFolders] = await Promise.all([
+    arrGet(route, "/api/v3/qualityprofile"),
+    arrGet(route, "/api/v3/rootfolder"),
+  ]);
+  const qualityProfileId = firstConfiguredId(qualityProfiles, route.name);
+  const rootFolderPath = firstAccessibleRootFolder(rootFolders, route.name);
+  const payload = {
+    ...metadata,
+    tmdbId: Number(tmdbId),
+    title: metadata.title || identity.title,
+    year: metadata.year || identity.year,
+    qualityProfileId,
+    rootFolderPath,
+    monitored: true,
+    ...(mediaType === "movie"
+      ? { addOptions: { searchForMovie: false } }
+      : { seasonFolder: true, addOptions: { searchForMissingEpisodes: false } }),
+  };
+  const created = await arrPost(route, collectionEndpoint, payload);
+  return { entity: created, created: true };
 }
 
 function seasonFromTitle(title: string): number | undefined {
@@ -138,25 +208,23 @@ async function findArrRelease(
   identity: ArrIdentityInput,
   input: ArrReleaseInput | undefined,
   magnet: string,
-): Promise<{ candidate: any; searchEndpoint: string }> {
+): Promise<{ candidate: any; searchEndpoint: string; created: boolean }> {
   const tmdbId = String(identity.tmdbId || "").trim();
   const title = String(input?.title || identity.title || "").trim();
   if (!tmdbId) throw new Error(`Identità TMDB mancante per ${route.name}`);
 
   if (mediaType === "movie") {
-    const movies = await arrGet(route, "/api/v3/movie");
-    const movie = findByTmdbId(movies, tmdbId, "Radarr");
+    const { entity: movie, created } = await ensureArrEntity(route, mediaType, identity);
     const searchEndpoint = `/api/v3/release?movieId=${encodeURIComponent(String(movie.id))}`;
     const releases = await arrGet(route, searchEndpoint);
     const candidate = (Array.isArray(releases) ? releases : []).find((release) => releaseMatches(release, input, magnet));
     if (!candidate) {
       throw new Error(`Radarr non ha restituito la release selezionata per "${title || identity.title}"; ripeti la ricerca manuale in Radarr`);
     }
-    return { candidate, searchEndpoint };
+    return { candidate, searchEndpoint, created };
   }
 
-  const seriesList = await arrGet(route, "/api/v3/series");
-  const series = findByTmdbId(seriesList, tmdbId, "Sonarr");
+  const { entity: series, created } = await ensureArrEntity(route, mediaType, identity);
   const season = seasonFromTitle(title);
   if (!season) {
     throw new Error("Sonarr richiede stagione/episodio nel titolo della release per eseguire il grab manuale");
@@ -168,7 +236,7 @@ async function findArrRelease(
   if (!candidate) {
     throw new Error(`Sonarr non ha restituito la release selezionata per "${title || identity.title}"; ripeti la ricerca manuale in Sonarr`);
   }
-  return { candidate, searchEndpoint };
+  return { candidate, searchEndpoint, created };
 }
 
 /**
@@ -188,7 +256,7 @@ export async function pushReleaseToArr(
     throw new Error(`${route.name} API is not configured for manual ARR grab`);
   }
 
-  const { candidate, searchEndpoint } = await findArrRelease(route, mediaType, input.identity, input.release, input.magnet);
+  const { candidate, searchEndpoint, created } = await findArrRelease(route, mediaType, input.identity, input.release, input.magnet);
   const endpoint = `${normaliseBaseUrl(route.baseUrl)}/api/v3/release`;
   const response = await fetch(endpoint, {
     method: "POST",
@@ -196,5 +264,5 @@ export async function pushReleaseToArr(
     body: JSON.stringify(candidate),
   });
   const body = await readJson(response, `${route.name} manual grab`);
-  return { mediaType, endpoint, searchEndpoint, response: body };
+  return { mediaType, endpoint, searchEndpoint, arrEntityCreated: created, response: body };
 }

@@ -1940,6 +1940,7 @@ export function startServer() {
           identity,
           delegatedTo: mediaType === "tv" ? "sonarr" : "radarr",
           status: "grabbed",
+          arrEntityCreated: pushed.arrEntityCreated,
           result: pushed.response,
         });
       }
