@@ -268,6 +268,27 @@ function absoluteUrl(u: string, base: string): string {
   try { return new URL(u, base).toString(); } catch { return u; }
 }
 
+/**
+ * Prowlarr can emit download URLs pointing at its own loopback listener.
+ * Those URLs are valid from the Prowlarr host, but not from SchroDrive's
+ * container. Resolve loopback URLs through the configured Docker service
+ * instead, while preserving the path and query string.
+ */
+function normaliseProwlarrUrl(u: string, base: string): string {
+  try {
+    const parsed = new URL(u, base);
+    const configured = new URL(base);
+    if (["127.0.0.1", "localhost", "::1"].includes(parsed.hostname)) {
+      parsed.protocol = configured.protocol;
+      parsed.hostname = configured.hostname;
+      parsed.port = configured.port;
+    }
+    return parsed.toString();
+  } catch {
+    return u;
+  }
+}
+
 export async function getMagnetOrResolve(r: ProwlarrResult | undefined): Promise<string | undefined> {
   if (!r) return undefined;
   const direct = getMagnet(r);
@@ -275,7 +296,7 @@ export async function getMagnetOrResolve(r: ProwlarrResult | undefined): Promise
   const base = normaliseBaseUrl(config.prowlarrUrl ?? "");
   if (!base) return undefined;
   const candidate = (r as any).downloadUrl || (r as any).download || (r as any).downloadurl || (r as any).download_link || (r as any).link;
-  let url = typeof candidate === 'string' ? absoluteUrl(candidate, base) : '';
+  let url = typeof candidate === 'string' ? normaliseProwlarrUrl(absoluteUrl(candidate, base), base) : '';
   if (!url || !(url.startsWith('http://') || url.startsWith('https://'))) return undefined;
 
   const maxHops = Math.max(1, Math.min(Number(config.prowlarrRedirectMaxHops || 5), 10));
@@ -294,9 +315,24 @@ export async function getMagnetOrResolve(r: ProwlarrResult | undefined): Promise
         return undefined;
       }
     }
-    const status = resp?.status || 0;
-    const location = String(resp?.headers?.location || '');
-    const ctype = String(resp?.headers?.['content-type'] || '').toLowerCase();
+    let status = resp?.status || 0;
+    let location = String(resp?.headers?.location || '');
+    let ctype = String(resp?.headers?.['content-type'] || '').toLowerCase();
+
+    // Prowlarr's download proxy commonly rejects HEAD with 405 while GET
+    // returns the actual magnet redirect. Retry the same URL with GET before
+    // classifying the result as unresolved.
+    if (status === 405 || status === 501) {
+      try {
+        resp = await axios.get(url, { headers: { 'X-Api-Key': config.prowlarrApiKey }, maxRedirects: 0, validateStatus: () => true, timeout: timeoutMs });
+        status = resp?.status || 0;
+        location = String(resp?.headers?.location || '');
+        ctype = String(resp?.headers?.['content-type'] || '').toLowerCase();
+      } catch (e) {
+        console.warn(`[${new Date().toISOString()}][prowlarr] resolveMagnet GET fallback failed`, { url, err: (e as any)?.message });
+        return undefined;
+      }
+    }
     if (status >= 300 && status < 400 && location) {
       if (isMagnet(location)) {
         console.log(`[${new Date().toISOString()}][prowlarr] resolveMagnet redirect->magnet`, { hops, hash: (location.match(/btih:([^&]+)/i)||[])[1] });
