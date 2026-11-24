@@ -36,6 +36,75 @@ function buildProwlarrSearchUrl(
   return `${baseUrl.toString()}?${params.toString()}`;
 }
 
+type SearchIndexer = { id: string; name?: string; enabled?: boolean; protocol?: string };
+
+let searchIndexerCache: { expiresAt: number; indexers: SearchIndexer[] } | undefined;
+
+async function discoverSearchIndexers(base: string, headers: Record<string, string>, timeoutMs: number): Promise<SearchIndexer[]> {
+  if (searchIndexerCache && searchIndexerCache.expiresAt > Date.now()) return searchIndexerCache.indexers;
+  const response = await axios.get(`${base}/api/v1/indexer`, { headers, timeout: timeoutMs });
+  const indexers = (Array.isArray(response.data) ? response.data : [])
+    .map((item: any) => ({
+      id: String(item?.id ?? "").trim(),
+      name: typeof item?.name === "string" ? item.name : undefined,
+      enabled: item?.enable !== false,
+      protocol: typeof item?.protocol === "string" ? item.protocol : undefined,
+    }))
+    .filter((item: SearchIndexer) => item.id && item.enabled && item.protocol !== "usenet");
+  searchIndexerCache = { expiresAt: Date.now() + 5 * 60_000, indexers };
+  return indexers;
+}
+
+async function searchProwlarrPartial(
+  base: string,
+  query: string,
+  categories: string[] | undefined,
+  configuredIndexerIds: string[] | undefined,
+  limit: number | undefined,
+  headers: Record<string, string>,
+  timeoutMs: number,
+): Promise<ProwlarrResult[]> {
+  let indexers: SearchIndexer[];
+  try {
+    indexers = configuredIndexerIds?.length
+      ? configuredIndexerIds.map((id) => ({ id: String(id), name: `indexer-${id}` }))
+      : await discoverSearchIndexers(base, headers, Math.min(timeoutMs, 10_000));
+  } catch (error: any) {
+    console.warn(`[${new Date().toISOString()}][prowlarr] partial search indexer discovery failed`, { error: error?.message || String(error) });
+    return [];
+  }
+
+  if (!indexers.length) return [];
+
+  // Prowlarr's aggregate endpoint waits for every configured indexer. Query
+  // each indexer independently so one GatewayTimeout cannot hide successful
+  // results from the others. Keep the per-indexer deadline bounded even when
+  // the global Prowlarr timeout is configured very high.
+  const perIndexerTimeoutMs = Math.max(5_000, Math.min(timeoutMs, 15_000));
+  const results = await Promise.all(indexers.slice(0, 12).map(async (indexer) => {
+    const url = buildProwlarrSearchUrl(new URL("/api/v1/search", base), query, categories, [indexer.id], limit);
+    const started = Date.now();
+    try {
+      const response = await axios.get<ProwlarrResult[]>(url, { headers, timeout: perIndexerTimeoutMs });
+      const data = Array.isArray(response.data) ? response.data : [];
+      console.log(`[${new Date().toISOString()}][prowlarr] partial response`, {
+        indexer: indexer.name || indexer.id,
+        count: data.length,
+        ms: Date.now() - started,
+      });
+      return data;
+    } catch (error: any) {
+      console.warn(`[${new Date().toISOString()}][prowlarr] partial indexer failed`, {
+        indexer: indexer.name || indexer.id,
+        ms: Date.now() - started,
+        error: error?.message || String(error),
+      });
+      return [];
+    }
+  }));
+  return results.flat();
+}
+
 export async function testProwlarrConnection(): Promise<boolean> {
   try {
     const base = normaliseBaseUrl(config.prowlarrUrl ?? "");
@@ -89,6 +158,7 @@ export async function searchProwlarr(query: string, opts?: {
   const searchUrl = buildProwlarrSearchUrl(url, usedQuery, categories, indexerIds, limit);
 
   const maskedKey = config.prowlarrApiKey ? `${config.prowlarrApiKey.slice(0, 4)}…` : "unset";
+  const headers = { "X-Api-Key": config.prowlarrApiKey };
   const started = Date.now();
   console.log(`[${new Date().toISOString()}][prowlarr] GET ${searchUrl}`, {
     query: originalQuery,
@@ -102,34 +172,7 @@ export async function searchProwlarr(query: string, opts?: {
   });
   
   const timeoutMs = requestTimeoutMs(config.prowlarrTimeoutMs, 120_000, 15_000);
-  const res = await axios.get<ProwlarrResult[]>(searchUrl, {
-    headers: { "X-Api-Key": config.prowlarrApiKey },
-    timeout: timeoutMs,
-  }).catch((err: any) => {
-    console.error(`[${new Date().toISOString()}][prowlarr] request failed`, {
-      query,
-      error: err?.message || String(err),
-      code: err?.code,
-      status: err?.response?.status,
-      statusText: err?.response?.statusText,
-      url: searchUrl,
-      timeout: `${timeoutMs}ms`
-    });
-    
-    // Additional diagnostics for timeout errors
-    if (err?.code === 'ECONNABORTED' || err?.message?.includes('timeout')) {
-      console.error(`[${new Date().toISOString()}][prowlarr] timeout diagnostics`, {
-        base,
-        query,
-        url: searchUrl,
-        suggestion: 'Check network connectivity to Prowlarr; consider increasing PROWLARR_TIMEOUT_MS, reducing PROWLARR_INDEXER_IDS or categories'
-      });
-    }
-    
-    throw err;
-  });
-
-  let data = Array.isArray(res.data) ? res.data : [];
+  let data = await searchProwlarrPartial(base, usedQuery, categories, indexerIds, limit, headers, timeoutMs);
   console.log(`[${new Date().toISOString()}][prowlarr] response`, {
     count: data.length,
     ms: Date.now() - started,
@@ -159,22 +202,7 @@ export async function searchProwlarr(query: string, opts?: {
         timeoutMs: config.prowlarrTimeoutMs,
         type: searchType,
       });
-      const res2 = await axios.get<ProwlarrResult[]>(fallbackUrl, {
-        headers: { "X-Api-Key": config.prowlarrApiKey },
-        timeout: timeoutMs,
-      }).catch((err: any) => {
-        console.error(`[${new Date().toISOString()}][prowlarr] fallback request failed`, {
-          originalQuery,
-          fallbackQuery: withoutYear,
-          error: err?.message || String(err),
-          code: err?.code,
-          status: err?.response?.status,
-          statusText: err?.response?.statusText,
-          url: fallbackUrl,
-        });
-        throw err;
-      });
-      data = Array.isArray(res2.data) ? res2.data : [];
+      data = await searchProwlarrPartial(base, withoutYear, categories, indexerIds, limit, headers, timeoutMs);
       console.log(`[${new Date().toISOString()}][prowlarr] fallback response`, {
         count: data.length,
         ms: Date.now() - started2,
@@ -197,22 +225,7 @@ export async function searchProwlarr(query: string, opts?: {
       timeoutMs: config.prowlarrTimeoutMs,
       type: searchType,
     });
-    const res3 = await axios.get<ProwlarrResult[]>(fallbackNoCategoriesUrl, {
-      headers: { "X-Api-Key": config.prowlarrApiKey },
-      timeout: timeoutMs,
-    }).catch((err: any) => {
-      console.error(`[${new Date().toISOString()}][prowlarr] fallback (no categories) failed`, {
-        originalQuery,
-        usedQuery,
-        error: err?.message || String(err),
-        code: err?.code,
-        status: err?.response?.status,
-        statusText: err?.response?.statusText,
-        url: fallbackNoCategoriesUrl,
-      });
-      throw err;
-    });
-    data = Array.isArray(res3.data) ? res3.data : [];
+    data = await searchProwlarrPartial(base, usedQuery, undefined, indexerIds, limit, headers, timeoutMs);
     console.log(`[${new Date().toISOString()}][prowlarr] fallback (no categories) response`, {
       count: data.length,
       ms: Date.now() - started3,
