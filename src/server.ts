@@ -60,8 +60,8 @@ import { discoverSeerrArrProfiles } from "./services/seerrArrProfiles";
 import { propagateProviderDeletion, refreshProviderActivity } from "./services/providerReconciliationRuntime";
 import { auditOrganizedLibrary } from "./services/organizedAudit";
 import { getBuildInfo } from "./services/buildInfo";
-import { isValidMagnetUri } from "./indexers/shared";
-import { pushReleaseToArr, type ArrReleaseInput } from "./services/arrReleasePush";
+import { buildMagnetFromHash, isValidMagnetUri } from "./indexers/shared";
+import { isArrConfigured, pushReleaseToArr, type ArrReleaseInput } from "./services/arrReleasePush";
 
 // ===========================================================================
 // Server Initialisation
@@ -1773,24 +1773,26 @@ export function startServer() {
       
       // Normalise results to a consistent shape regardless of indexer response format
       const mappedResults = results.map((r: any) => {
-        const directMagnet = r.magnetUrl || r.MagnetUrl || r.MagnetUri;
+        const title = r.title || r.Title;
+        const directMagnet = r.magnetUrl || r.MagnetUrl || r.MagnetUri || r.guid || r.Guid;
+        const infoHash = r.infoHash || r.InfoHash || r.infohash;
         const rawDownloadUrl = r.downloadUrl || r.DownloadUrl || r.download || r.Download;
         const rawLink = r.link || r.Link;
         const downloadUrl = sanitizeIndexerUrl(rawDownloadUrl)
           || (typeof directMagnet === "string" && /^(?:https?):\/\//i.test(directMagnet) ? sanitizeIndexerUrl(directMagnet) : undefined);
 
         return {
-          title: r.title || r.Title,
+          title,
           size: r.size || r.Size || 0,
           seeders: r.seeders || r.Seeders || 0,
           leechers: r.leechers || r.Leechers || 0,
           // HTTP indexer endpoints are resolver inputs, not magnets.
-          magnetUrl: isValidMagnetUri(directMagnet) ? directMagnet : undefined,
+          magnetUrl: isValidMagnetUri(directMagnet) ? directMagnet : buildMagnetFromHash(String(infoHash || ""), title),
           downloadUrl,
           download: sanitizeIndexerUrl(r.download || r.Download),
           link: sanitizeIndexerUrl(rawLink),
           guid: sanitizeIndexerUrl(r.guid || r.Guid),
-          infoHash: r.infoHash || r.InfoHash || r.infohash,
+          infoHash,
           indexerId: r.indexerId || r.IndexerId,
           indexer: r.indexer || r.Indexer || "Unknown",
           publishDate: r.publishDate || r.PublishDate,
@@ -1897,18 +1899,24 @@ export function startServer() {
       // The normal manual-add path is Arr-owned: Radarr/Sonarr must receive
       // the selected release and remain responsible for the final import.
       // Standalone is still available, but only when explicitly requested.
-      const { magnet, name, provider: targetProvider, mode = "arr", mediaType, identity, release } = req.body || {};
+      const { magnet, name, provider: targetProvider, mode = "auto", mediaType, identity, release } = req.body || {};
       if (!isValidMagnetUri(magnet)) {
         return res.status(400).json({ ok: false, error: "magnet must be a valid magnet URI" });
       }
-      if (mode !== "arr" && mode !== "standalone") {
-        return res.status(400).json({ ok: false, error: "mode must be arr or standalone" });
+      if (mode !== "auto" && mode !== "arr" && mode !== "standalone") {
+        return res.status(400).json({ ok: false, error: "mode must be auto, arr or standalone" });
       }
-      if (mode === "arr" && mediaType !== "movie" && mediaType !== "tv") {
+      if (mode === "auto" && mediaType !== "movie" && mediaType !== "tv") {
+        return res.status(400).json({ ok: false, error: "mediaType must be movie or tv for automatic intake" });
+      }
+      const effectiveMode = mode === "auto"
+        ? (isArrConfigured(mediaType) ? "arr" : "standalone")
+        : mode;
+      if (effectiveMode === "arr" && mediaType !== "movie" && mediaType !== "tv") {
         return res.status(400).json({ ok: false, error: "mediaType must be movie or tv for Arr intake" });
       }
 
-      if (mode === "arr") {
+      if (effectiveMode === "arr") {
         if (!identity || typeof identity !== "object") {
           return res.status(400).json({ ok: false, error: "TMDB identity is required before Arr intake" });
         }
@@ -1926,7 +1934,8 @@ export function startServer() {
         });
         return res.status(200).json({
           ok: true,
-          mode,
+          mode: effectiveMode,
+          requestedMode: mode,
           mediaType,
           identity,
           delegatedTo: mediaType === "tv" ? "sonarr" : "radarr",
@@ -1963,7 +1972,7 @@ export function startServer() {
       void refreshProviderActivity().catch((error: any) => {
         console.warn(`[${new Date().toISOString()}][api/add/intake] organizer refresh deferred`, error?.message || String(error));
       });
-      return res.status(202).json({ ok: true, mode, provider: provider.id, result, status: "queued", identityRequired: !identity, materialization: "organizer" });
+      return res.status(202).json({ ok: true, mode: effectiveMode, requestedMode: mode, provider: provider.id, result, status: "queued", identityRequired: !identity, materialization: "organizer" });
     } catch (err: any) {
       console.error(`[${new Date().toISOString()}][api/add/intake] error`, err?.message || String(err));
       return res.status(500).json({ ok: false, error: err?.message || "Intake failed" });

@@ -44,6 +44,12 @@ function routeFor(mediaType: ArrMediaType): { baseUrl: string; apiKey: string; n
   };
 }
 
+/** Whether the ARR target for this media type is configured. */
+export function isArrConfigured(mediaType: ArrMediaType): boolean {
+  const route = routeFor(mediaType);
+  return Boolean(route.baseUrl && route.apiKey);
+}
+
 function asNumber(value: unknown): number | undefined {
   const number = Number(value);
   return Number.isFinite(number) && number > 0 ? number : undefined;

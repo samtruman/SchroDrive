@@ -45,12 +45,11 @@ export default function AddContentPage() {
   const [searchResults, setSearchResults] = useState<any[]>([])
   const [selectedSearchResult, setSelectedSearchResult] = useState<any>(null)
   const [selectedProvider, setSelectedProvider] = useState<string>("alldebrid")
-  const [intakeMode, setIntakeMode] = useState<"standalone" | "arr">("arr")
-  const [mediaType, setMediaType] = useState<"movie" | "tv">("movie")
+  const [mediaType, setMediaType] = useState<"movie" | "tv" | null>(null)
   const [identityQuery, setIdentityQuery] = useState("")
   const [identityCandidates, setIdentityCandidates] = useState<any[]>([])
   const [selectedIdentity, setSelectedIdentity] = useState<any>(null)
-  const [pendingAddition, setPendingAddition] = useState<{ provider: string; title?: string; magnet: string; mode: "standalone" | "arr"; mediaType: "movie" | "tv"; release?: Record<string, unknown> } | null>(null)
+  const [pendingAddition, setPendingAddition] = useState<{ provider: string; title?: string; magnet: string; release?: Record<string, unknown> } | null>(null)
   const [providers, setProviders] = useState<Provider[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -120,13 +119,13 @@ export default function AddContentPage() {
     }
 
     const title = magnetDisplayName(magnetUrl)
-    setPendingAddition({ provider: selectedProvider, title, magnet: magnetUrl, mode: intakeMode, mediaType })
+    setPendingAddition({ provider: selectedProvider, title, magnet: magnetUrl })
     setIdentityQuery(title)
     setIdentityCandidates([])
     setSelectedIdentity(null)
+    setMediaType(null)
     setMagnetUrl("")
     toast.info("Magnet acquisito. Ora conferma l’identità TMDB prima dell’invio.")
-    if (title) void resolveIdentity(title, mediaType)
   }
 
   const handleSearchAndAdd = async () => {
@@ -189,8 +188,6 @@ export default function AddContentPage() {
         provider: selectedProvider,
         title: result.title,
         magnet,
-        mode: intakeMode,
-        mediaType,
         release: {
           guid: result.guid,
           title: result.title,
@@ -208,8 +205,8 @@ export default function AddContentPage() {
       setIdentityQuery(result.title || "")
       setIdentityCandidates([])
       setSelectedIdentity(null)
+      setMediaType(null)
       toast.info("Risultato selezionato. Conferma ora l’identità TMDB nel riquadro sotto.")
-      if (result.title) void resolveIdentity(result.title, mediaType)
     } catch (error: any) {
       toast.error(error.message || "Impossibile risolvere il magnet dell’indexer")
     } finally {
@@ -295,26 +292,6 @@ export default function AddContentPage() {
               <CardContent className="space-y-4">
                 {!pendingAddition && <>
                   <div className="space-y-2">
-                    <Label>Modalità di importazione</Label>
-                    <div className="flex gap-2">
-                      <Button type="button" variant={intakeMode === "standalone" ? "default" : "outline"} onClick={() => setIntakeMode("standalone")} className="flex-1">Standalone</Button>
-                      <Button type="button" variant={intakeMode === "arr" ? "default" : "outline"} onClick={() => setIntakeMode("arr")} className="flex-1">Sonarr/Radarr</Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {intakeMode === "standalone" ? "SchroDrive organizza il contenuto dopo la conferma TMDB." : "Dopo TMDB il magnet viene consegnato a Sonarr/Radarr con titolo canonico e categoria corretta."}
-                    </p>
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Tipo di contenuto</Label>
-                    <div className="flex gap-2">
-                      <Button type="button" aria-pressed={mediaType === "movie"} variant={mediaType === "movie" ? "default" : "outline"} onClick={() => setMediaType("movie")}>Film</Button>
-                      <Button type="button" aria-pressed={mediaType === "tv"} variant={mediaType === "tv" ? "default" : "outline"} onClick={() => setMediaType("tv")}>Serie</Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      "Questa scelta determina la ricerca TMDB e il percorso Film/Serie."
-                    </p>
-                  </div>
-                  <div className="space-y-2">
                     <Label htmlFor="magnet">Magnet URL</Label>
                     <Input
                       id="magnet"
@@ -337,14 +314,8 @@ export default function AddContentPage() {
                   <div className="flex items-center gap-2 text-sm font-medium"><CheckCircle2 className="h-4 w-4 text-primary" />Risultato selezionato, in attesa di conferma TMDB</div>
                   {pendingAddition.title && <p className="text-xs text-muted-foreground">Titolo rilevato dal magnet: <span className="font-medium text-foreground">{pendingAddition.title}</span></p>}
                   <div className="space-y-2">
-                    <Label>Modalità di importazione</Label>
-                    <div className="flex gap-2">
-                      <Button type="button" variant={intakeMode === "standalone" ? "default" : "outline"} onClick={() => setIntakeMode("standalone")} className="flex-1">Standalone</Button>
-                      <Button type="button" variant={intakeMode === "arr" ? "default" : "outline"} onClick={() => setIntakeMode("arr")} className="flex-1">Sonarr/Radarr</Button>
-                    </div>
-                    <p className="text-xs text-muted-foreground">
-                      {intakeMode === "standalone" ? "SchroDrive organizza il contenuto dopo la conferma TMDB." : "Dopo TMDB il magnet viene consegnato a Sonarr/Radarr con titolo canonico e categoria corretta."}
-                    </p>
+                    <Label>Destinazione automatica</Label>
+                    <p className="text-xs text-muted-foreground">Se l’ARR del tipo scelto è configurato, il contenuto viene inviato a Radarr o Sonarr; altrimenti viene gestito in Standalone.</p>
                   </div>
                   <div className="space-y-2">
                     <Label>Tipo di contenuto</Label>
@@ -354,18 +325,18 @@ export default function AddContentPage() {
                     </div>
                   </div>
                   <div className="flex gap-2">
-                    <Input placeholder="Cerca il titolo su TMDB" value={identityQuery} onChange={(e) => setIdentityQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && void resolveIdentity(identityQuery, mediaType)} />
-                    <Button type="button" variant="outline" disabled={!identityQuery.trim() || isSearching} onClick={() => void resolveIdentity(identityQuery, mediaType)}>{isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : "Cerca TMDB"}</Button>
+                    <Input placeholder="Cerca il titolo su TMDB" value={identityQuery} onChange={(e) => setIdentityQuery(e.target.value)} onKeyDown={(e) => e.key === "Enter" && mediaType && void resolveIdentity(identityQuery, mediaType)} />
+                    <Button type="button" variant="outline" disabled={!identityQuery.trim() || !mediaType || isSearching} onClick={() => mediaType && void resolveIdentity(identityQuery, mediaType)}>{isSearching ? <Loader2 className="h-4 w-4 animate-spin" /> : "Cerca TMDB"}</Button>
                   </div>
                   {identityCandidates.length > 0 && <div className="space-y-2">
                     <p className="text-xs text-muted-foreground">Seleziona l’identità corretta:</p>
                     {identityCandidates.map((candidate) => <Button key={candidate.tmdbId} type="button" variant={selectedIdentity?.tmdbId === candidate.tmdbId ? "default" : "outline"} className="w-full justify-start" onClick={() => setSelectedIdentity({ ...candidate, kind: mediaType })}>{candidate.title} {candidate.year ? `(${candidate.year})` : ""} · TMDB {candidate.tmdbId}</Button>)}
                   </div>}
                   {selectedIdentity && <p className="text-xs text-muted-foreground">Selezionato: {selectedIdentity.title} · TMDB {selectedIdentity.tmdbId}</p>}
-                  <Button type="button" className="w-full" disabled={!selectedIdentity || isSearching} onClick={async () => {
+                  <Button type="button" className="w-full" disabled={!selectedIdentity || !mediaType || isSearching} onClick={async () => {
                     setIsSearching(true)
                     try {
-                      const response = await fetch("/api/add/intake", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ magnet: pendingAddition.magnet, mode: intakeMode, mediaType, provider: pendingAddition.provider, name: selectedIdentity.title, identity: selectedIdentity, release: pendingAddition.release }) })
+                      const response = await fetch("/api/add/intake", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ magnet: pendingAddition.magnet, mode: "auto", mediaType, provider: pendingAddition.provider, name: selectedIdentity.title, identity: selectedIdentity, release: pendingAddition.release }) })
                       const body = await response.json()
                       if (!response.ok || !body.ok) throw new Error(body.error || "Identity confirmation failed")
                       const destination = body.provider || body.delegatedTo || body.mode || "provider"
@@ -374,9 +345,10 @@ export default function AddContentPage() {
                       setSelectedIdentity(null)
                       setIdentityCandidates([])
                       setIdentityQuery("")
+                      setMediaType(null)
                     } catch (error: any) { toast.error(error.message || "Identity confirmation failed") }
                     finally { setIsSearching(false) }
-                  }}>{intakeMode === "arr" ? "Conferma identità e invia a Sonarr/Radarr" : "Conferma identità e organizza"}</Button>
+                  }}>Conferma identità e invia</Button>
                 </div>}
               </CardContent>
             </Card>
