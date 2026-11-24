@@ -1,5 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
+exports.isArrConfigured = isArrConfigured;
 exports.pushReleaseToArr = pushReleaseToArr;
 const config_1 = require("../core/config");
 function routeFor(mediaType) {
@@ -16,52 +17,22 @@ function routeFor(mediaType) {
         name: "Sonarr",
     };
 }
-function asNumber(value) {
-    const number = Number(value);
-    return Number.isFinite(number) && number > 0 ? number : undefined;
-}
-function normaliseRelease(release, magnet, name, identity) {
-    const title = String(release?.title || name || identity.title || "").trim();
-    if (!title)
-        throw new Error("ARR release push requires a release title");
-    const infoHash = String(release?.infoHash || "").trim() || undefined;
-    const guid = String(release?.guid || (infoHash ? `schrodrive:${infoHash}` : `schrodrive:${title}`)).trim();
-    const payload = {
-        guid,
-        title,
-        size: asNumber(release?.size) || 0,
-        indexerId: asNumber(release?.indexerId) || 0,
-        indexer: String(release?.indexer || "SchroDrive").trim(),
-        publishDate: release?.publishDate || new Date().toISOString(),
-        infoUrl: release?.infoUrl || undefined,
-        downloadUrl: release?.downloadUrl || undefined,
-        magnetUrl: magnet,
-        infoHash,
-        seeders: asNumber(release?.seeders),
-        leechers: asNumber(release?.leechers),
-        protocol: "torrent",
-        tmdbId: asNumber(identity.tmdbId),
-    };
-    // Radarr/Sonarr validate that at least one of downloadUrl or magnetUrl is
-    // present. Remove undefined values so the request matches their resource
-    // contract instead of sending a misleading null field.
-    return Object.fromEntries(Object.entries(payload).filter(([, value]) => value !== undefined));
-}
-async function pushReleaseToArr(mediaType, input) {
+/** Whether the ARR target for this media type is configured. */
+function isArrConfigured(mediaType) {
     const route = routeFor(mediaType);
-    if (!route.baseUrl || !route.apiKey) {
-        throw new Error(`${route.name} API is not configured for ARR release push`);
-    }
-    const endpoint = `${route.baseUrl.replace(/\/$/, "")}/api/v3/release/push`;
-    const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-            "X-Api-Key": route.apiKey,
-            "Content-Type": "application/json",
-            Accept: "application/json",
-        },
-        body: JSON.stringify(normaliseRelease(input.release, input.magnet, input.name, input.identity)),
-    });
+    return Boolean(route.baseUrl && route.apiKey);
+}
+function normaliseBaseUrl(url) {
+    return url.replace(/\/$/, "");
+}
+function apiHeaders(apiKey) {
+    return {
+        "X-Api-Key": apiKey,
+        Accept: "application/json",
+        "Content-Type": "application/json",
+    };
+}
+async function readJson(response, context) {
     const text = await response.text();
     let body = undefined;
     if (text.trim()) {
@@ -73,7 +44,111 @@ async function pushReleaseToArr(mediaType, input) {
         }
     }
     if (!response.ok) {
-        throw new Error(`${route.name} release push failed: HTTP ${response.status}`);
+        const detail = typeof body === "string" ? `: ${body}` : "";
+        throw new Error(`${context} failed: HTTP ${response.status}${detail}`);
     }
-    return { mediaType, endpoint, response: body };
+    return body;
+}
+async function arrGet(route, path) {
+    const endpoint = `${normaliseBaseUrl(route.baseUrl)}${path}`;
+    const response = await fetch(endpoint, { headers: apiHeaders(route.apiKey) });
+    return readJson(response, `${route.name} GET ${path}`);
+}
+function normaliseHash(value) {
+    return String(value || "").replace(/[^a-f0-9]/gi, "").toLowerCase();
+}
+function hashFromMagnet(magnet) {
+    try {
+        const xt = new URL(magnet).searchParams.get("xt") || "";
+        return normaliseHash(xt.replace(/^urn:btih:/i, ""));
+    }
+    catch {
+        return "";
+    }
+}
+function normaliseTitle(value) {
+    return String(value || "")
+        .toLowerCase()
+        .replace(/\.[a-z0-9]{2,4}$/i, "")
+        .replace(/[^a-z0-9]+/g, "")
+        .trim();
+}
+function releaseMatches(candidate, input, magnet) {
+    const selectedHash = normaliseHash(input?.infoHash) || hashFromMagnet(magnet);
+    const candidateHash = normaliseHash(candidate?.infoHash || candidate?.releaseHash);
+    if (selectedHash && candidateHash)
+        return selectedHash === candidateHash;
+    const selectedTitle = normaliseTitle(input?.title);
+    const candidateTitle = normaliseTitle(candidate?.title);
+    if (!selectedTitle || !candidateTitle || selectedTitle !== candidateTitle)
+        return false;
+    const selectedSize = Number(input?.size || 0);
+    const candidateSize = Number(candidate?.size || 0);
+    if (!selectedSize || !candidateSize)
+        return true;
+    return Math.abs(selectedSize - candidateSize) / Math.max(selectedSize, candidateSize) < 0.03;
+}
+function findByTmdbId(items, tmdbId, label) {
+    const match = (Array.isArray(items) ? items : []).find((item) => String(item?.tmdbId || "") === tmdbId);
+    if (!match)
+        throw new Error(`${label} non contiene il titolo TMDB ${tmdbId}; aggiungilo prima a ${label}`);
+    return match;
+}
+function seasonFromTitle(title) {
+    const match = title.match(/\bS0*(\d{1,3})(?:E\d{1,3})*\b/i)
+        || title.match(/\bSeason\s*0*(\d{1,3})\b/i);
+    return match ? Number(match[1]) : undefined;
+}
+async function findArrRelease(route, mediaType, identity, input, magnet) {
+    const tmdbId = String(identity.tmdbId || "").trim();
+    const title = String(input?.title || identity.title || "").trim();
+    if (!tmdbId)
+        throw new Error(`Identità TMDB mancante per ${route.name}`);
+    if (mediaType === "movie") {
+        const movies = await arrGet(route, "/api/v3/movie");
+        const movie = findByTmdbId(movies, tmdbId, "Radarr");
+        const searchEndpoint = `/api/v3/release?movieId=${encodeURIComponent(String(movie.id))}`;
+        const releases = await arrGet(route, searchEndpoint);
+        const candidate = (Array.isArray(releases) ? releases : []).find((release) => releaseMatches(release, input, magnet));
+        if (!candidate) {
+            throw new Error(`Radarr non ha restituito la release selezionata per "${title || identity.title}"; ripeti la ricerca manuale in Radarr`);
+        }
+        return { candidate, searchEndpoint };
+    }
+    const seriesList = await arrGet(route, "/api/v3/series");
+    const series = findByTmdbId(seriesList, tmdbId, "Sonarr");
+    const season = seasonFromTitle(title);
+    if (!season) {
+        throw new Error("Sonarr richiede stagione/episodio nel titolo della release per eseguire il grab manuale");
+    }
+    const searchEndpoint = `/api/v3/release?seriesId=${encodeURIComponent(String(series.id))}&seasonNumber=${encodeURIComponent(String(season))}`;
+    const releases = await arrGet(route, searchEndpoint);
+    const candidate = (Array.isArray(releases) ? releases : []).find((release) => releaseMatches(release, input, magnet));
+    if (!candidate) {
+        throw new Error(`Sonarr non ha restituito la release selezionata per "${title || identity.title}"; ripeti la ricerca manuale in Sonarr`);
+    }
+    return { candidate, searchEndpoint };
+}
+/**
+ * Grab a release through the same cached manual-search path used by ARR UI.
+ *
+ * `/api/v3/release/push` is the RSS path and can silently reject a release
+ * (notably when the movie/series is unmonitored). The manual path must first
+ * search the ARR indexers, then POST the exact cached ReleaseResource returned
+ * by that search to `/api/v3/release`.
+ */
+async function pushReleaseToArr(mediaType, input) {
+    const route = routeFor(mediaType);
+    if (!route.baseUrl || !route.apiKey) {
+        throw new Error(`${route.name} API is not configured for manual ARR grab`);
+    }
+    const { candidate, searchEndpoint } = await findArrRelease(route, mediaType, input.identity, input.release, input.magnet);
+    const endpoint = `${normaliseBaseUrl(route.baseUrl)}/api/v3/release`;
+    const response = await fetch(endpoint, {
+        method: "POST",
+        headers: apiHeaders(route.apiKey),
+        body: JSON.stringify(candidate),
+    });
+    const body = await readJson(response, `${route.name} manual grab`);
+    return { mediaType, endpoint, searchEndpoint, response: body };
 }

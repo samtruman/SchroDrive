@@ -1888,8 +1888,8 @@ export function startServer() {
    * POST /api/add/intake — provider-neutral manual intake.
    *
    * Both modes require a confirmed TMDB identity. `mode=arr` pushes the
-   * selected release to the configured Radarr/Sonarr release-push API so the
-   * Arr decision engine performs the same grab path as a manual search;
+   * selected release through the configured Radarr/Sonarr manual-search and
+   * grab APIs so the Arr instance remains responsible for the final import;
    * `mode=standalone` adds directly to the provider and records the identity
    * for the organizer. The legacy /api/add endpoint remains unchanged for
    * clients that only need provider addition.
