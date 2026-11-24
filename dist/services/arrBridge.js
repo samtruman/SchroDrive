@@ -389,80 +389,18 @@ function normaliseMountName(value) {
     return value
         .replace(/[.](mkv|mp4|avi|mov|wmv|m4v|ts|m2ts|webm)$/i, '')
         .toLowerCase()
-        .replace(/[._-]+/g, ' ')
+        .replace(/[^\p{L}\p{N}]+/gu, ' ')
         .replace(/\s+/g, ' ')
         .trim();
-}
-const MIN_FUZZY_MOUNT_NAME_LENGTH = 20;
-const MOUNT_TECHNICAL_TOKENS = new Set([
-    'ita', 'eng', 'spa', 'fre', 'ger', 'multi', 'dual',
-    'bluray', 'brrip', 'webrip', 'webdl', 'web', 'uhd', 'remux',
-    'hdr', 'hdr10', 'dv', 'dolby', 'vision', '2160p', '1080p', '720p', '480p',
-    'hevc', 'h265', 'x265', 'h264', 'x264', 'av1', 'aac', 'ac3', 'ddp', 'dts',
-    'atmos', 'truehd', 'eac3', 'mp3', '10bit', '8bit', 'proper', 'repack',
-    'cyber', 'mircrew', 'mirc', 'webmux', 'complete', 'series', 'pack',
-]);
-/**
- * Extract title-bearing tokens for fuzzy matching.
- *
- * Release metadata (year, language, source, codec, HDR and release group)
- * is deliberately excluded. Those tokens are shared by many unrelated
- * releases and must never be enough to select a mount entry.
- */
-function mountIdentityTokens(value) {
-    return new Set(value
-        .split(' ')
-        .filter((token) => {
-        if (token.length < 4)
-            return false;
-        if (/^(19|20)\d{2}$/.test(token))
-            return false;
-        if (/^\d{3,4}p$/.test(token))
-            return false;
-        return !MOUNT_TECHNICAL_TOKENS.has(token);
-    }));
-}
-function episodeKeys(value) {
-    const keys = new Set();
-    const normalized = value.toLowerCase().replace(/[._-]+/g, ' ');
-    for (const match of normalized.matchAll(/\bs(\d{1,2})e(\d{1,2})(?:\s*e?(\d{1,2}))?\b/g)) {
-        const season = Number(match[1]);
-        const first = Number(match[2]);
-        const last = match[3] ? Number(match[3]) : first;
-        for (let episode = first; episode <= last; episode += 1) {
-            keys.add(`s${season}e${episode}`);
-        }
-    }
-    return keys;
 }
 function mountNameScore(target, candidate) {
     if (!target || !candidate)
         return -1;
-    if (target === candidate)
-        return 100000;
-    if (candidate.length < MIN_FUZZY_MOUNT_NAME_LENGTH)
-        return -1;
-    // Never use a neighbouring episode as a fuzzy match. This is especially
-    // important while a newly added item is still propagating to the mount:
-    // E08 must not be satisfied by the already visible E07 file.
-    const targetEpisodes = episodeKeys(target);
-    const candidateEpisodes = episodeKeys(candidate);
-    if (targetEpisodes.size > 0 && candidateEpisodes.size > 0 &&
-        ![...targetEpisodes].some((episode) => candidateEpisodes.has(episode)))
-        return -1;
-    const targetIdentity = mountIdentityTokens(target);
-    const candidateIdentity = mountIdentityTokens(candidate);
-    const sharedIdentityTokens = [...candidateIdentity].filter((token) => targetIdentity.has(token));
-    if (sharedIdentityTokens.length === 0)
-        return -1;
-    const shorter = Math.min(target.length, candidate.length);
-    const longer = Math.max(target.length, candidate.length);
-    const overlap = Math.round((shorter / longer) * 1000);
-    if (target.includes(candidate) || candidate.includes(target))
-        return 5000 + overlap;
-    const targetTokens = new Set(target.split(' '));
-    const sharedTokens = candidate.split(' ').filter(token => targetTokens.has(token)).length;
-    return sharedTokens >= 3 ? 1000 + sharedTokens * 100 + overlap : -1;
+    // A completed ARR torrent must resolve to the exact provider item that was
+    // submitted.  The provider ID is checked during status polling; this name
+    // comparison is the final mount guard.  Never select an unrelated release
+    // merely because it shares a year, codec, language, or release-group token.
+    return target === candidate ? 100000 : -1;
 }
 /** Resolve a completed torrent to its best mount entry. */
 async function findBestMountMatch(searchDir, torrentName) {

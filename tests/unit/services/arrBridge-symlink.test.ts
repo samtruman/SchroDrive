@@ -99,6 +99,20 @@ describe('ARR bridge symlink paths', () => {
     expect(match).toBeNull();
   });
 
+  test('does not match a different title that shares a parenthesized year and release metadata', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'schrodrive-arr-parenthesized-year-'));
+    const mount = path.join(root, 'mount');
+    const unrelated = path.join(mount, 'Matchbox the Movie (2026) 2160p H265 HDR DV iTA EnG AC3 Sub iTA EnG-MIRCrew.mkv');
+    fs.mkdirSync(unrelated, { recursive: true });
+    fs.writeFileSync(path.join(unrelated, path.basename(unrelated)), 'unrelated');
+
+    const match = await findBestMountMatch(
+      mount,
+      'One Last Shot (2026) 2160p H265 HDR DV iTA EnG AC3 Sub iTA EnG-MIRCrew.mkv',
+    );
+    expect(match).toBeNull();
+  });
+
   test('does not match an empty torrent name', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'schrodrive-arr-empty-'));
     fs.writeFileSync(path.join(root, 'unrelated.mkv'), 'media');
